@@ -1,4 +1,4 @@
-# Particle Life 2 (WIP)
+# Particle Life 2 
 
 _Exploring emergent behaviour from simple interactions._
 
