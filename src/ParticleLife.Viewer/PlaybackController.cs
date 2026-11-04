@@ -6,7 +6,8 @@ namespace ParticleLife.Viewer;
 
 /// <summary>Owns sequential fixed-step playback and explicitly scheduled measurements for a viewer.</summary>
 /// <remarks>
-/// <para>One elapsed wall-clock second requests one reduced simulation-time unit. Rendering never
+/// <para>By default one elapsed wall-clock second requests one reduced simulation-time unit;
+/// <see cref="PlaybackSpeed"/> scales that request independently of physical settings. Rendering never
 /// changes the experiment timestep. Each frame completes at most <see cref="MaxStepsPerFrame"/>
 /// steps, discards any remaining whole-step playback time and retains only the fractional remainder.
 /// Slow playback therefore falls behind wall time rather than changing the numerical method.</para>
@@ -24,6 +25,8 @@ public sealed class PlaybackController : IDisposable
     private Simulation simulation;
     private readonly DiagnosticSampler diagnosticSampler = new();
     private int diagnosticEverySteps;
+    private double playbackSpeed = 1;
+    private double? diagnosticRadius;
     private bool disposed;
 
     /// <summary>Creates playback at the exact saved initial conditions, initially running.</summary>
@@ -45,6 +48,9 @@ public sealed class PlaybackController : IDisposable
     /// <summary>Gets the immutable experiment whose exact initial conditions reset and save use.</summary>
     public ExperimentDefinition Experiment { get; private set; }
 
+    /// <summary>Gets the currently active rules and execution settings, independent of the reset baseline.</summary>
+    public SimulationConfiguration Configuration => simulation.Configuration;
+
     /// <summary>Gets actual search and fallback metadata from the last successful step, or null after reset/replacement.</summary>
     public ForceExecution? LastExecution => simulation.LastExecution;
 
@@ -62,7 +68,27 @@ public sealed class PlaybackController : IDisposable
     public bool IsPaused { get; private set; }
 
     /// <summary>Gets the positive cap on numerical work in one frame.</summary>
-    public int MaxStepsPerFrame { get; }
+    public int MaxStepsPerFrame { get; private set; }
+
+    /// <summary>Gets the ratio of requested simulation time to elapsed wall time.</summary>
+    public double PlaybackSpeed => playbackSpeed;
+
+    /// <summary>Gets or sets diagnostic connectivity distance in L; null follows the current force cutoff.</summary>
+    /// <remarks>This measurement setting never changes force cutoffs or trajectories.</remarks>
+    public double? DiagnosticRadius
+    {
+        get => diagnosticRadius;
+        set
+        {
+            if (value is double radius && (!double.IsFinite(radius) || radius <= 0))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), "Connectivity radius must be finite and positive.");
+            }
+
+            diagnosticRadius = value;
+            ClearDiagnostic();
+        }
+    }
 
     /// <summary>Gets playback seconds retained towards the next fixed step.</summary>
     public double PendingPlaybackSeconds { get; private set; }
@@ -112,6 +138,56 @@ public sealed class PlaybackController : IDisposable
         }
     }
 
+    /// <summary>Changes playback speed without changing numerical time; a changed speed clears fractional backlog.</summary>
+    /// <param name="speed">Finite positive ratio of simulation time to wall time.</param>
+    public void SetPlaybackSpeed(double speed)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!double.IsFinite(speed) || speed <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(speed), "Playback speed must be finite and positive.");
+        }
+
+        if (speed != playbackSpeed)
+        {
+            playbackSpeed = speed;
+            PendingPlaybackSeconds = 0;
+        }
+    }
+
+    /// <summary>Changes the positive frame catch-up limit without performing any numerical step.</summary>
+    /// <param name="maximum">Positive maximum steps per frame.</param>
+    public void SetMaxStepsPerFrame(int maximum)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximum);
+        MaxStepsPerFrame = maximum;
+    }
+
+    /// <summary>Atomically applies rules and optional actual structural state between completed steps.</summary>
+    /// <param name="configuration">Complete validated candidate.</param>
+    /// <param name="replacementState">Optional structural state with the current exact time and step.</param>
+    /// <remarks>Ordinary changes preserve every particle and the accumulated clock. A changed timestep
+    /// clears fractional playback time; other rule edits retain it. All successful changes clear stale
+    /// diagnostics. This low-level operation does not establish a new reset baseline or record undo.</remarks>
+    public void Reconfigure(SimulationConfiguration configuration, ParticleSnapshot? replacementState = null)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (replacementState is null && Configuration.EquivalentTo(configuration))
+        {
+            return;
+        }
+
+        double previousTimeStep = Configuration.TimeStep;
+        simulation.Reconfigure(configuration, replacementState);
+        if (previousTimeStep != Configuration.TimeStep)
+        {
+            PendingPlaybackSeconds = 0;
+        }
+
+        ClearDiagnostic();
+    }
+
     /// <summary>Pauses playback, clears pending time and completes exactly one numerical step.</summary>
     /// <remarks>A scheduled measurement may follow the completed step. On numerical failure, playback
     /// remains paused and the core preserves its last completed state.</remarks>
@@ -130,8 +206,7 @@ public sealed class PlaybackController : IDisposable
     public void Reset()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        simulation.Reset(Experiment.InitialState);
-        ClearPlayback();
+        ReplaceExperiment(Experiment);
     }
 
     /// <summary>Atomically replaces the experiment and simulation at a completed-step boundary.</summary>
@@ -151,6 +226,38 @@ public sealed class PlaybackController : IDisposable
         ClearPlayback();
         previous.Dispose();
     }
+
+    /// <summary>Replays a validated session using the shared headless event engine and publishes it paused.</summary>
+    /// <param name="session">Exact initial values and ordered completed-boundary edits.</param>
+    /// <remarks>Replay completes on a temporary simulation. Any failure preserves the active experiment,
+    /// state and clock. The session initial experiment becomes the reset baseline.</remarks>
+    public void ReplaySession(SessionDefinition session)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(session);
+        Simulation replacement = SessionReplay.Replay(session);
+        AdoptReplay(replacement, session.InitialExperiment);
+    }
+
+    /// <summary>Transfers a successfully completed temporary replay into this controller.</summary>
+    internal void AdoptReplay(Simulation replacement, ExperimentDefinition initialExperiment)
+    {
+        if (disposed)
+        {
+            replacement.Dispose();
+            throw new ObjectDisposedException(nameof(PlaybackController));
+        }
+
+        Simulation previous = simulation;
+        simulation = replacement;
+        Experiment = initialExperiment;
+        IsPaused = true;
+        ClearPlayback();
+        previous.Dispose();
+    }
+
+    /// <summary>Rejects editor mutations after the owner has released its simulation resources.</summary>
+    internal void EnsureActive() => ObjectDisposedException.ThrowIf(disposed, this);
 
     /// <summary>Consumes elapsed playback time using only the experiment's fixed numerical timestep.</summary>
     /// <param name="elapsedSeconds">Finite, nonnegative wall-clock seconds since the previous frame.</param>
@@ -175,7 +282,7 @@ public sealed class PlaybackController : IDisposable
             return 0;
         }
 
-        double pending = PendingPlaybackSeconds + elapsedSeconds;
+        double pending = PendingPlaybackSeconds + elapsedSeconds * playbackSpeed;
         if (!double.IsFinite(pending))
         {
             throw new ArgumentOutOfRangeException(nameof(elapsedSeconds), "Accumulated playback time exceeds the supported range.");
@@ -185,10 +292,10 @@ public sealed class PlaybackController : IDisposable
         int completed = 0;
         try
         {
-            while (completed < MaxStepsPerFrame && PendingPlaybackSeconds >= Experiment.TimeStep)
+            while (completed < MaxStepsPerFrame && PendingPlaybackSeconds >= Configuration.TimeStep)
             {
                 CompleteStep();
-                PendingPlaybackSeconds -= Experiment.TimeStep;
+                PendingPlaybackSeconds -= Configuration.TimeStep;
                 completed++;
             }
         }
@@ -199,9 +306,9 @@ public sealed class PlaybackController : IDisposable
             throw;
         }
 
-        if (PendingPlaybackSeconds >= Experiment.TimeStep)
+        if (PendingPlaybackSeconds >= Configuration.TimeStep)
         {
-            double remainder = PendingPlaybackSeconds % Experiment.TimeStep;
+            double remainder = PendingPlaybackSeconds % Configuration.TimeStep;
             DroppedPlaybackSeconds += PendingPlaybackSeconds - remainder;
             PendingPlaybackSeconds = remainder;
         }
@@ -232,7 +339,7 @@ public sealed class PlaybackController : IDisposable
         {
             try
             {
-                LatestDiagnostic = diagnosticSampler.Sample(state, Experiment.Parameters.Cutoff);
+                LatestDiagnostic = diagnosticSampler.Sample(state, diagnosticRadius ?? Configuration.Parameters.Cutoff);
                 LatestDiagnosticExecution = diagnosticSampler.LastExecution;
                 DiagnosticError = null;
             }

@@ -15,13 +15,6 @@ public static class ExperimentStorage
     /// <exception cref="ArgumentException">The path or experiment is invalid.</exception>
     public static void SaveNew(string path, ExperimentDefinition experiment)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        string text = ExperimentFile.Serialize(experiment);
-        string fullPath = Path.GetFullPath(path);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        using FileStream stream = new(fullPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        using StreamWriter writer = new(stream);
-        writer.Write(text);
-        writer.Write('\n');
+        ExclusiveFileStorage.Save(path, ExperimentFile.Serialize(experiment) + "\n");
     }
 }
