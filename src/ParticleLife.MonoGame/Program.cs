@@ -11,7 +11,7 @@ try
     }
 
     ViewerOptions options = ViewerOptions.Parse(args);
-    ExperimentDefinition experiment = PresetGenerator.Create(options.Preset, options.Particles, options.Species, options.Seed);
+    ExperimentDefinition? experiment = null;
     string message = "SPACE pause | H controls | S save experiment";
     bool paused = options.Paused;
     if (options.InputPath is not null)
@@ -28,6 +28,9 @@ try
             paused = true;
         }
     }
+
+    // A loaded experiment supersedes generation options, including their allocation cost.
+    experiment ??= PresetGenerator.Create(options.Preset, options.Particles, options.Species, options.Seed);
 
     // Formatting is presentation-only. Experiment JSON keeps full round-trip precision.
     CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;

@@ -75,7 +75,7 @@ internal sealed class ParticleLifeGame : Game
         IsFixedTimeStep = false;
         IsMouseVisible = true;
         Window.AllowUserResizing = true;
-        Window.Title = "Particle Life 2 | M3";
+        Window.Title = "Particle Life 2";
         Window.KeyDown += OnKeyDown;
         Window.KeyUp += OnKeyUp;
     }
