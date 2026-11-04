@@ -43,6 +43,41 @@ public sealed class WorldTransformTests
     }
 
     [Theory]
+    [InlineData(1e-308)]
+    [InlineData(1e308)]
+    public void ExtremeFiniteWorldsMapVisibleCoordinatesWithoutScaleOverflow(double extent)
+    {
+        WorldTransform transform = new(extent, extent, 10, 20, 800, 400);
+        Assert.Equal(400, transform.Width);
+        Assert.Equal(400, transform.Height);
+        Assert.Equal(new Vector2d(210, 20), transform.ToScreen(default));
+        Assert.Equal(new Vector2d(410, 220), transform.ToScreen(new Vector2d(extent / 2, extent / 2)));
+        Assert.Equal(new Vector2d(610, 420), transform.ToScreen(new Vector2d(extent, extent)));
+        Assert.Equal(extent < 1e-307, double.IsPositiveInfinity(transform.Scale));
+    }
+
+    [Fact]
+    public void ExtremeRectangularAspectRatioRetainsFiniteVisibleMapping()
+    {
+        WorldTransform transform = new(1e308, 1e-308, 0, 0, 800, 400);
+        Assert.Equal(800, transform.Width);
+        // This physical aspect ratio is too small to occupy even one representable pixel length.
+        Assert.Equal(0, transform.Height);
+        Assert.Equal(new Vector2d(400, 200), transform.ToScreen(new Vector2d(5e307, 5e-309)));
+    }
+
+    [Fact]
+    public void UnrepresentableOffscreenCoordinatesRemainDisplayOnly()
+    {
+        WorldTransform transform = new(1e-308, 1e-308, 0, 0, 500, 500);
+        Vector2d offWorld = new(double.MaxValue, -double.MaxValue);
+        Vector2d mapped = transform.ToScreen(offWorld);
+        Assert.True(offWorld.IsFinite);
+        Assert.True(double.IsPositiveInfinity(mapped.X));
+        Assert.True(double.IsNegativeInfinity(mapped.Y));
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(-1)]
     [InlineData(double.NaN)]
