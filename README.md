@@ -24,9 +24,11 @@ The viewer starts with 500 particles, seven species, seed 1 and grid search. Loa
 dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- examples/experiments/two-species.json --paused
 ```
 
-Use `--help` for startup options, including `--preset random|chains|snakes`, `--particles`, `--species`, `--seed`, `--backend direct|grid`, `--workers`, `--sample-every` and `--save-dir`. Grid search defaults to one worker; `--workers 4` explicitly selects parallel evaluation (1–8 workers). Saved experiments retain their backend and workers; older files remain serial and schema-1 files use direct search. DesktopGL needs a working OpenGL display. Resizing preserves world geometry; off-world particles remain in the simulation.
+Use `--help` for startup options, including `--preset`, `--particles`, `--species`, `--seed`, `--backend direct|grid`, `--workers`, `--sample-every` and `--save-dir`. Grid search defaults to one worker; `--workers 4` explicitly selects parallel evaluation (1–8 workers). Saved experiments retain their backend and workers; older files remain serial and schema-1 files use direct search. DesktopGL needs a working OpenGL display. Resizing preserves world geometry; off-world particles remain in the simulation.
 
 The scrollable editor groups interactions, forces, world/population, generation, simulation and appearance. Expand a group, drag a slider or click its value for exact entry. Matrix rows receive forces from columns; symmetry linking is optional. World and population drafts have explicit Apply buttons. **Files** opens named save/load workflows. See the [editor guide](docs/live-experiment-editor.md) for details.
+
+Try **Built-in recipes** for Chains, Snakes, Core and halo, Alternating bands, Ribbons, Cyclic pursuit, Chase cycles, Species islands and experimental Biased ribbons. **New from recipe** starts with the recipe's suggested rules and populations; **Apply matrix live** changes compatible interactions while particles continue moving. The [recipe guide](docs/recipes.md) explains the numbers and includes command-line examples.
 
 | Key | Action |
 | --- | --- |
@@ -60,7 +62,7 @@ dotnet run --project src/ParticleLife.Cli -c Release --no-build -- create --pres
 dotnet run --project src/ParticleLife.Cli -c Release --no-build -- run artifacts/random.json --steps 720 --sample-every 144 --output artifacts/random-run.json
 ```
 
-Use `chains` or `snakes` for the other presets, and `--help` for commands. New experiments use grid search; add `--backend direct` to `create` or `run` to select the reference. Output files must have new names. Experiments are editable JSON; run reports preserve the input, effective backend, fallback counts, final state, measurements and runtime metadata. A seed alone does not guarantee identical results across runtimes.
+Use any [built-in recipe](docs/recipes.md) with `--preset`, and `--help` for commands. New experiments use grid search; add `--backend direct` to `create` or `run` to select the reference. Output files must have new names. Experiments are editable JSON; run reports preserve the input, effective backend, fallback counts, final state, measurements and runtime metadata. A seed alone does not guarantee identical results across runtimes.
 
 Replay an edited session through its saved terminal boundary, including timestep and population changes:
 

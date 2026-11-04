@@ -12,5 +12,6 @@
     <Using Include="Xunit" />
     <Compile Include="../../src/ParticleLife.MonoGame/ViewerOptions.cs" Link="Host/ViewerOptions.cs" />
     <None Include="../../examples/experiments/*.json" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../examples/presets/*.preset.json" Link="Fixtures/presets/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -35,6 +35,9 @@ internal sealed class LiveExperimentEditor
     private double rememberedWall = 1.44;
     private int rememberedCadence = 144;
     private string populationSummary = string.Empty;
+    private PresetKind selectedRecipe = PresetKind.CoreHalo;
+    private string recipePopulationSummary = string.Empty;
+    private readonly UiSection recipes;
     private readonly UiSection interactions;
     private readonly UiSection forces;
     private readonly UiSection population;
@@ -74,12 +77,15 @@ internal sealed class LiveExperimentEditor
             new UiButton(() => "REDO", () => editor.Redo(), "Reapply an undone editor operation at the current boundary. A new edit clears redo.", () => editor.CanRedo),
             Button(() => "FILES", OpenFiles, "Save named presets, exact states, initial experiments and sessions; browse local files and replay in-app.")));
 
+        recipes = Section("BUILT-IN RECIPES");
         interactions = Section("INTERACTIONS", true);
         forces = Section("FORCES AND MOTION");
         population = Section("WORLD AND POPULATION");
         generation = Section("GENERATION RECIPE");
         simulation = Section("SIMULATION AND EXECUTION");
         appearance = Section("APPEARANCE");
+        SelectRecipe(selectedRecipe);
+        BuildRecipes();
         BuildInteractions();
         BuildForces();
         BuildPopulation();
@@ -102,6 +108,67 @@ internal sealed class LiveExperimentEditor
         double max, string help, bool log = false, bool integer = false, bool gesture = true, Func<double>? maximumValue = null) =>
         new(label, get, set, reset, min, max, help, log, integer,
             gesture ? editor.BeginGesture : null, gesture ? editor.EndGesture : null, maximumValue);
+
+    /// <summary>Offers complete starting recipes separately from compatible matrix-only live edits.</summary>
+    private void BuildRecipes()
+    {
+        recipes.Children.Add(new UiLabel(() => "SELECT A RECIPE. SELECTION ALONE DOES NOT CHANGE THE SIMULATION.", 42));
+        for (int index = 0; index < PresetCatalog.All.Count; index += 2)
+        {
+            UiButton first = RecipeButton(PresetCatalog.All[index]);
+            recipes.Children.Add(index + 1 < PresetCatalog.All.Count
+                ? new UiRow(first, RecipeButton(PresetCatalog.All[index + 1]))
+                : first);
+        }
+        recipes.Children.Add(new UiLabel(() => PresetCatalog.Get(selectedRecipe).Description, 94));
+        recipes.Children.Add(new UiLabel(() =>
+        {
+            PresetInfo recipe = PresetCatalog.Get(selectedRecipe);
+            return $"NEW: {recipe.DefaultParticleCount} PARTICLES / {recipe.DefaultSpeciesCount} SPECIES{recipePopulationSummary}. SEED {editor.Generation.Seed}. RESETS RULES AND CLOCK.";
+        }, 62, UiCanvas.Accent));
+        recipes.Children.Add(Button(() => "NEW FROM RECIPE", StartSelectedRecipe,
+            "Start the complete suggested recipe: default world, forces, timestep and populations; uniform positions, zero velocities, current seed. Establish a new reset baseline. Retain appearance, playback and execution choices."));
+        recipes.Children.Add(new UiButton(() => "APPLY MATRIX LIVE", ApplySelectedRecipeMatrix,
+            "Apply only the selected interaction matrix. Retain particles, populations, forces, generation settings and clock. Requires a compatible current species count; use New from recipe for the complete starting configuration.",
+            () => PresetCatalog.SupportsSpeciesCount(selectedRecipe, editor.Configuration.Matrix.SpeciesCount)));
+        recipes.Children.Add(new UiLabel(() => PresetCatalog.SupportsSpeciesCount(selectedRecipe, editor.Configuration.Matrix.SpeciesCount)
+            ? "MATRIX LIVE RETAINS PARTICLES, POPULATIONS AND CLOCK. * = EXPERIMENTAL."
+            : $"MATRIX LIVE NEEDS A COMPATIBLE SPECIES COUNT; TRY NEW FROM RECIPE ({PresetCatalog.Get(selectedRecipe).DefaultSpeciesCount} SPECIES). * = EXPERIMENTAL.", 64));
+    }
+
+    private UiButton RecipeButton(PresetInfo recipe) => Button(
+        () => (selectedRecipe == recipe.Kind ? "> " : "") + recipe.Name.ToUpperInvariant() + (recipe.IsExperimental ? " *" : ""),
+        () => SelectRecipe(recipe.Kind), recipe.Description);
+
+    /// <summary>Selects a catalogue entry without mutating any simulation or generation setting.</summary>
+    internal void SelectRecipe(PresetKind kind)
+    {
+        PresetInfo recipe = PresetCatalog.Get(kind);
+        selectedRecipe = kind;
+        if (kind == PresetKind.CoreHalo)
+        {
+            int[] counts = PresetCatalog.CreatePopulations(kind, recipe.DefaultParticleCount, recipe.DefaultSpeciesCount);
+            recipePopulationSummary = $" ({counts[0]} CORE / {counts[1]} HALO)";
+        }
+        else
+        {
+            recipePopulationSummary = string.Empty;
+        }
+    }
+
+    /// <summary>Starts the selected complete recipe through the same controller used by headless checks.</summary>
+    internal void StartSelectedRecipe()
+    {
+        editor.NewRecipe(selectedRecipe);
+        ClearDrafts();
+        matrix.Synchronize();
+        SuppressPlayback = true;
+        PresetInfo recipe = PresetCatalog.Get(selectedRecipe);
+        report($"Started {recipe.Name}{(recipe.IsExperimental ? " (experimental)" : "")}: {recipe.DefaultParticleCount} particles, {recipe.DefaultSpeciesCount} species. New baseline at time/step zero.");
+    }
+
+    /// <summary>Applies the selected matrix without adopting its population or other recommended settings.</summary>
+    internal void ApplySelectedRecipeMatrix() => Template(selectedRecipe);
 
     private void BuildInteractions()
     {
@@ -553,7 +620,8 @@ internal sealed class LiveExperimentEditor
     internal void Template(PresetKind kind)
     {
         editor.ApplyMatrixTemplate(kind, editor.Generation.Seed);
-        report($"{kind} matrix applied live. Particles, velocities, time and completed steps retained.");
+        PresetInfo recipe = PresetCatalog.Get(kind);
+        report($"{recipe.Name}{(recipe.IsExperimental ? " (experimental)" : "")} matrix applied live. Particles, velocities, time and completed steps retained.");
     }
 
     /// <summary>Uses the same undoable diagnostic operation for the shortcut and the native toggle.</summary>

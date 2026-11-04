@@ -54,13 +54,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
             switch (key)
             {
                 case "--preset":
-                    preset = value switch
-                    {
-                        "random" => PresetKind.Random,
-                        "chains" => PresetKind.Chains,
-                        "snakes" => PresetKind.Snakes,
-                        _ => throw new ArgumentException("Preset must be random, chains or snakes.")
-                    };
+                    preset = PresetCatalog.Parse(value);
                     break;
                 case "--particles": particles = Integer(value, key); break;
                 case "--species": species = Integer(value, key); break;
@@ -80,6 +74,15 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
             }
         }
 
+        PresetInfo recipe = PresetCatalog.Get(preset);
+        if (!seen.Contains("--particles"))
+        {
+            particles = recipe.DefaultParticleCount;
+        }
+        if (!seen.Contains("--species"))
+        {
+            species = recipe.DefaultSpeciesCount;
+        }
         ArgumentOutOfRangeException.ThrowIfNegative(particles);
         ArgumentOutOfRangeException.ThrowIfLessThan(species, 1);
         ArgumentOutOfRangeException.ThrowIfNegative(sampleEvery);
@@ -100,11 +103,13 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
     private static int Integer(string value, string option) => int.TryParse(value, NumberStyles.Integer,
         CultureInfo.InvariantCulture, out int parsed) ? parsed : throw new ArgumentException($"{option} requires an integer.");
 
-    internal static void PrintHelp() => Console.WriteLine("""
+    internal static void PrintHelp()
+    {
+        Console.WriteLine("""
         Particle Life 2 - native live experiment editor (MonoGame DesktopGL)
 
         dotnet run --project src/ParticleLife.MonoGame -c Release -- [experiment.json]
-            [--preset random|chains|snakes] [--particles 500] [--species 7] [--seed 1]
+            [--preset NAME] [--particles N] [--species N] [--seed 1]
             [--paused] [--sample-every 144] [--save-dir artifacts/viewer] [--backend direct|grid] [--workers 1]
 
         The editor opens beside the simulation. Expand a section and scroll to its controls.
@@ -121,8 +126,10 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         Esc       Cancel field/modal or quit   F9          Print separated viewer timings
 
         Shortcuts do not fire while a control has keyboard focus. Click the world to return
-        focus to shortcuts. Focus loss pauses; resume explicitly. New experiments are explicit
-        actions under Generation recipe. Matrix templates retain particles, time and steps.
+        focus to shortcuts. Focus loss pauses; resume explicitly. BUILT-IN RECIPES selects a
+        named configuration. NEW FROM RECIPE creates a new population and reset baseline using
+        its recommended settings. APPLY MATRIX LIVE requires compatible species counts and keeps
+        particles, time and steps. Generation recipe also supports custom new experiments.
         Ordinary rule/timestep/backend changes also retain completed state and accumulated time.
         World drafts apply together; population drafts explain survivor/remapping/addition policy.
         Generation seed, placement and initial velocity edits alone do not move particles.
@@ -146,6 +153,15 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         Numerical dt is separate from wall-clock playback speed. Catch-up limits drop excess
         whole-step playback time; dense populations may still make one step expensive.
         """);
+        Console.WriteLine("\nBuilt-in recipes (omitted --particles/--species use the listed defaults):");
+        foreach (PresetInfo recipe in PresetCatalog.All)
+        {
+            Console.WriteLine($"  {recipe.Key,-20} {recipe.DefaultParticleCount} particles, {recipe.DefaultSpeciesCount} species" +
+                (recipe.IsExperimental ? " [experimental]" : string.Empty));
+        }
+        Console.WriteLine("Core and halo uses 20% core particles (rounded) and 80% halo; other new recipes use balanced populations.");
+        Console.WriteLine("Explicit counts are honoured; unsupported species counts are rejected when generating, not when loading saved state.");
+    }
 }
 
 internal static class ViewerErrors

@@ -1,3 +1,4 @@
+using ParticleLife.Core.Experiments;
 using ParticleLife.Viewer;
 
 namespace ParticleLife.MonoGame;
@@ -28,6 +29,11 @@ internal sealed record ViewerStartup(ExperimentEditor Editor, string Message)
             }
         }
 
+        PresetInfo recipe = PresetCatalog.Get(options.Preset);
+        string label = recipe.Name + (recipe.IsExperimental ? " (experimental)" : "");
+        message = options.InputPath is null
+            ? $"{label} | Built-in recipes offers more starting points | S opens save/load library"
+            : message + $" Fallback: {label}.";
         PlaybackController playback = new(options.CreateDefaultExperiment(), diagnosticEverySteps: options.SampleEvery);
         try
         {

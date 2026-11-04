@@ -152,8 +152,9 @@ public sealed partial class ExperimentEditor
     }
 
     /// <summary>Applies a matrix template live while preserving every particle, the clock and reset baseline.</summary>
-    /// <param name="kind">Random, Chains or Snakes matrix rule.</param>
+    /// <param name="kind">Built-in matrix rule compatible with the current species count.</param>
     /// <param name="seed">Provenance seed used only for Random matrix generation.</param>
+    /// <exception cref="ArgumentException">The template does not support the current species count; no edit is applied.</exception>
     public void ApplyMatrixTemplate(PresetKind kind, int seed)
     {
         Apply(CaptureValues() with { Configuration = WithMatrix(CreateMatrix(kind, Configuration.Matrix.SpeciesCount, seed)) },
@@ -302,6 +303,27 @@ public sealed partial class ExperimentEditor
         SimulationConfiguration configuration = WithMatrix(CreateMatrix(kind, Configuration.Matrix.SpeciesCount, Generation.Seed));
         ExperimentDefinition experiment = GenerateExperiment(name, configuration, populations, Generation);
         ReplaceBaseline(experiment, pause: false);
+    }
+
+    /// <summary>Starts a complete built-in recipe with its recommended rules, population and species count.</summary>
+    /// <param name="kind">Recipe selected from <see cref="PresetCatalog"/>.</param>
+    /// <remarks>
+    /// Uses the current generation seed with the core generator's uniform positions and zero velocities.
+    /// Model parameters and timestep return to the recipe defaults. The actual generated state establishes
+    /// a new time/step-zero reset baseline, clearing undo and replay history. Execution backend/workers,
+    /// appearance, playback settings and pause status are retained. To preserve particles and the clock,
+    /// use <see cref="ApplyMatrixTemplate"/> with a compatible species count instead.
+    /// </remarks>
+    /// <exception cref="ArgumentException">The recipe is unsupported; the current experiment is retained.</exception>
+    /// <exception cref="InvalidOperationException">A recorded session is currently replaying.</exception>
+    public void NewRecipe(PresetKind kind)
+    {
+        EnsureNotReplaying();
+        GenerationSettings generation = new() { Seed = Generation.Seed };
+        ExperimentDefinition experiment = PresetGenerator.Create(kind, seed: generation.Seed,
+            backend: Configuration.Backend, workerCount: Configuration.WorkerCount);
+        ReplaceBaseline(experiment, pause: false);
+        Generation = generation;
     }
 
     /// <summary>Restores the exact baseline state and configuration at time/step zero and starts a fresh timeline.</summary>
@@ -631,7 +653,7 @@ public sealed partial class ExperimentEditor
     }
 
     private static InteractionMatrix CreateMatrix(PresetKind kind, int speciesCount, int seed) =>
-        PresetGenerator.Create(kind, 0, speciesCount, seed).Matrix;
+        PresetGenerator.CreateMatrix(kind, speciesCount, seed);
 
     private static ExperimentDefinition GenerateExperiment(string name, SimulationConfiguration configuration,
         ReadOnlySpan<int> counts, GenerationSettings generation)

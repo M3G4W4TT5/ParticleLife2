@@ -81,22 +81,20 @@ internal static partial class CommandLine
 
     private static void Create(Dictionary<string, string> options)
     {
-        string presetText = Get(options, "preset", "random");
-        PresetKind preset = presetText switch
-        {
-            "random" => PresetKind.Random,
-            "chains" => PresetKind.Chains,
-            "snakes" => PresetKind.Snakes,
-            _ => throw new ArgumentException("Preset must be random, chains or snakes.")
-        };
+        PresetKind preset = PresetCatalog.Parse(Get(options, "preset", "random"));
+        PresetInfo recipe = PresetCatalog.Get(preset);
         string output = Required(options, "output");
         ExperimentDefinition experiment = PresetGenerator.Create(preset,
-            Integer(options, "particles", 500), Integer(options, "species", 7), Integer(options, "seed", 1),
+            Integer(options, "particles", recipe.DefaultParticleCount), Integer(options, "species", recipe.DefaultSpeciesCount), Integer(options, "seed", 1),
             timeStep: Number(options, "dt", 1d / 144), backend: ParseBackend(Get(options, "backend", "grid")),
             workerCount: Integer(options, "workers", 1));
         PrepareOutput(output);
         WriteNewOutput(output, ExperimentFile.Serialize(experiment));
         Console.WriteLine($"Saved {experiment.Name}: {experiment.InitialState.Count} particles, {experiment.Matrix.SpeciesCount} species to {Path.GetFullPath(output)}");
+        if (recipe.IsExperimental)
+        {
+            Console.WriteLine($"Experimental recipe: {recipe.Description}");
+        }
     }
 
     private static void RunExperiment(string path, Dictionary<string, string> options)
@@ -365,11 +363,13 @@ internal static partial class CommandLine
         writer.Write('\n');
     }
 
-    private static void PrintHelp() => Console.WriteLine("""
+    private static void PrintHelp()
+    {
+        Console.WriteLine("""
         Particle Life 2 — headless, double-precision experiments
 
-        create --output experiment.json [--preset random|chains|snakes]
-               [--particles 500] [--species 7] [--seed 1] [--dt 0.006944444444444444]
+        create --output experiment.json [--preset NAME]
+               [--particles N] [--species N] [--seed 1] [--dt 0.006944444444444444]
                [--backend grid|direct] [--workers 1]
         validate experiment.json
         run experiment.json --steps N [--sample-every 100] [--cluster-distance 0.1]
@@ -393,4 +393,13 @@ internal static partial class CommandLine
         reports are not checkpoint inputs. Set --sample-every 0 to disable exact spatial diagnostics.
         Seeds alone do not guarantee identical generation or trajectories across runtimes.
         """);
+        Console.WriteLine("\nBuilt-in recipes (omitted --particles/--species use the listed defaults):");
+        foreach (PresetInfo recipe in PresetCatalog.All)
+        {
+            Console.WriteLine($"  {recipe.Key,-20} {recipe.DefaultParticleCount} particles, {recipe.DefaultSpeciesCount} species" +
+                (recipe.IsExperimental ? " [experimental]" : string.Empty));
+        }
+        Console.WriteLine("Core and halo uses 20% core particles (rounded) and 80% halo; other new recipes use balanced populations.");
+        Console.WriteLine("Explicit counts are honoured; unsupported species counts are rejected. Saved experiments retain the actual generated values.");
+    }
 }

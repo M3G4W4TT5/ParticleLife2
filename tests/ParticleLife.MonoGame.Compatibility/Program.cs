@@ -161,7 +161,31 @@ selectableSpecies = 1;
 selector.Press(new Point(454, 45));
 selector.Release();
 Require(selectedSpecies == 0 && selector.SliderFraction == 0, "A one-species selector produced an invalid index or undefined thumb fraction.");
-Console.WriteLine("Native widget integration: exact draft validation, live slider/replay/undo and directed matrix navigation passed without graphics.");
+// Use the actual native recipe actions, including selection's no-op semantics and switching
+// to a smaller species matrix. This needs no graphics device.
+LiveExperimentEditor recipePanel = new(editor, Path.GetTempPath(), _ => { }, () => { });
+ExperimentDefinition beforeRecipeSelection = playback.Experiment;
+long beforeRecipeRevision = editor.Revision;
+recipePanel.SelectRecipe(PresetKind.CoreHalo);
+Require(ReferenceEquals(beforeRecipeSelection, playback.Experiment) && editor.Revision == beforeRecipeRevision,
+    "Selecting a recipe changed the experiment before an explicit action.");
+recipePanel.StartSelectedRecipe();
+Require(playback.Observe().Count == 420 && editor.Configuration.Matrix.SpeciesCount == 2
+    && editor.Populations.SequenceEqual(new[] { 84, 336 }) && playback.Observe().Step == 0,
+    "Native recipe action did not establish the complete core/halo baseline.");
+playback.SingleStep();
+recipePanel.SelectRecipe(PresetKind.AlternatingBands);
+recipePanel.ApplySelectedRecipeMatrix();
+Require(playback.Observe().Step == 1 && playback.Observe().Count == 420 && editor.Configuration.Matrix[0, 0] == -0.6,
+    "Native matrix-only recipe action regenerated particles or reset the clock.");
+recipePanel.SelectRecipe(PresetKind.BiasedRibbons);
+recipePanel.StartSelectedRecipe();
+recipePanel.SelectRecipe(PresetKind.CoreHalo);
+recipePanel.StartSelectedRecipe();
+recipePanel.Update(new Rectangle(0, 0, 460, 700), new Rectangle(0, 0, 800, 700), 1, default, []);
+Require(editor.Configuration.Matrix.SpeciesCount == 2 && recipePanel.Graph is not null,
+    "Native recipe switch failed to refresh the smaller matrix.");
+Console.WriteLine("Native widget integration: draft validation, live slider/replay/undo, matrix navigation and built-in recipes passed without graphics.");
 StartupChecks.Run();
 
 static void Require(bool condition, string message)

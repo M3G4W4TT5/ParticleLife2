@@ -1,0 +1,113 @@
+{
+  "documentKind": "particle-life-preset",
+  "schemaVersion": 1,
+  "name": "Ribbons",
+  "configuration": {
+    "parameters": {
+      "worldWidth": 1,
+      "worldHeight": 1,
+      "cutoff": 0.1,
+      "forceScale": 1,
+      "repulsionFraction": 0.3,
+      "dampingHalfLife": 0.025,
+      "wallWidth": 0.05,
+      "wallStrength": 1.44
+    },
+    "matrix": {
+      "speciesCount": 7,
+      "values": [
+        -0.2,
+        0.8,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        0.8,
+        0.8,
+        -0.2,
+        0.8,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        0.8,
+        -0.2,
+        0.8,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        0.8,
+        -0.2,
+        0.8,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        0.8,
+        -0.2,
+        0.8,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        0.8,
+        -0.2,
+        0.8,
+        0.8,
+        -0.5,
+        -0.5,
+        -0.5,
+        -0.5,
+        0.8,
+        -0.2
+      ]
+    },
+    "timeStep": 0.006944444444444444,
+    "neighbourSearchVersion": "uniform-grid/1",
+    "workerCount": 1
+  },
+  "populations": [
+    60,
+    60,
+    60,
+    60,
+    60,
+    60,
+    60
+  ],
+  "generation": {
+    "seed": 1,
+    "placement": "Uniform",
+    "velocity": "Zero",
+    "speed": 0,
+    "directionRadians": 0
+  },
+  "appearance": {
+    "speciesColors": [
+      15887741,
+      6411957,
+      6727927,
+      15977573,
+      11700983,
+      15703653,
+      7329509
+    ],
+    "particleRadius": 2.5,
+    "showDiagnostics": true,
+    "showHelp": true,
+    "showOverlay": true,
+    "showEditor": true,
+    "uiScale": 1
+  },
+  "playback": {
+    "speed": 1,
+    "maxStepsPerFrame": 8,
+    "diagnosticEverySteps": 144,
+    "diagnosticRadius": null
+  }
+}
