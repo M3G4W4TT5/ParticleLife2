@@ -3,6 +3,21 @@ using ParticleLife.Benchmarks;
 
 try
 {
+    if (args.Length > 0 && args[0] == "compare")
+    {
+        string outputDirectory = args.Length > 1 ? args[1] : "artifacts/benchmarks/m4";
+        int samples = args.Length > 2 ? int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 31;
+        string selection = args.Length > 3 ? args[3] : "all";
+        int repetitions = args.Length > 4 ? int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture) : 3;
+        if (args.Length > 5)
+        {
+            throw new ArgumentException("Too many compare arguments.");
+        }
+
+        ComparisonRunner.Run(outputDirectory, samples, selection, repetitions);
+        return 0;
+    }
+
     if (args.Length > 0 && args[0] == "latency")
     {
         string outputDirectory = args.Length > 1 ? args[1] : "artifacts/benchmarks/reference";
@@ -26,14 +41,15 @@ try
         File.WriteAllText(Path.Combine(inputDirectory, "session.json"), System.Text.Json.JsonSerializer.Serialize(new
         {
             capturedAtUtc = DateTimeOffset.UtcNow,
-            environment = LatencyRunner.CaptureEnvironment(),
+            environment = LatencyRunner.CaptureEnvironment("direct and uniform-grid; serial double precision"),
             arguments = args
         }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
         BenchmarkSwitcher.FromAssembly(typeof(DirectStepBenchmarks).Assembly).Run(args[1..]);
         return 0;
     }
 
-    Console.WriteLine("Particle Life direct-reference benchmarks (run Release without a debugger)");
+    Console.WriteLine("Particle Life serial-backend benchmarks (run Release without a debugger)");
+    Console.WriteLine("  compare [output-directory] [samples >= 5] [quick|all|case-name|experiment.json] [repetitions >= 1]");
     Console.WriteLine("  latency [output-directory] [samples >= 5] [quick|all|case-name|experiment.json]");
     Console.WriteLine("  bdn --filter '*uniform-fixed-500*' --job short");
     Console.WriteLine("  bdn --filter '*' --job short");

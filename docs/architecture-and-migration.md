@@ -2,7 +2,7 @@
 
 Particle Life 2 will modernize the original two-dimensional Particle Life simulation around an engine-independent C# core. The first release should make its behaviour reproducible, its equations explicit, and its performance measurable while retaining the attraction matrices and emergent patterns that motivated the project.
 
-This is the implementation plan as of 4 November 2026. M1–M3 are implemented: a validated experiment format, tested serial simulation, headless CLI, reference measurements and an interactive MonoGame viewer. The numerical conventions below remain the reviewed baseline. M4–M5 remain planned.
+This is the implementation plan as of 4 November 2026. M1–M4 provide validated experiments, a tested serial simulation, headless CLI, interactive MonoGame viewer and exact uniform-grid acceleration. The numerical conventions below remain the reviewed baseline. M5 remains separate release work.
 
 ## Scope and priorities
 
@@ -123,7 +123,7 @@ For exactly coincident particles, the initial radial model returns zero pair con
 
 ### A consistent numerical step
 
-1. Read the current state. The direct M2 solver enumerates all ordered pairs without an index; M4 will build an index from those positions.
+1. Read the current state. Direct search enumerates all ordered pairs; grid search builds its index from these same completed positions.
 2. Clear a reusable force buffer and evaluate all pair and wall forces from that same state.
 3. Advance every particle into output buffers using the documented integration rule.
 4. Swap completed buffers, advance simulation time, and expose the result.
@@ -186,7 +186,7 @@ The operation boundaries are explicit:
 
 Every successful variation becomes the new reset target at time and step zero. Matrix changes restart from saved initial state, not evolved positions. Generator metadata identifies the latest generation operation, seed and runtime; actual saved state and matrix values remain authoritative. Invalid interactive input shows an error and pauses without replacing the valid experiment. Invalid startup files retain the generated fallback experiment paused. Run reports are rejected as inputs.
 
-Saving (`S`) serializes the complete current initial experiment in schema 1 for CLI replay. It creates a timestamped unique file under `artifacts/viewer` by default, with exclusive file creation protecting existing or concurrent outputs. It is not a checkpoint or a current-state export. The input path, output directory and generation/cadence defaults can be supplied at startup; actual controls and launch commands are in the README.
+Saving (`S`) serializes the complete current initial experiment in schema 2, including its effective neighbour search, for CLI replay. It creates a timestamped unique file under `artifacts/viewer` by default, with exclusive file creation protecting existing or concurrent outputs. It is not a checkpoint or a current-state export. The input path, output directory and generation/cadence defaults can be supplied at startup; actual controls and launch commands are in the README.
 
 Rendering obtains `Observe()` only after stepping, reads its spans immediately, and retains no view across a step or reset. The host runs input, simulation and drawing sequentially without a snapshot copy each frame. A single world-to-screen scale preserves world geometry across viewport shapes; no display dimension changes positions, forces or interaction cutoffs. Rendering may skip pixels outside the viewport but never removes finite off-world particles. Species colours are stable functions of species identifiers. Textures, font atlas, sprite batch and clipping state are reused and disposed with the host.
 
@@ -210,6 +210,20 @@ Performance is part of the data and execution design from the beginning. Keep a 
 Grid construction and storage should scale with particles and occupied cells. Exact local interaction work also depends on the number of candidate pairs. A cluster in which nearly every particle interacts can still require quadratic work. Benchmark density and interaction radius as well as particle count.
 
 Parallel work can later assign disjoint output ranges to workers while all workers read the same input state and index. Introduce it only after the serial implementation is correct and measured. Do not apply action-reaction symmetry to nonreciprocal matrices. SIMD, reduced precision, unsafe code, GPU execution and approximation each require a measured benefit and a numerical-error check before adoption.
+
+### M4 exact grid and backend selection
+
+`Simulation` selects one of two serial `IForceEvaluator` implementations. The reference retains its independent nested receiver/source loops in storage order. Both evaluators share the reviewed pair mathematics, including subnormal-distance handling; the mathematical tests remain independent of search parity. The grid changes candidate discovery and accumulation order, never the directed matrix, radial curve, soft wall, damping or integrator.
+
+The grid uses the smallest power-of-two cell width `h >= R` and the nine cells surrounding each receiver. Binary scaling followed by signed floor avoids rounded division at cell faces. Keys retain both full `Int64` coordinates; dictionary hash collisions cannot merge cells. A reusable link per particle represents all occupancy without truncation or a query-result buffer. Reverse insertion keeps each individual cell in ascending source order. Every distinct source occurs at most once per receiver. Coincident pairs retain the same unordered overlap count.
+
+If any scaled coordinate is non-finite or has magnitude at least `2^50`, the entire force evaluation uses direct enumeration. Negative values that scale to negative zero map to cell `-1`; physical coordinates remain untouched. This conservative bound avoids unsafe conversion and preserves supported finite states at extreme position/cutoff ratios. The decision is made again from each step's input, so fallback is reversible. A non-finite grid-order force sum also retries the entire direct evaluation: very large alternating forces may cancel in reference order while overflowing in cell order. If direct evaluation also fails, the failure propagates atomically. Finite sums can still differ by roundoff; later integration failures are not retried. XML comments beside the mapping and pair kernel are the authoritative algorithm documentation.
+
+Arrays and dictionary slots reserve for the largest population seen, allowing a cluster to spread into one occupied cell per particle without allocating. Each evaluation clears and rebuilds the index, including after reset, population changes and experiment replacement. At stable population, expected cost is `O(N + candidates)` and retained storage is `O(maximum population)`. After shrink, clearing the dictionary still costs `O(retained capacity)`. Dense local interactions still require quadratic work. The capacity report includes an explicitly labelled estimate of array payload, separate from measured allocated bytes and process memory.
+
+Completed state, pair counts and execution metadata publish together only after integration succeeds. Failed force, integration or time checks leave all published values intact. Scratch index telemetry can change on a rejected stage, so hosts report the copied last-successful-step metadata. Cumulative counters record successful direct-fallback steps since reset, distinguishing coordinate range from accumulation range; reporting just the latest step would hide earlier fallback.
+
+Core constructors and generators retain a direct default for API compatibility. Newly generated CLI and viewer experiments explicitly choose grid search. Loaded files use their saved choice, with schema 1 always meaning direct. CLI `create`/`run` and viewer startup accept `--backend direct|grid`. An explicit viewer override also applies on reload; reset, resampling, matrix editing and preset replacement retain the effective backend. Saving records that effective configuration. CLI reports retain the source experiment configuration separately from the override and actual execution. No parallel execution, SIMD, reduced precision, unsafe code or approximate search is introduced in M4.
 
 ### Benchmark protocol
 
@@ -247,7 +261,9 @@ Use combined absolute and relative tolerances with a documented scale and reason
 
 An experiment stores a schema/model version, parameters, matrix, initial positions/velocities/species, seed, generator identity, timestep, boundaries and solver settings. A checkpoint additionally stores current time/state and any evolving RNG state when randomness enters the dynamics. Record runtime and numerical backend. A seed alone does not promise identical results across runtimes or future parallel implementations.
 
-Schema 1 uses JSON and persists every initial value, stable identity and directed matrix entry in row-major receiver/source order. The only accepted conventions are `particle-life/1`, `direct-damped-semi-implicit-euler/1`, `reduced-l0-t0-m0` and `soft-wall`. Unknown/duplicate fields, missing required values, unsupported versions and invalid state fail on load. Experiments start at time and step zero; the CLI's separately versioned run reports embed the original experiment and final state, but are not checkpoint inputs. There is no RNG in the dynamics. Random generation uses explicitly seeded `System.Random` with generator version and runtime recorded; actual saved values take precedence over provenance.
+JSON experiments persist every initial value, stable identity and directed matrix entry in row-major receiver/source order. Schema 1 remains readable with exactly its original `particle-life/1` model and `direct-damped-semi-implicit-euler/1` solver meaning. Saving writes schema 2, which separates the unchanged model, `damped-semi-implicit-euler/1` integration and `direct/1` or `uniform-grid/1` neighbour search. Both schemas require `reduced-l0-t0-m0` units and `soft-wall` boundaries. Unknown/duplicate fields, missing required values, unsupported versions and invalid state fail on load. No legacy fixture is silently reinterpreted as grid execution.
+
+Experiments start at time and step zero; CLI schema-2 run reports embed the decoded source experiment and final state, preserve the original input-file hash, and distinguish saved search, explicit override, requested execution and actual last-step execution. They include successful direct-fallback counts and reasons; a zero-step report has no last execution. Reports are not checkpoint inputs. There is no RNG in the dynamics. Random generation uses explicitly seeded `System.Random` with generator version and runtime recorded; actual saved values take precedence over provenance.
 
 Diagnostics are sampled only when requested by the host. CLI cadence is expressed in completed steps; zero disables sampling. Cluster statistics count connected components of the undirected graph with separation at most the configured distance, including singletons. Exact overlaps are unordered pairs; force candidates and accepted interactions are directed pairs. Sampling is O(N squared), can allocate, and is measured separately from stepping. No potential energy is reported for arbitrary directed matrices.
 
@@ -266,7 +282,7 @@ Each milestone should end in small verified commits and a useful result. The seq
 | M4 Spatial acceleration | Add the exact uniform grid, reusable buffers and profiling. Evaluate parallel work only if profiling justifies it. | Neighbour and force parity pass; no steady-capacity step allocation; benchmark comparisons include density/cluster cases and recorded capacity targets. |
 | M5 Documented 2D release | Review the remaining legacy modes, provide examples, generate API docs, finish CI checks and record limitations. | Every legacy mode has a disposition; public API docs build; contributors can reproduce tests, examples and benchmark protocol from a clean checkout. |
 
-M1–M3 are implemented. Build, automated validation and native window checks are described in [CONTRIBUTING.md](../CONTRIBUTING.md); workloads, measured timings, allocation evidence and limitations are in [the reference baseline](performance-baseline.md). The next implementation milestone is M4: an exact uniform-grid search checked against the direct solver, with reusable buffers and comparable performance measurements. No Unity adapter, octree, FMM, 3D state or gameplay system is needed to complete these milestones.
+M1–M4 are implemented. Build, automated validation and native window checks are described in [CONTRIBUTING.md](../CONTRIBUTING.md). The [historical reference baseline](performance-baseline.md) retains M2/M3 provenance; the [M4 comparison](performance-m4.md) records controlled direct/grid measurements, capacity targets and limitations. M5 is a subsequent release review. No Unity adapter, octree, FMM, 3D state or gameplay system is needed to complete these milestones.
 
 ## Repository workflow and documentation
 

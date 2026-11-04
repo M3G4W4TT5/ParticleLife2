@@ -4,7 +4,7 @@ using ParticleLife.Core.State;
 
 namespace ParticleLife.Benchmarks;
 
-/// <summary>Builds explicit initial states for comparing the serial reference on controlled geometries.</summary>
+/// <summary>Builds explicit initial states for comparing serial neighbour searches on controlled geometries.</summary>
 internal static class BenchmarkWorkload
 {
     internal const int Seed = 1729;
@@ -13,15 +13,20 @@ internal static class BenchmarkWorkload
     {
         get
         {
+            // Small populations expose the search overhead and measured crossover.
+            foreach (int population in new[] { 2, 16, 64, 128 })
+            {
+                yield return $"uniform-fixed-{population}";
+            }
+
             foreach (int population in new[] { 500, 2_000, 10_000 })
             {
                 yield return $"uniform-fixed-{population}";
                 yield return $"uniform-density-{population}";
                 yield return $"cluster-{population}";
                 yield return $"band-{population}";
+                yield return $"boundary-overlap-{population}";
             }
-
-            yield return "boundary-overlap-500";
         }
     }
 

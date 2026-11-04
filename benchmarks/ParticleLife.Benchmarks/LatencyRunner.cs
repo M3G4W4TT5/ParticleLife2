@@ -177,7 +177,7 @@ internal static class LatencyRunner
         };
     }
 
-    internal static object CaptureEnvironment()
+    internal static object CaptureEnvironment(string backend = "direct-serial-double/semi-implicit-euler-v1")
     {
         string status = ReadCommand("git", "status", "--porcelain");
         return new
@@ -201,7 +201,14 @@ internal static class LatencyRunner
             serverGc = GCSettings.IsServerGC,
             stopwatchFrequency = Stopwatch.Frequency,
             tieredCompilationOverride = Environment.GetEnvironmentVariable("DOTNET_TieredCompilation"),
-            backend = "direct-serial-double/semi-implicit-euler-v1"
+            runtimeOverrides = new[]
+            {
+                "DOTNET_TieredPGO", "DOTNET_TC_QuickJit", "DOTNET_TC_QuickJitForLoops", "DOTNET_ReadyToRun",
+                "COMPlus_TieredCompilation", "COMPlus_TieredPGO", "COMPlus_ReadyToRun", "DOTNET_gcServer"
+            }.ToDictionary(name => name, Environment.GetEnvironmentVariable),
+            powerPlan = OperatingSystem.IsWindows() ? ReadCommand("powercfg", "/getactivescheme") : "not captured on this OS",
+            processPriority = Process.GetCurrentProcess().PriorityClass.ToString(),
+            backend
         };
     }
 

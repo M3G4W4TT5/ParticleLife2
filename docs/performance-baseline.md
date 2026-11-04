@@ -2,6 +2,8 @@
 
 The M2 benchmark uses the direct, directed all-pairs evaluator with double-precision state and the specified damped semi-implicit Euler step. It establishes a reference for M4; it does not establish an interactive particle-count budget.
 
+The [M4 comparison](performance-m4.md) reruns direct and grid on the same build and saved inputs. This page retains the original M2/M3 measurements and their provenance; its timings are historical context.
+
 ## Reproduce
 
 After the documented Release build, run from the repository root without a debugger:

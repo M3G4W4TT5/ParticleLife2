@@ -4,7 +4,7 @@ using ParticleLife.Core.Numerics;
 
 namespace ParticleLife.Benchmarks;
 
-/// <summary>Measures one direct step from an identical saved starting state on every iteration.</summary>
+/// <summary>Measures either serial backend from the same saved starting state on every iteration.</summary>
 /// <remarks>
 /// Iteration setup deliberately forces one invocation per iteration. Setup and file serialization
 /// are outside the timed method. Very short cases can have wide timing intervals; the separate
@@ -22,6 +22,10 @@ public class DirectStepBenchmarks
     /// <summary>Gets or sets the geometry and population under measurement.</summary>
     [ParamsSource(nameof(Cases))]
     public string Case { get; set; } = "uniform-fixed-500";
+
+    /// <summary>Gets or sets the requested exact neighbour-search implementation.</summary>
+    [Params(ForceBackend.Direct, ForceBackend.UniformGrid)]
+    public ForceBackend Backend { get; set; }
 
     /// <summary>Creates buffers and exports the exact initial state outside measurements.</summary>
     [GlobalSetup]
@@ -41,14 +45,24 @@ public class DirectStepBenchmarks
             ExperimentFile.Save(inputPath, experiment);
         }
 
-        simulation = new Simulation(experiment.InitialState, experiment.Parameters, experiment.Matrix, experiment.TimeStep);
+        simulation = new Simulation(experiment.InitialState, experiment.Parameters, experiment.Matrix, experiment.TimeStep, Backend);
+        // Establish all buffers and JIT paths before a measured iteration. Resets do not discard capacity.
+        int warmupCount = 0;
+        long warmupStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        do
+        {
+            simulation.Reset(experiment.InitialState);
+            simulation.Step();
+            warmupCount++;
+        }
+        while (warmupCount < 64 || System.Diagnostics.Stopwatch.GetElapsedTime(warmupStarted).TotalSeconds < 1);
     }
 
     /// <summary>Restores the identical initial state without timing its copying cost.</summary>
     [IterationSetup]
     public void Reset() => simulation.Reset(experiment.InitialState);
 
-    /// <summary>Evaluates all directed pairs and completes one consistent integration step.</summary>
+    /// <summary>Rebuilds any index, evaluates forces and completes one consistent integration step.</summary>
     [Benchmark]
     public void Step() => simulation.Step();
 }

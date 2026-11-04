@@ -2,7 +2,7 @@
 
 Particle Life 2 should be understandable enough to learn from and efficient enough to explore meaningful particle systems. Changes should make the model, numerical method and performance tradeoffs clear to the next contributor.
 
-The current scope and milestone order are in the [architecture and migration plan](docs/architecture-and-migration.md). M1–M3 provide the tested headless reference implementation and interactive viewer. Spatial acceleration is M4.
+The current scope and milestone order are in the [architecture and migration plan](docs/architecture-and-migration.md). M1–M4 provide the tested headless reference, exact uniform grid and interactive viewer. M5 release work remains separate.
 
 ## Build and verification
 
@@ -23,13 +23,13 @@ pwsh -NoProfile -File scripts/check-cli.ps1
 
 The test runner uses Microsoft Testing Platform selected in `global.json`; the explicit `--solution` option is required by that mode. Use `dotnet format ParticleLife.slnx --no-restore` to apply formatting. After intentionally changing dependencies, restore without `--locked-mode` and review the lock-file diff. PowerShell 7 is needed for the two portable verification scripts. CI runs these checks on Linux; local baseline measurements are on Windows.
 
-The solution build includes the MonoGame viewer. Host tests exercise its actual graphics-free playback controller, experiment editing, safe saving and isotropic coordinate mapping. Seven parity cases save experiments, invoke the real CLI and compare its output with the viewer controller after 120 completed steps, matching stable identities with `1e-12` absolute plus `1e-12` relative tolerances in reduced units. They include the supplied fixture, all three presets, state resampling, a matrix change and an off-world case with a different timestep. These short cases allow tiny floating-point variation without claiming cross-runtime bitwise identity.
+The solution build includes the MonoGame viewer. Host tests exercise its actual graphics-free playback controller, experiment editing, safe saving and isotropic coordinate mapping. Fourteen parity cases run seven scenarios through each backend: they save experiments, invoke the real CLI and compare its output with the viewer controller after 120 completed steps, matching stable identities with `1e-12` absolute plus `1e-12` relative tolerances in reduced units. They include the supplied fixture, all three presets, state resampling, a matrix change and an off-world case with a different timestep. Additional tests check legacy schema-1 meaning, explicit overrides, zero-step reports and cumulative coordinate/accumulation fallback provenance. These short cases allow tiny floating-point variation without claiming cross-runtime bitwise identity.
 
 The `--help` command and MonoGame compatibility check do not create a graphics device or window. They can run on Linux CI alongside the numerical and host tests. Native graphics startup is verified separately on Windows; the Linux native window has not been verified.
 
 The core and graphics-free viewer library generate XML documentation in their build output directories. The XML gate temporarily adds malformed/missing documentation probes to the core, checks that CS1591, CS1570 and CS1574 are errors, removes them in a `finally` block, and rebuilds the unmodified core. Generated API website publishing remains M5 work.
 
-For timing commands and their measurement boundaries, use the [reference benchmark protocol and results](docs/performance-baseline.md). Performance tests check zero allocations for warmed successful steps; diagnostics, serialization and snapshots are intentionally outside that contract.
+For timing commands and their measurement boundaries, use the [M4 comparison protocol and results](docs/performance-m4.md); the [historical baseline](docs/performance-baseline.md) retains M2/M3 provenance. Performance tests check zero allocations for warmed complete steps with moving particles and changing cell occupancy, including successful fallbacks. Setup and growth are measured separately; diagnostics, serialization and snapshots are intentionally outside the stepping contract.
 
 ### Interactive verification
 
@@ -38,9 +38,10 @@ After the Release build, launch the actual native window:
 ```sh
 dotnet run --project src/ParticleLife.MonoGame -c Release --no-build
 dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- examples/experiments/two-species.json --paused
+dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- examples/experiments/two-species.json --backend grid --paused
 ```
 
-Use separate launches for the default population and saved fixture. Check the following before reporting an interactive change verified:
+Use separate launches for the default grid population, saved legacy direct fixture and explicit grid override. Confirm the displayed requested/actual search after a step, and verify saved backend selection. Check the following before reporting an interactive change verified:
 
 1. Inspect particle rendering, species colours and readable diagnostics. Resize to wide and tall shapes; the world must retain its aspect ratio and particle count. The viewer requests at least 420 × 340 pixels for its controls.
 2. Exercise keyboard commands and clickable help rows. Pause, wait, resume, and single-step; verify there is no resume burst and single-step advances once. Lose and regain focus; playback must stay paused until explicitly resumed.
