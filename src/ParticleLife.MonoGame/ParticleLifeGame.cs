@@ -505,6 +505,7 @@ internal sealed class ParticleLifeGame : Game
         $"step {controller.Observe().Step}; dropped playback {controller.DroppedPlaybackSeconds:F6} s. CPU update excludes rendering/present. " +
         $"Search requested {controller.Experiment.Backend}; actual {controller.LastExecution?.ActualBackend.ToString() ?? "unstepped"}; " +
         $"fallback {controller.LastExecution?.FallbackReason.ToString() ?? "none"}; direct fallback steps {controller.DirectFallbackSteps}; " +
+        $"coordinate range {controller.DirectFallbackSteps - controller.AccumulationFallbackSteps}; accumulation range {controller.AccumulationFallbackSteps}; " +
         $"candidates {controller.LastStatistics.CandidatePairs}; accepted {controller.LastStatistics.AcceptedPairs}.");
 
     protected override void Dispose(bool disposing)

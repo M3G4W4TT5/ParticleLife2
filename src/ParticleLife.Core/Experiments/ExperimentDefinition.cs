@@ -80,7 +80,8 @@ public sealed class ExperimentDefinition
     public GeneratorMetadata Generator { get; }
 
     /// <summary>Gets the intended neighbour search, independent of model equations and integration.</summary>
-    /// <remarks>A grid execution may use the documented direct fallback for an unindexable finite state.
+    /// <remarks>A grid execution may use the documented direct fallback for an unindexable finite state
+    /// or a grid-order accumulation outside the finite numerical range.
     /// Inspect <see cref="Simulation.LastExecution"/> and <see cref="Simulation.DirectFallbackSteps"/>
     /// for actual successful execution; the intended configuration remains unchanged.</remarks>
     public ForceBackend Backend { get; }

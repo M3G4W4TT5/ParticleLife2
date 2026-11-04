@@ -97,9 +97,11 @@ public sealed class ViewerBackendTests
         Assert.Equal(ForceBackend.Direct, controller.LastExecution!.Value.ActualBackend);
         Assert.Equal(GridFallbackReason.CoordinateRange, controller.LastExecution!.Value.FallbackReason);
         Assert.Equal(1, controller.DirectFallbackSteps);
+        Assert.Equal(0, controller.AccumulationFallbackSteps);
         controller.Reset();
         Assert.Null(controller.LastExecution);
         Assert.Equal(0, controller.DirectFallbackSteps);
+        Assert.Equal(0, controller.AccumulationFallbackSteps);
         controller.SingleStep();
         controller.ReplaceExperiment(PresetGenerator.Create(PresetKind.Random, 4, 1, backend: ForceBackend.UniformGrid));
         Assert.Null(controller.LastExecution);
@@ -133,5 +135,37 @@ public sealed class ViewerBackendTests
         Assert.Equal(ForceBackend.Direct, controller.LastExecution!.Value.ActualBackend);
         Assert.Equal(GridFallbackReason.CoordinateRange, controller.LastExecution.Value.FallbackReason);
         Assert.Equal(2, controller.DirectFallbackSteps);
+        Assert.Equal(0, controller.AccumulationFallbackSteps);
+    }
+
+    [Fact]
+    public void AccumulationFallbackIsReportedAndClearedByResetAndReplacement()
+    {
+        ExperimentDefinition experiment = new("extreme-force-cancellation",
+            new ModelParameters { Cutoff = 1, ForceScale = 1e308, WallStrength = 0, DampingHalfLife = null },
+            new InteractionMatrix(2, [0, 1, 0, 0]),
+            new ParticleSnapshot([10, 11, 12, 13, 14],
+                [default, new(0.65, 0), new(-0.65, 0), new(0.65, 0), new(-0.65, 0)],
+                [default, default, default, default, default], [0, 1, 1, 1, 1]),
+            0.001, new GeneratorMetadata("manual", "1", null, "alternating directed cancellation"), ForceBackend.UniformGrid);
+        PlaybackController controller = new(experiment, diagnosticEverySteps: 0);
+        controller.SingleStep();
+        Assert.Equal(ForceBackend.Direct, controller.LastExecution!.Value.ActualBackend);
+        Assert.Equal(GridFallbackReason.AccumulationRange, controller.LastExecution.Value.FallbackReason);
+        Assert.Equal(1, controller.DirectFallbackSteps);
+        Assert.Equal(1, controller.AccumulationFallbackSteps);
+        controller.Reset();
+        Assert.Null(controller.LastExecution);
+        Assert.Equal(0, controller.DirectFallbackSteps);
+        Assert.Equal(0, controller.AccumulationFallbackSteps);
+        controller.SingleStep();
+        Assert.Equal(1, controller.AccumulationFallbackSteps);
+        controller.ReplaceExperiment(PresetGenerator.Create(PresetKind.Random, 4, 1, backend: ForceBackend.UniformGrid));
+        Assert.Null(controller.LastExecution);
+        Assert.Equal(0, controller.DirectFallbackSteps);
+        Assert.Equal(0, controller.AccumulationFallbackSteps);
+        controller.SingleStep();
+        Assert.Equal(ForceBackend.UniformGrid, controller.LastExecution!.Value.ActualBackend);
+        Assert.Equal(0, controller.AccumulationFallbackSteps);
     }
 }

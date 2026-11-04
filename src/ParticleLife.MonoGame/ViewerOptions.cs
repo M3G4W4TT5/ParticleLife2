@@ -107,7 +107,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         New generated experiments use grid search. Loaded files honour their saved backend;
         schema-1 files use direct. --backend overrides startup and reload, and saves record
         that effective choice. Reset, resampling, matrix edits and presets retain it.
-        Grid uses direct fallback for finite states outside its reliable coordinate range.
+        Grid uses direct fallback outside its reliable coordinate or accumulation range.
 
         Space     Pause/resume                 N / Right   Exactly one step, then pause
         R         Restore saved initial state  I           Resample positions, zero velocity

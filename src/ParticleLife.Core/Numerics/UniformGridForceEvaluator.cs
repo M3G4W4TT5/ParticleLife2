@@ -10,9 +10,13 @@ namespace ParticleLife.Core.Numerics;
 /// Width is the next power of two at least as large as the cutoff; nine cells cover every neighbour.
 /// Negative and finite off-world positions, overlaps and unbounded cell occupancy are retained.</para>
 /// <para>If any scaled coordinate is non-finite or has magnitude at least 2^50 cell widths, the entire
-/// evaluation uses the direct reference search. Physical state is unchanged and the reason is reported
-/// in <see cref="LastExecution"/>. Pair mathematics, overlap policy and directed coefficients are identical
-/// to direct evaluation, including tiny/subnormal separations; accumulation order can differ.</para>
+/// evaluation uses the direct reference search. A non-finite grid-order force sum also retries the
+/// entire evaluation in direct storage order: extreme positive/negative forces can cancel in that
+/// order while overflowing in cell order. Direct failure still propagates without publishing metadata.
+/// Physical state is unchanged and the reason is reported in <see cref="LastExecution"/>. Pair mathematics,
+/// overlap policy and directed coefficients are identical to direct evaluation, including tiny/subnormal
+/// separations; finite accumulation can differ by roundoff. This fallback does not retry later integration
+/// failures or replace finite grid sums with reference sums near an integration overflow boundary.</para>
 /// <para>At stable population, expected cost is O(N + candidate pairs), with quadratic dense cases.
 /// After population shrink, clearing retained dictionary capacity adds O(retained capacity) work.
 /// Storage is O(established population capacity), independent of world extent. Construction and capacity growth allocate;
@@ -92,9 +96,7 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator
         DirectForceEvaluator.ValidateOutput(input, forces);
         if (!useGrid)
         {
-            ForceEvaluationStatistics fallback = direct.Evaluate(input, forces);
-            LastExecution = new(ForceBackend.UniformGrid, ForceBackend.Direct, GridFallbackReason.CoordinateRange, index.Statistics);
-            return fallback;
+            return EvaluateDirectFallback(input, forces, GridFallbackReason.CoordinateRange);
         }
 
         ReadOnlySpan<Vector2d> positions = input.Positions;
@@ -131,7 +133,7 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator
             totalForce += SoftWall.EvaluateValidated(positions[receiver], parameters);
             if (!totalForce.IsFinite)
             {
-                throw new ArithmeticException($"Force on particle {input.Ids[receiver]} is non-finite; reduce the force scale or state magnitude.");
+                return EvaluateDirectFallback(input, forces, GridFallbackReason.AccumulationRange);
             }
 
             forces[receiver] = totalForce;
@@ -139,5 +141,14 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator
 
         LastExecution = new(ForceBackend.UniformGrid, ForceBackend.UniformGrid, GridFallbackReason.None, index.Statistics);
         return new(candidatePairs, acceptedPairs, overlapPairs);
+    }
+
+    /// <summary>Overwrites every force using direct enumeration, publishing metadata only if the retry succeeds.</summary>
+    /// <remarks>Discard all partial grid counts and forces. No exception is caught, and successful fallback allocates nothing.</remarks>
+    private ForceEvaluationStatistics EvaluateDirectFallback(ParticleStateView input, Span<Vector2d> forces, GridFallbackReason reason)
+    {
+        ForceEvaluationStatistics statistics = direct.Evaluate(input, forces);
+        LastExecution = new(ForceBackend.UniformGrid, ForceBackend.Direct, reason, index.Statistics);
+        return statistics;
     }
 }

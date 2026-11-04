@@ -270,6 +270,77 @@ public sealed class UniformGridTests
     }
 
     [Fact]
+    public void FiniteDirectCancellationSurvivesGridOrderOverflowThroughReportedFallback()
+    {
+        ModelParameters parameters = new() { Cutoff = 1, ForceScale = 1e308, WallStrength = 0, DampingHalfLife = null };
+        InteractionMatrix matrix = new(2, [0, 1, 0, 0]);
+        ParticleSnapshot initial = new([10, 11, 12, 13, 14],
+            [default, new(0.65, 0), new(-0.65, 0), new(0.65, 0), new(-0.65, 0)],
+            new Vector2d[5], [0, 1, 1, 1, 1]);
+        DirectForceEvaluator direct = new(parameters, matrix);
+        UniformGridForceEvaluator grid = new(parameters, matrix);
+        Vector2d[] directForces = new Vector2d[5];
+        Vector2d[] gridForces = new Vector2d[5];
+        ForceEvaluationStatistics expected = direct.Evaluate(initial.Observe(), directForces);
+
+        // Direct visits alternating +/- F0 sources and cancels to zero. Cell order
+        // visits both negative sources first; each is near -1e308 and their sum overflows.
+        // Sources themselves feel zero: their directed coefficient to species 0 is zero,
+        // same-side sources coincide and opposite-side sources lie beyond the cutoff.
+        ForceEvaluationStatistics actual = grid.Evaluate(initial.Observe(), gridForces);
+        Assert.Equal(expected, actual);
+        Assert.All(directForces, force => Assert.Equal(default, force));
+        Assert.Equal(directForces, gridForces);
+        Assert.Equal(ForceBackend.UniformGrid, grid.LastExecution.RequestedBackend);
+        Assert.Equal(ForceBackend.Direct, grid.LastExecution.ActualBackend);
+        Assert.Equal(GridFallbackReason.AccumulationRange, grid.LastExecution.FallbackReason);
+
+        Simulation simulation = new(initial, parameters, matrix, 0.001, ForceBackend.UniformGrid);
+        simulation.Step();
+        Assert.Equal(initial.Positions.ToArray(), simulation.Observe().Positions.ToArray());
+        Assert.Equal(initial.Velocities.ToArray(), simulation.Observe().Velocities.ToArray());
+        Assert.Equal(GridFallbackReason.AccumulationRange, simulation.LastExecution!.Value.FallbackReason);
+        Assert.Equal(1, simulation.DirectFallbackSteps);
+
+        // The successful retry itself, not just the ordinary grid path, is allocation-free.
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 100; i++)
+        {
+            simulation.Step();
+        }
+
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(0, allocated);
+        Assert.Equal(101, simulation.DirectFallbackSteps);
+    }
+
+    [Fact]
+    public void GenuineOverflowStillFailsWithoutPublishingFallbackMetadata()
+    {
+        ModelParameters parameters = new() { Cutoff = 1, ForceScale = 1e308, WallStrength = 0, DampingHalfLife = null };
+        InteractionMatrix matrix = new(2, [0, 1, 0, 0]);
+        UniformGridForceEvaluator grid = new(parameters, matrix);
+        ParticleSnapshot good = new([10, 11, 12, 13, 14],
+            [default, new(0.65, 0), new(-0.65, 0), new(0.65, 0), new(-0.65, 0)],
+            new Vector2d[5], [0, 1, 1, 1, 1]);
+        grid.Evaluate(good.Observe(), new Vector2d[5]);
+        ForceExecution successful = grid.LastExecution;
+        ParticleSnapshot bad = new([10, 11, 12], [default, new(0.65, 0), new(0.65, 0)],
+            new Vector2d[3], [0, 1, 1]);
+
+        Assert.Throws<ArithmeticException>(() => new DirectForceEvaluator(parameters, matrix).Evaluate(bad.Observe(), new Vector2d[3]));
+        Assert.Throws<ArithmeticException>(() => grid.Evaluate(bad.Observe(), new Vector2d[3]));
+        Assert.Equal(successful, grid.LastExecution);
+
+        Simulation simulation = new(bad, parameters, matrix, 0.001, ForceBackend.UniformGrid);
+        Assert.Throws<ArithmeticException>(simulation.Step);
+        NumericalAssert.SameState(bad, simulation.CaptureSnapshot());
+        Assert.Null(simulation.LastExecution);
+        Assert.Equal(default, simulation.LastStatistics);
+        Assert.Equal(0, simulation.DirectFallbackSteps);
+    }
+
+    [Fact]
     public void FailedEvaluationRetainsPriorExecutionMetadataAndRejectsAliasing()
     {
         ModelParameters parameters = new() { WallStrength = double.MaxValue, ForceScale = 0 };

@@ -56,6 +56,8 @@ public sealed class CliParityTests(ITestOutputHelper output)
             Assert.Equal(search, execution.GetProperty("lastCompletedStep").GetProperty("actualNeighbourSearchVersion").GetString());
             Assert.Equal(JsonValueKind.Null, execution.GetProperty("backendOverride").ValueKind);
             Assert.Equal(0, execution.GetProperty("directFallbackSteps").GetInt64());
+            Assert.Equal(0, execution.GetProperty("directFallbackByReason").GetProperty("coordinateRangeSteps").GetInt64());
+            Assert.Equal(0, execution.GetProperty("directFallbackByReason").GetProperty("accumulationRangeSteps").GetInt64());
             Assert.Equal(controller.LastStatistics.CandidatePairs,
                 report.RootElement.GetProperty("lastForceEvaluation").GetProperty("candidatePairs").GetInt64());
             double maximumError = CompareByIdentity(final, controller.Observe());
@@ -145,6 +147,8 @@ public sealed class CliParityTests(ITestOutputHelper output)
             Assert.Equal("direct/1", execution.GetProperty("lastCompletedStep").GetProperty("actualNeighbourSearchVersion").GetString());
             Assert.Equal(overrideDirect ? "None" : "CoordinateRange", execution.GetProperty("lastCompletedStep").GetProperty("fallbackReason").GetString());
             Assert.Equal(overrideDirect ? 0 : 3, execution.GetProperty("directFallbackSteps").GetInt64());
+            Assert.Equal(overrideDirect ? 0 : 3, execution.GetProperty("directFallbackByReason").GetProperty("coordinateRangeSteps").GetInt64());
+            Assert.Equal(0, execution.GetProperty("directFallbackByReason").GetProperty("accumulationRangeSteps").GetInt64());
             Assert.Equal(1, report.RootElement.GetProperty("lastForceEvaluation").GetProperty("overlapPairs").GetInt64());
             Assert.Equal("uniform-grid/1", report.RootElement.GetProperty("experiment").GetProperty("neighbourSearchVersion").GetString());
         }
@@ -176,7 +180,49 @@ public sealed class CliParityTests(ITestOutputHelper output)
             Assert.Equal("uniform-grid/1", execution.GetProperty("lastCompletedStep").GetProperty("actualNeighbourSearchVersion").GetString());
             Assert.Equal("None", execution.GetProperty("lastCompletedStep").GetProperty("fallbackReason").GetString());
             Assert.Equal(1, execution.GetProperty("directFallbackSteps").GetInt64());
+            Assert.Equal(1, execution.GetProperty("directFallbackByReason").GetProperty("coordinateRangeSteps").GetInt64());
+            Assert.Equal(0, execution.GetProperty("directFallbackByReason").GetProperty("accumulationRangeSteps").GetInt64());
             Assert.Equal(-1e16, report.RootElement.GetProperty("finalState").GetProperty("positions")[0].GetProperty("x").GetDouble());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CliReportsAccumulationFallbackAndPreservesDirectNextState()
+    {
+        string repository = FindRepository();
+        string directory = Path.Combine(Path.GetTempPath(), $"particlelife-accumulation-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            ExperimentDefinition experiment = new("extreme-force-cancellation",
+                new ModelParameters { Cutoff = 1, ForceScale = 1e308, WallStrength = 0, DampingHalfLife = null },
+                new InteractionMatrix(2, [0, 1, 0, 0]),
+                new ParticleSnapshot([10, 11, 12, 13, 14],
+                    [default, new(0.65, 0), new(-0.65, 0), new(0.65, 0), new(-0.65, 0)],
+                    [default, default, default, default, default], [0, 1, 1, 1, 1]),
+                0.001, new GeneratorMetadata("manual", "1", null, "alternating directed cancellation"), ForceBackend.UniformGrid);
+            string input = Path.Combine(directory, "experiment.json");
+            string reportPath = Path.Combine(directory, "report.json");
+            ExperimentFile.Save(input, experiment);
+            await RunCli(repository, input, reportPath, 1, sampleEvery: 0);
+            using JsonDocument report = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath, TestContext.Current.CancellationToken));
+            JsonElement execution = report.RootElement.GetProperty("execution");
+            Assert.Equal("uniform-grid/1", execution.GetProperty("requestedNeighbourSearchVersion").GetString());
+            Assert.Equal("direct/1", execution.GetProperty("lastCompletedStep").GetProperty("actualNeighbourSearchVersion").GetString());
+            Assert.Equal("AccumulationRange", execution.GetProperty("lastCompletedStep").GetProperty("fallbackReason").GetString());
+            Assert.Equal(1, execution.GetProperty("directFallbackSteps").GetInt64());
+            Assert.Equal(0, execution.GetProperty("directFallbackByReason").GetProperty("coordinateRangeSteps").GetInt64());
+            Assert.Equal(1, execution.GetProperty("directFallbackByReason").GetProperty("accumulationRangeSteps").GetInt64());
+
+            Simulation direct = experiment.CreateSimulation(ForceBackend.Direct);
+            direct.Step();
+            Assert.Equal(0, CompareByIdentity(report.RootElement.GetProperty("finalState"), direct.Observe()));
+            Assert.Equal(direct.LastStatistics.CandidatePairs,
+                report.RootElement.GetProperty("lastForceEvaluation").GetProperty("candidatePairs").GetInt64());
         }
         finally
         {

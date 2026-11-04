@@ -45,6 +45,10 @@ public sealed class PlaybackController
     /// <summary>Gets successful grid-requested steps using direct fallback since reset or replacement.</summary>
     public long DirectFallbackSteps => simulation.DirectFallbackSteps;
 
+    /// <summary>Gets successful direct fallbacks caused by non-finite grid-order accumulation since reset or replacement.</summary>
+    /// <remarks>Subtract this count from <see cref="DirectFallbackSteps"/> to obtain coordinate-range fallbacks.</remarks>
+    public long AccumulationFallbackSteps => simulation.AccumulationFallbackSteps;
+
     /// <summary>Gets geometric counts from the last successful step's input, or zero after reset/replacement.</summary>
     public ForceEvaluationStatistics LastStatistics => simulation.LastStatistics;
 

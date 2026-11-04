@@ -6,7 +6,7 @@ public enum ForceBackend
     /// <summary>Enumerates every ordered non-self pair in storage order.</summary>
     Direct,
 
-    /// <summary>Enumerates local cells, with a direct fallback for coordinates outside reliable grid indexing.</summary>
+    /// <summary>Enumerates local cells, with direct fallback for coordinate range or non-finite force accumulation.</summary>
     UniformGrid
 }
 
@@ -17,7 +17,10 @@ public enum GridFallbackReason
     None,
 
     /// <summary>At least one position divided by the cell width lies outside the documented indexing range.</summary>
-    CoordinateRange
+    CoordinateRange,
+
+    /// <summary>A grid-order force sum was non-finite, requiring a retry in the reference storage order.</summary>
+    AccumulationRange
 }
 
 /// <summary>Describes reusable index storage after construction or a completed evaluation.</summary>

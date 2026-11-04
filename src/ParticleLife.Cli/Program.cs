@@ -140,6 +140,11 @@ internal static class CommandLine
                 requestedNeighbourSearchVersion = ExperimentFile.GetNeighbourSearchVersion(simulation.Backend),
                 backendOverride = backendOverride is ForceBackend selected ? ExperimentFile.GetNeighbourSearchVersion(selected) : null,
                 directFallbackSteps = simulation.DirectFallbackSteps,
+                directFallbackByReason = new
+                {
+                    coordinateRangeSteps = simulation.DirectFallbackSteps - simulation.AccumulationFallbackSteps,
+                    accumulationRangeSteps = simulation.AccumulationFallbackSteps
+                },
                 lastCompletedStep = simulation.LastExecution is ForceExecution execution ? new
                 {
                     actualNeighbourSearchVersion = ExperimentFile.GetNeighbourSearchVersion(execution.ActualBackend),
@@ -174,7 +179,9 @@ internal static class CommandLine
         string actual = simulation.LastExecution is ForceExecution last
             ? $"{ExperimentFile.GetNeighbourSearchVersion(last.ActualBackend)}; fallback reason: {last.FallbackReason}"
             : "none (zero completed steps)";
-        Console.WriteLine($"Search requested: {ExperimentFile.GetNeighbourSearchVersion(simulation.Backend)}; last actual: {actual}; direct fallback steps: {simulation.DirectFallbackSteps}.");
+        Console.WriteLine($"Search requested: {ExperimentFile.GetNeighbourSearchVersion(simulation.Backend)}; last actual: {actual}; " +
+            $"direct fallback steps: {simulation.DirectFallbackSteps} (coordinate range: {simulation.DirectFallbackSteps - simulation.AccumulationFallbackSteps}; " +
+            $"accumulation range: {simulation.AccumulationFallbackSteps}).");
         Console.WriteLine($"Model: {ExperimentFile.ModelVersion}; integrator: {ExperimentFile.IntegratorVersion}; runtime: {RuntimeInformation.FrameworkDescription}");
         if (samples.Count > 0)
         {
@@ -319,7 +326,7 @@ internal static class CommandLine
         JSON experiments contain actual initial state, directed matrix values, parameters and provenance.
         New CLI experiments default to grid search. Runs honour the saved backend unless overridden.
         Legacy schema-1 experiments retain direct search. Reports retain source and effective settings,
-        last actual search and the number of grid steps using the coordinate-range direct fallback.
+        last actual search and direct fallback counts for coordinate or accumulation range limits.
         Edit validated JSON parameters for other cutoffs, soft walls or disabled damping (null half-life).
         Output files must not already exist. Reports include the original experiment and final state;
         reports are not checkpoint inputs. Set --sample-every 0 to disable optional O(N^2) diagnostics.

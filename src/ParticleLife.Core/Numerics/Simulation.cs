@@ -70,12 +70,17 @@ public sealed class Simulation
     public ForceEvaluationStatistics LastStatistics { get; private set; }
 
     /// <summary>Gets actual search execution from the last successful step, or null after construction/reset.</summary>
-    /// <remarks>Grid coordinate-range fallback applies to an entire evaluation. Failed steps never publish its metadata.</remarks>
+    /// <remarks>Grid coordinate or accumulation fallback applies to an entire evaluation. Failed steps never publish its metadata.</remarks>
     public ForceExecution? LastExecution { get; private set; }
 
     /// <summary>Gets the number of completed grid-requested steps that used direct fallback since construction/reset.</summary>
     /// <remarks>This cumulative count reports fallback earlier in a run even when the latest step used the grid.</remarks>
     public long DirectFallbackSteps { get; private set; }
+
+    /// <summary>Gets completed direct-fallback steps caused by non-finite grid force accumulation since reset.</summary>
+    /// <remarks>Subtract this from <see cref="DirectFallbackSteps"/> to obtain coordinate-range fallback steps.
+    /// Counts publish only with a successful step; a direct retry can still fail without changing them.</remarks>
+    public long AccumulationFallbackSteps { get; private set; }
 
     /// <summary>Obtains a read-only view of completed state without allocating.</summary>
     /// <returns>A view valid only until the next step or reset, including stable identities and simulation time.</returns>
@@ -118,6 +123,7 @@ public sealed class Simulation
         LastStatistics = default;
         LastExecution = null;
         DirectFallbackSteps = 0;
+        AccumulationFallbackSteps = 0;
     }
 
     /// <summary>Advances one complete fixed timestep without managed allocation after index and buffer warm-up.</summary>
@@ -148,6 +154,10 @@ public sealed class Simulation
         if (Backend == ForceBackend.UniformGrid && evaluator.LastExecution.ActualBackend == ForceBackend.Direct)
         {
             DirectFallbackSteps++;
+            if (evaluator.LastExecution.FallbackReason == GridFallbackReason.AccumulationRange)
+            {
+                AccumulationFallbackSteps++;
+            }
         }
     }
 }

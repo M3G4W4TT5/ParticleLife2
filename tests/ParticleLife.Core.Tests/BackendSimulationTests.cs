@@ -120,6 +120,39 @@ public sealed class BackendSimulationTests
     }
 
     [Fact]
+    public void AccumulationFallbackPublishesOnlyWithACompletedStepAndResetsItsCount()
+    {
+        long[] ids = [1, 2, 3, 4, 5];
+        Vector2d[] positions = [default, new(0.65, 0), new(-0.65, 0), new(0.65, 0), new(-0.65, 0)];
+        int[] species = [0, 1, 1, 1, 1];
+        ModelParameters parameters = new() { Cutoff = 1, ForceScale = 1e308, WallStrength = 0, DampingHalfLife = null };
+        InteractionMatrix matrix = new(2, [0, 1, 0, 0]);
+        ParticleSnapshot failing = new(ids, positions, [default, new(1e308, 0), default, default, default], species);
+        Simulation grid = new(failing, parameters, matrix, 2, ForceBackend.UniformGrid);
+        // Direct storage order cancels finite terms; cell order overflows and retries
+        // direct. The later integration failure must still publish no fallback metadata.
+        Assert.Throws<ArithmeticException>(grid.Step);
+        Assert.Null(grid.LastExecution);
+        Assert.Equal(0, grid.DirectFallbackSteps);
+        Assert.Equal(0, grid.AccumulationFallbackSteps);
+        Assert.Equal(failing.Positions.ToArray(), grid.Observe().Positions.ToArray());
+
+        ParticleSnapshot stationary = new(ids, positions, new Vector2d[5], species);
+        grid.Reset(stationary);
+        Simulation direct = new(stationary, parameters, matrix, 2);
+        direct.Step();
+        grid.Step();
+        NumericalAssert.SameState(direct.CaptureSnapshot(), grid.CaptureSnapshot());
+        Assert.Equal(GridFallbackReason.AccumulationRange, grid.LastExecution!.Value.FallbackReason);
+        Assert.Equal(1, grid.DirectFallbackSteps);
+        Assert.Equal(1, grid.AccumulationFallbackSteps);
+        grid.Reset(stationary);
+        Assert.Equal(0, grid.AccumulationFallbackSteps);
+        Assert.Equal(0, grid.DirectFallbackSteps);
+        Assert.Null(grid.LastExecution);
+    }
+
+    [Fact]
     public void ResetGrowthShrinkAndEmptyReplacementNeverRetainOldNeighbours()
     {
         ExperimentDefinition experiment = PresetGenerator.Create(PresetKind.Random, 257, 3, 618);

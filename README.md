@@ -45,7 +45,7 @@ Click **HELP** for clickable controls, or click the playback badge to pause and 
 
 Resampling, matrix changes and preset selection restart at time and step zero, preserve the timestep, and record new seeds and actual generated values. Reset restores those saved values without generating anything. Saving preserves the initial experiment for CLI replay; it does not save the evolved state as a checkpoint, and existing files are never overwritten. Invalid reloads retain the current valid experiment and pause playback.
 
-Playback uses the experiment's fixed timestep, with at most eight steps per frame. Excess playback time is dropped and shown in the display rather than increasing the timestep. Diagnostics are sampled every 144 completed steps by default and show their measurement time. Dense interactions and diagnostics remain quadratic; large populations can be slow even for a single step. Grid search falls back to direct evaluation at extreme coordinate scales and reports that fallback.
+Playback uses the experiment's fixed timestep, with at most eight steps per frame. Excess playback time is dropped and shown in the display rather than increasing the timestep. Diagnostics are sampled every 144 completed steps by default and show their measurement time. Dense interactions and diagnostics remain quadratic; large populations can be slow even for a single step. Grid search falls back to direct evaluation at extreme coordinate or force-accumulation scales and reports that fallback.
 
 ## Run without graphics
 
