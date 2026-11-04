@@ -168,6 +168,12 @@
       },
       "particlelife.core": {
         "type": "Project"
+      },
+      "particlelife.viewer": {
+        "type": "Project",
+        "dependencies": {
+          "ParticleLife.Core": "[1.0.0, )"
+        }
       }
     }
   }

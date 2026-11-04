@@ -3,6 +3,17 @@ using ParticleLife.Benchmarks;
 
 try
 {
+    if (args.Length > 0 && args[0] == "editor")
+    {
+        if (args.Length is < 3 or > 4)
+        {
+            throw new ArgumentException("Use editor output-directory input-experiment.json [samples].");
+        }
+
+        EditorRunner.Run(args[1], args[2], args.Length > 3 ? int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture) : 101);
+        return 0;
+    }
+
     if (args.Length > 0 && args[0] == "profile-m41")
     {
         if (args.Length != 3)
@@ -86,6 +97,7 @@ try
     }
 
     Console.WriteLine("Particle Life CPU benchmarks (run Release without a debugger)");
+    Console.WriteLine("  editor output-directory input-experiment.json [samples >= 20]");
     Console.WriteLine("  prepare-m41 [input-directory] [retained-M4-directory]");
     Console.WriteLine("  profile-m41 input-experiment.json output-profile.json");
     Console.WriteLine("  compare-m41 output-directory input-directory all|static|cutoff|evolved|representative|case|file [samples] [repetitions] [evolving-steps]");
