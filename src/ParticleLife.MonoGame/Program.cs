@@ -1,5 +1,4 @@
 using System.Globalization;
-using ParticleLife.Core.Experiments;
 using ParticleLife.MonoGame;
 
 try
@@ -11,31 +10,28 @@ try
     }
 
     ViewerOptions options = ViewerOptions.Parse(args);
-    ExperimentDefinition? experiment = null;
-    string message = "Live experiment editor | Expand a section to explore | S opens save/load library";
-    bool paused = options.Paused;
-    if (options.InputPath is not null)
+    ViewerStartup startup = ViewerStartup.Create(options);
+    if (startup.Message.StartsWith("Load failed:", StringComparison.Ordinal))
     {
-        try
-        {
-            experiment = options.ApplyBackend(ExperimentFile.Load(options.InputPath));
-            message = $"Loaded {options.InputPath}";
-        }
-        catch (Exception error) when (ViewerErrors.IsExpected(error))
-        {
-            message = $"Load failed: {error.Message} Default experiment retained; paused.";
-            Console.Error.WriteLine(message);
-            paused = true;
-        }
+        Console.Error.WriteLine(startup.Message);
     }
-
-    // A loaded experiment supersedes generation options, including their allocation cost.
-    experiment ??= options.CreateDefaultExperiment();
 
     // Formatting is presentation-only. Experiment JSON keeps full round-trip precision.
     CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
-    using ParticleLifeGame game = new(experiment, options, paused, message);
-    game.Run();
+    ParticleLifeGame game;
+    try
+    {
+        game = new ParticleLifeGame(startup.Editor, options, startup.Message);
+    }
+    catch
+    {
+        startup.Editor.Playback.Dispose();
+        throw;
+    }
+    using (game)
+    {
+        game.Run();
+    }
     return 0;
 }
 catch (Exception error) when (ViewerErrors.IsExpected(error))

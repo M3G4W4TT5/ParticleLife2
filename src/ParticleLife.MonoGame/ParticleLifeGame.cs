@@ -44,13 +44,12 @@ internal sealed class ParticleLifeGame : Game
     private float uiScale = 1;
     private Rectangle worldBounds, graphBounds, editorBounds, modalBounds;
 
-    internal ParticleLifeGame(ExperimentDefinition experiment, ViewerOptions options, bool paused, string message)
+    internal ParticleLifeGame(ExperimentEditor editor, ViewerOptions options, string message)
     {
         this.options = options;
         this.message = message;
-        controller = new PlaybackController(experiment, diagnosticEverySteps: options.SampleEvery);
-        controller.SetPaused(paused);
-        editor = new ExperimentEditor(controller);
+        this.editor = editor;
+        controller = editor.Playback;
         surface = new LiveExperimentEditor(editor, options.SaveDirectory, SetMessage, PrintTimings);
         graphics = new GraphicsDeviceManager(this)
         {
@@ -273,10 +272,10 @@ internal sealed class ParticleLifeGame : Game
                 }
                 else
                 {
-                    surface.ReloadExperiment(options.InputPath, options.BackendOverride, options.WorkerOverride);
+                    surface.ReloadExperiment(options.InputPath, options.BackendOverride, options.WorkerOverride, options.SampleEveryOverride);
                 }
                 return true;
-            case Keys.D: controller.DiagnosticEverySteps = controller.DiagnosticEverySteps == 0 ? Math.Max(1, options.SampleEvery) : 0; return false;
+            case Keys.D: surface.ToggleDiagnostics(); return false;
             case Keys.H:
             case Keys.F1: editor.SetAppearance(editor.Appearance with { ShowHelp = !editor.Appearance.ShowHelp }); return false;
             case Keys.F9: return false;

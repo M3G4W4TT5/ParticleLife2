@@ -7,7 +7,8 @@ namespace ParticleLife.MonoGame;
 
 /// <summary>Parses presentation startup options before any native graphics resource is created.</summary>
 internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Species, int Seed,
-    bool Paused, int SampleEvery, string SaveDirectory, string? InputPath, ForceBackend? BackendOverride, int? WorkerOverride = null)
+    bool Paused, int SampleEvery, string SaveDirectory, string? InputPath, ForceBackend? BackendOverride, int? WorkerOverride = null,
+    int? SampleEveryOverride = null)
 {
     internal static ViewerOptions Parse(string[] args)
     {
@@ -87,13 +88,9 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
             ForceWorkerConfiguration.Validate(backendOverride ?? ForceBackend.UniformGrid, workers);
         }
         return new ViewerOptions(preset, particles, species, seed, paused, sampleEvery,
-            Path.GetFullPath(saveDirectory), input, backendOverride, workerOverride);
+            Path.GetFullPath(saveDirectory), input, backendOverride, workerOverride,
+            seen.Contains("--sample-every") ? sampleEvery : null);
     }
-
-    /// <summary>Applies only an explicit startup override; loaded experiments otherwise retain their saved search.</summary>
-    internal ExperimentDefinition ApplyBackend(ExperimentDefinition experiment) =>
-        BackendOverride is not null || WorkerOverride is not null
-            ? experiment.WithBackend(BackendOverride ?? experiment.Backend, WorkerOverride) : experiment;
 
     /// <summary>Generates fallback/default values only when no saved experiment was loaded.</summary>
     internal ExperimentDefinition CreateDefaultExperiment() =>
@@ -142,6 +139,8 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         a valid paused fallback. Reports are not inputs. Saved solver choices are honoured unless
         an explicit startup/reload --backend or --workers override is supplied. Direct needs one
         worker; grid accepts 1..8 and falls back to direct when required by numerical range.
+        Matching .viewer.json companions restore appearance, generation and playback choices at
+        startup and on F5 reload. Only an explicit --sample-every overrides their saved cadence.
         World display uses one isotropic scale. Appearance does not affect trajectories.
         Units are reduced model units; interactions are phenomenological, not molecular validation.
         Numerical dt is separate from wall-clock playback speed. Catch-up limits drop excess

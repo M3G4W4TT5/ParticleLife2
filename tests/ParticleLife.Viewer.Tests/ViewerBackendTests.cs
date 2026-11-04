@@ -7,8 +7,10 @@ using ParticleLife.Viewer;
 
 namespace ParticleLife.Viewer.Tests;
 
-public sealed class ViewerBackendTests
+public sealed class ViewerBackendTests : IDisposable
 {
+    private readonly string directory = Path.Combine(Path.GetTempPath(), "particle-life-backend-" + Guid.NewGuid().ToString("N"));
+
     [Fact]
     public void WorkerSelectionSurvivesEditingSavingReplacementAndReset()
     {
@@ -30,7 +32,11 @@ public sealed class ViewerBackendTests
         }
 
         ViewerOptions explicitDirect = ViewerOptions.Parse(["--backend", "direct"]);
-        Assert.Equal(1, explicitDirect.ApplyBackend(initial).WorkerCount);
+        ExperimentEditor loaded = ExperimentEditor.CreateFromFile(SaveFixture(initial), explicitDirect.BackendOverride,
+            explicitDirect.WorkerOverride);
+        using PlaybackController loadedController = loaded.Playback;
+        Assert.Equal(ForceBackend.Direct, loaded.Configuration.Backend);
+        Assert.Equal(1, loaded.Configuration.WorkerCount);
         Assert.Throws<ArgumentOutOfRangeException>(() => ViewerOptions.Parse(["--backend", "direct", "--workers", "4"]));
         Assert.Throws<ArgumentOutOfRangeException>(() => ViewerOptions.Parse(["--workers", "9"]));
     }
@@ -41,9 +47,13 @@ public sealed class ViewerBackendTests
         ViewerOptions options = ViewerOptions.Parse(["--particles", "8", "--species", "2"]);
         Assert.Null(options.BackendOverride);
         Assert.Equal(ForceBackend.UniformGrid, options.CreateDefaultExperiment().Backend);
-        ExperimentDefinition saved = ExperimentFile.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "two-species.json"));
+        string path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "two-species.json");
+        ExperimentDefinition saved = ExperimentFile.Load(path);
         Assert.Equal(ForceBackend.Direct, saved.Backend);
-        Assert.Same(saved, options.ApplyBackend(saved));
+        ExperimentEditor loaded = ExperimentEditor.CreateFromFile(path, options.BackendOverride, options.WorkerOverride);
+        using PlaybackController controller = loaded.Playback;
+        Assert.Equal(ForceBackend.Direct, controller.Configuration.Backend);
+        PlaybackControllerTests.SameState(saved.InitialState, controller.Observe());
     }
 
     [Theory]
@@ -53,15 +63,20 @@ public sealed class ViewerBackendTests
     {
         ViewerOptions options = ViewerOptions.Parse(["--backend", option, "--particles", "8", "--species", "2"]);
         ExperimentDefinition saved = PresetGenerator.Create(PresetKind.Random, 7, 3, backend: ForceBackend.UniformGrid);
-        ExperimentDefinition effective = options.ApplyBackend(saved);
+        string path = SaveFixture(saved);
+        ExperimentEditor loaded = ExperimentEditor.CreateFromFile(path, options.BackendOverride, options.WorkerOverride);
+        using PlaybackController controller = loaded.Playback;
+        ExperimentDefinition effective = controller.Experiment;
         Assert.Equal(backend, effective.Backend);
-        Assert.Same(saved.InitialState, effective.InitialState);
+        PlaybackControllerTests.SameState(saved.InitialState, controller.Observe());
         Assert.Equal(backend, options.CreateDefaultExperiment().Backend);
-        Assert.Equal(backend, options.ApplyBackend(ExperimentFile.Deserialize(ExperimentFile.Serialize(saved))).Backend);
         Assert.Equal(backend, ExperimentFile.Deserialize(ExperimentFile.Serialize(effective)).Backend);
-        PlaybackController controller = new(effective, diagnosticEverySteps: 0);
         controller.SingleStep();
         Assert.Equal(backend, controller.LastExecution!.Value.ActualBackend);
+        loaded.LoadExperiment(path, options.BackendOverride, options.WorkerOverride);
+        Assert.Equal(backend, controller.Configuration.Backend);
+        Assert.True(controller.IsPaused);
+        PlaybackControllerTests.SameState(saved.InitialState, controller.Observe());
     }
 
     [Theory]
@@ -193,5 +208,21 @@ public sealed class ViewerBackendTests
         controller.SingleStep();
         Assert.Equal(ForceBackend.UniformGrid, controller.LastExecution!.Value.ActualBackend);
         Assert.Equal(0, controller.AccumulationFallbackSteps);
+    }
+
+    private string SaveFixture(ExperimentDefinition experiment)
+    {
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".json");
+        ExperimentFile.Save(path, experiment);
+        return path;
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 }

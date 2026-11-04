@@ -162,6 +162,7 @@ selector.Press(new Point(454, 45));
 selector.Release();
 Require(selectedSpecies == 0 && selector.SliderFraction == 0, "A one-species selector produced an invalid index or undefined thumb fraction.");
 Console.WriteLine("Native widget integration: exact draft validation, live slider/replay/undo and directed matrix navigation passed without graphics.");
+StartupChecks.Run();
 
 static void Require(bool condition, string message)
 {

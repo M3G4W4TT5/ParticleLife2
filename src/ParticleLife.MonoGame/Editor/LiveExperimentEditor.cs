@@ -280,16 +280,10 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(Number("MAX STEPS / FRAME", () => editor.Playback.MaxStepsPerFrame,
             value => editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with { MaxStepsPerFrame = Integer(value) }), 8, 1, 32,
             "Positive catch-up cap. Remaining whole-step playback time is dropped and displayed. It does not bound the cost of one numerical step.", integer: true));
-        simulation.Children.Add(new UiToggle("SAMPLED DIAGNOSTICS ENABLED", () => editor.Playback.DiagnosticEverySteps > 0, value =>
-        {
-            if (editor.Playback.DiagnosticEverySteps > 0)
-            {
-                rememberedCadence = editor.Playback.DiagnosticEverySteps;
-            }
-            editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with { DiagnosticEverySteps = value ? rememberedCadence : 0 });
-        }, "Independent measurements after completed steps. Turning them off changes no numerical force or trajectory."));
+        simulation.Children.Add(new UiToggle("SAMPLED DIAGNOSTICS ENABLED", () => editor.Playback.DiagnosticEverySteps > 0,
+            SetDiagnosticsEnabled, "Independent measurements after completed steps. Turning them off changes no numerical force or trajectory."));
         simulation.Children.Add(Number("DIAGNOSTIC CADENCE", () => editor.Playback.DiagnosticEverySteps,
-            value => editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with { DiagnosticEverySteps = Integer(value) }), 144, 0, 1440,
+            value => SetDiagnosticCadence(Integer(value)), 144, 0, 1440,
             "Nonnegative completed-step cadence. Zero disables samples. Editing clears stale measurements; wall-clock frame rate is irrelevant.", integer: true));
         simulation.Children.Add(new UiToggle("CONNECTIVITY FOLLOWS CUTOFF", () => editor.Playback.DiagnosticRadius is null,
             value => editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with { DiagnosticRadius = value ? null : Parameters.Cutoff }),
@@ -546,9 +540,9 @@ internal sealed class LiveExperimentEditor
         report("Reset experiment: exact baseline state and rules restored at time/step zero; fresh replay timeline.");
     }
 
-    internal void ReloadExperiment(string path, ForceBackend? backendOverride, int? workerOverride)
+    internal void ReloadExperiment(string path, ForceBackend? backendOverride, int? workerOverride, int? diagnosticEveryStepsOverride = null)
     {
-        editor.LoadExperiment(path, backendOverride, workerOverride);
+        editor.LoadExperiment(path, backendOverride, workerOverride, diagnosticEveryStepsOverride);
         ClearDrafts();
         SuppressPlayback = true;
         report(backendOverride is not null || workerOverride is not null
@@ -560,6 +554,28 @@ internal sealed class LiveExperimentEditor
     {
         editor.ApplyMatrixTemplate(kind, editor.Generation.Seed);
         report($"{kind} matrix applied live. Particles, velocities, time and completed steps retained.");
+    }
+
+    /// <summary>Uses the same undoable diagnostic operation for the shortcut and the native toggle.</summary>
+    internal void ToggleDiagnostics() => SetDiagnosticsEnabled(editor.Playback.DiagnosticEverySteps == 0);
+
+    private void SetDiagnosticsEnabled(bool enabled)
+    {
+        SetDiagnosticCadence(enabled ? rememberedCadence : 0);
+    }
+
+    /// <summary>Applies a typed or toggled cadence through history, retaining the last positive value.</summary>
+    internal void SetDiagnosticCadence(int cadence)
+    {
+        int previous = editor.Playback.DiagnosticEverySteps;
+        editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with
+        {
+            DiagnosticEverySteps = cadence
+        });
+        if (cadence > 0 || previous > 0)
+        {
+            rememberedCadence = cadence > 0 ? cadence : previous;
+        }
     }
 
     internal void RandomizeMatrix()

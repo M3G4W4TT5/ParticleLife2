@@ -31,7 +31,7 @@ One slider gesture is one undo action. Undoing a parameter change restores its p
 
 Population undo preserves current motion for surviving identities, restores removed identities with their saved removal-boundary motion, and removes additions. Explicit resample undo restores saved coordinates and velocities at the current clock. Redo uses stored actual values, never a regenerated seed. These structural operations can allocate memory; ordinary settled simulation steps retain reusable buffers.
 
-**Reset experiment** restores the defined baseline state and configuration at time/step zero, clears undo/redo, and starts a fresh replay timeline. Live edits and saving do not change that baseline. Loading an experiment or explicitly creating a new one establishes a new baseline. Presentation and future generation settings remain separate from baseline physics.
+**Reset experiment** restores the defined baseline state and configuration at time/step zero, clears undo/redo, and starts a fresh replay timeline. Live edits and saving do not change that baseline. Loading an experiment or explicitly creating a new one establishes a new baseline. Reset retains presentation, playback and placement/velocity settings, but restores the population recipe to the baseline's actual species counts.
 
 ## Save and load in the app
 
@@ -45,6 +45,8 @@ Open **Files** (or press **S** with world focus). The folder defaults to `artifa
 | Save session | `name.session.json` | Exact baseline, every applied trajectory-affecting event, actual structural payloads and the terminal completed-step boundary. |
 
 Saving never changes the completed state or clock. Experiments and sessions also receive a `.viewer.json` companion for presentation, playback and future generation settings. Keep companions with their matching files to restore those choices; the scientific file alone still runs headlessly. A mismatched or malformed companion is rejected by the viewer. Presets include their own viewer settings.
+
+A startup experiment path and **F5** reload restore the same companion settings as **Load experiment**. Explicit startup `--backend`, `--workers` and `--sample-every` options override the corresponding saved choices on startup and F5 reload. Without an explicit cadence option, the saved diagnostic cadence is retained. Startup runs unless `--paused` is supplied; in-app loading and F5 reload finish paused. An invalid startup file or companion leaves a generated fallback paused.
 
 Select a JSON file in the list, then choose its intended action:
 

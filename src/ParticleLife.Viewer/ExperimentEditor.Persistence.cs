@@ -54,28 +54,75 @@ public sealed partial class ExperimentEditor
     public void SaveSession(string path, string name) =>
         SaveScientific(path, SessionFile.Serialize(CaptureSession(name)), CaptureViewerSettings(populations));
 
+    /// <summary>Creates an editor from a complete experiment and its optional validated viewer companion.</summary>
+    /// <param name="path">Existing legacy/current experiment file.</param>
+    /// <param name="backendOverride">Optional explicit execution override included in the reset baseline.</param>
+    /// <param name="workerCountOverride">Optional explicit worker override; a changed backend otherwise uses one worker.</param>
+    /// <param name="diagnosticEveryStepsOverride">Optional nonnegative cadence overriding the saved viewer setting.</param>
+    /// <returns>An editor paused at the saved initial state, with no undo history.</returns>
+    /// <remarks>The caller owns the returned editor's <see cref="Playback"/> and must dispose it.
+    /// Parsing and companion validation precede controller construction; setup failure disposes any
+    /// newly created controller. No generated fallback population is needed for a valid saved file.</remarks>
+    public static ExperimentEditor CreateFromFile(string path, ForceBackend? backendOverride = null,
+        int? workerCountOverride = null, int? diagnosticEveryStepsOverride = null)
+    {
+        (ExperimentDefinition experiment, ViewerSettings? settings) = PrepareExperiment(path, backendOverride,
+            workerCountOverride, diagnosticEveryStepsOverride);
+        PlaybackController playback = new(experiment);
+        try
+        {
+            ExperimentEditor editor = new(playback);
+            editor.PublishLoadedSettings(experiment, settings, diagnosticEveryStepsOverride);
+            playback.SetPaused(true);
+            return editor;
+        }
+        catch
+        {
+            playback.Dispose();
+            throw;
+        }
+    }
+
     /// <summary>Loads a complete experiment paused, establishing a new exact reset baseline.</summary>
     /// <param name="path">Existing legacy/current experiment, optionally with a validated viewer companion.</param>
     /// <param name="backendOverride">Optional explicit execution override included in the new effective reset baseline.</param>
     /// <param name="workerCountOverride">Optional explicit worker override; a changed backend without this value uses one worker.</param>
+    /// <param name="diagnosticEveryStepsOverride">Optional nonnegative cadence overriding the saved viewer setting.</param>
     /// <remarks>Parsing, sidecar validation and replacement construction finish before publication. Any
     /// failure retains the old state, clock, baseline and histories. Reports/presets/sessions are rejected.</remarks>
-    public void LoadExperiment(string path, ForceBackend? backendOverride = null, int? workerCountOverride = null)
+    public void LoadExperiment(string path, ForceBackend? backendOverride = null, int? workerCountOverride = null,
+        int? diagnosticEveryStepsOverride = null)
     {
         EnsureNotReplaying();
+        (ExperimentDefinition experiment, ViewerSettings? settings) = PrepareExperiment(path, backendOverride,
+            workerCountOverride, diagnosticEveryStepsOverride);
+        Playback.ReplaceExperiment(experiment);
+        Playback.SetPaused(true);
+        ClearTimeline();
+        PublishLoadedSettings(experiment, settings, diagnosticEveryStepsOverride);
+    }
+
+    private static (ExperimentDefinition Experiment, ViewerSettings? Settings) PrepareExperiment(string path,
+        ForceBackend? backendOverride, int? workerCountOverride, int? diagnosticEveryStepsOverride)
+    {
+        if (diagnosticEveryStepsOverride is int cadence)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(cadence);
+        }
         string content = File.ReadAllText(path);
         ExperimentDefinition experiment = ExperimentFile.Deserialize(content);
-        SimulationConfiguration configuration = new(experiment.Parameters, experiment.Matrix, experiment.TimeStep,
-            experiment.Backend, experiment.WorkerCount);
-        ViewerSettings? settings = LoadViewerSettings(path, content, configuration.Matrix.SpeciesCount);
+        ViewerSettings? settings = LoadViewerSettings(path, content, experiment.Matrix.SpeciesCount);
         if (backendOverride is not null || workerCountOverride is not null)
         {
             experiment = experiment.WithBackend(backendOverride ?? experiment.Backend, workerCountOverride);
         }
 
-        Playback.ReplaceExperiment(experiment);
-        Playback.SetPaused(true);
-        ClearTimeline();
+        return (experiment, settings);
+    }
+
+    private void PublishLoadedSettings(ExperimentDefinition experiment, ViewerSettings? settings,
+        int? diagnosticEveryStepsOverride)
+    {
         if (settings is not null)
         {
             PublishViewerSettings(settings);
@@ -83,6 +130,10 @@ public sealed partial class ExperimentEditor
         else
         {
             Generation = new GenerationSettings { Seed = experiment.Generator.Seed ?? 1 };
+        }
+        if (diagnosticEveryStepsOverride is int cadence)
+        {
+            Playback.DiagnosticEverySteps = cadence;
         }
     }
 
