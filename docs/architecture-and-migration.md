@@ -2,7 +2,7 @@
 
 Particle Life 2 will modernize the original two-dimensional Particle Life simulation around an engine-independent C# core. The first release should make its behaviour reproducible, its equations explicit, and its performance measurable while retaining the attraction matrices and emergent patterns that motivated the project.
 
-This is the implementation plan as of 4 November 2026. Its project layout, numerical defaults and milestone gates are proposed decisions for the first implementation. The repository currently contains planning and development conventions; application implementation has not started.
+This is the implementation plan as of 4 November 2026. M1 and M2 are implemented: a validated experiment format, tested serial simulation, headless CLI and reference measurements. The numerical conventions below are the implemented baseline. M3–M5 remain planned.
 
 ## Scope and priorities
 
@@ -34,7 +34,7 @@ Within the core, responsibilities are separated by namespace and ownership befor
 | Numerics | Neighbour discovery, force evaluation, integration and work buffers | Experiment selection or scientific interpretation |
 | Experiments | Initial conditions, seeds, parameter sets, measurements and run metadata | Interactive UI or graphics resources |
 
-The proposed layout is:
+The layout is:
 
 ```text
 src/
@@ -44,22 +44,23 @@ src/
     Numerics/
     Experiments/
   ParticleLife.Cli/
-  ParticleLife.MonoGame/
+  ParticleLife.MonoGame/             # M3, not created yet
 tests/
   ParticleLife.Core.Tests/
+  ParticleLife.MonoGame.Compatibility/
 benchmarks/
   ParticleLife.Benchmarks/
 examples/
   experiments/
 ```
 
-These directories are created as their milestones begin. Use .NET 10 LTS as the proposed first runtime baseline, then pin a supported SDK and compatible MonoGame package versions during the initial build check. Microsoft's [support policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core) identifies .NET 10 as an LTS release. Future Unity runtime compatibility and acceleration will be assessed separately; engine-independent source does not imply that every .NET assembly can be used unchanged in Unity.
+These directories are created as their milestones begin. The verified baseline is .NET 10 LTS, SDK 10.0.302 pinned in `global.json`, and MonoGame DesktopGL 3.8.6 pinned in the compatibility project. A minimal `Game` subclass builds and managed core/MonoGame value conversion runs without a window; native graphics initialization is not yet tested. Microsoft's [support policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core) identifies .NET 10 as an LTS release, and the [MonoGame package](https://www.nuget.org/packages/MonoGame.Framework.DesktopGL/3.8.6) supports .NET 8 and later. Future Unity runtime compatibility and acceleration will be assessed separately; engine-independent source does not imply that every .NET assembly can be used unchanged in Unity.
 
 ### Particle state and ownership
 
 Keep separate contiguous arrays for positions, velocities and species identifiers. A particle is an identity and a set of state values, rather than an independently updating object. A species identifier selects model parameters; the viewer maps that identifier to a palette.
 
-The proposed first numerical implementation uses double precision for coordinates, velocities and force accumulation, with a small, documented two-component value type. This gives one straightforward reference path. Single precision, SIMD or another representation can be evaluated later against measured cost and numerical error. Do not build a generic float/double framework in the first version.
+The first numerical implementation uses double precision for coordinates, velocities and force accumulation, with a small, documented two-component value type. This gives one straightforward reference path. Single precision, SIMD or another representation can be evaluated later against measured cost and numerical error. Do not build a generic float/double framework in the first version.
 
 The simulation owns its arrays and preallocated working buffers. Observers receive read-only views valid until the next step or reset. Persistent snapshots are explicit copies made outside the stepping loop. The initial viewer and solver run sequentially; reading a buffer concurrently while it is being written is outside the contract.
 
@@ -95,7 +96,7 @@ The matrix is directed. Do not assume `A[i,j] = A[j,i]`, and do not replace two 
 
 Use reduced units, with a reference length, time and unit particle mass stated in the model's XML remarks. Initial defaults map from the original configuration as follows:
 
-| Parameter | Proposed initial value or mapping |
+| Parameter | Initial value or mapping |
 | --- | --- |
 | World | Square `[0, 1] x [0, 1]`, independent of display resolution |
 | Population and species | 500 particles and seven species as the initial preset, with configurable counts |
@@ -110,17 +111,19 @@ The wall mapping preserves the old velocity kick at its original reference times
 
 The initial soft wall uses the existing linear inward response within its boundary layer, added to the force buffer. It is a confining interaction, not an impenetrable wall. The spatial index must handle finite positions outside the nominal world; it must not drop escaped particles. Reflecting and periodic boundaries can be introduced as separate documented choices later. Periodic support would require consistent wrapping, pair displacement and neighbour lookup together.
 
+For each coordinate `x`, extent `L`, layer width `w` and strength `S`, the implemented wall force is `S * (1 - x/w)` below `w`, `-S * (1 - (L-x)/w)` when `L-x < w`, and zero elsewhere. It continues linearly off-world. Valid widths satisfy `0 < w <= min(width,height)/2`, keeping opposing layers separate. World dimensions, timestep and cutoff are finite and positive; the squared cutoff must also be finite and positive. Force scales are finite and nonnegative; zero disables the corresponding term. A null damping half-life disables damping; otherwise it must be finite and positive. Extreme state magnitudes that overflow intermediate arithmetic fail explicitly without publishing a partial step.
+
 For exactly coincident particles, the initial radial model returns zero pair contribution because no direction is defined, and records an overlap count. Keep both particles. This is an explicit degenerate-case policy, not a physical collision resolution. Non-finite state or invalid parameters should produce a clear diagnostic, not silent deletion, force saturation or random separation.
 
 ### A consistent numerical step
 
-1. Read the current state and build the neighbour index from those positions.
+1. Read the current state. The direct M2 solver enumerates all ordered pairs without an index; M4 will build an index from those positions.
 2. Clear a reusable force buffer and evaluate all pair and wall forces from that same state.
 3. Advance every particle into output buffers using the documented integration rule.
 4. Swap completed buffers, advance simulation time, and expose the result.
 5. Sample requested diagnostics at their configured cadence.
 
-The proposed first integrator retains a simple damped semi-implicit Euler form:
+The first integrator retains a simple damped semi-implicit Euler form:
 
 ```text
 damping = 2 ^ (-dt / halfLife)
@@ -214,6 +217,10 @@ Use combined absolute and relative tolerances with a documented scale and reason
 
 An experiment stores a schema/model version, parameters, matrix, initial positions/velocities/species, seed, generator identity, timestep, boundaries and solver settings. A checkpoint additionally stores current time/state and any evolving RNG state when randomness enters the dynamics. Record runtime and numerical backend. A seed alone does not promise identical results across runtimes or future parallel implementations.
 
+Schema 1 uses JSON and persists every initial value, stable identity and directed matrix entry in row-major receiver/source order. The only accepted conventions are `particle-life/1`, `direct-damped-semi-implicit-euler/1`, `reduced-l0-t0-m0` and `soft-wall`. Unknown/duplicate fields, missing required values, unsupported versions and invalid state fail on load. Experiments start at time and step zero; the CLI's separately versioned run reports embed the original experiment and final state, but are not checkpoint inputs. There is no RNG in the dynamics. Random generation uses explicitly seeded `System.Random` with generator version and runtime recorded; actual saved values take precedence over provenance.
+
+Diagnostics are sampled only when requested by the host. CLI cadence is expressed in completed steps; zero disables sampling. Cluster statistics count connected components of the undirected graph with separation at most the configured distance, including singletons. Exact overlaps are unordered pairs; force candidates and accepted interactions are directed pairs. Sampling is O(N squared), can allocate, and is measured separately from stepping. No potential energy is reported for arbitrary directed matrices.
+
 Initial measurements include particle count, finite-state/overlap checks, speed and simple cluster statistics with an explicit distance criterion and sampling cadence. More expensive measurements are optional and run outside the core timing benchmark. Saving snapshots and selecting measurements must not change the equations being evaluated.
 
 ## Migration milestones
@@ -229,7 +236,7 @@ Each milestone should end in small verified commits and a useful result. The seq
 | M4 Spatial acceleration | Add the exact uniform grid, reusable buffers and profiling. Evaluate parallel work only if profiling justifies it. | Neighbour and force parity pass; no steady-capacity step allocation; benchmark comparisons include density/cluster cases and recorded capacity targets. |
 | M5 Documented 2D release | Review the remaining legacy modes, provide examples, generate API docs, finish CI checks and record limitations. | Every legacy mode has a disposition; public API docs build; contributors can reproduce tests, examples and benchmark protocol from a clean checkout. |
 
-The first implementation task should be M1, followed by the smallest complete serial simulation in M2. No Unity adapter, octree, FMM, 3D state or gameplay system is needed to complete these milestones.
+M1 and M2 are complete. Build and validation commands are in [CONTRIBUTING.md](../CONTRIBUTING.md); workloads, measured timings, allocation evidence and limitations are in [the reference baseline](performance-baseline.md). The next implementation task is M3. No Unity adapter, octree, FMM, 3D state or gameplay system is needed to complete these milestones.
 
 ## Repository workflow and documentation
 
@@ -237,7 +244,7 @@ The first implementation task should be M1, followed by the smallest complete se
 
 Use short-lived branches for cohesive implementation work and make frequent commits at verified boundaries. Introduce correctness fixes separately from optimizations where practical, so changes in results can be explained. Keep `main` usable, inspect staged changes before committing, and include source, relevant tests and XML updates together.
 
-At M1, add formatting, Release build and focused tests to CI; at M5, include generated-documentation checks and appropriate core OS coverage. Pin tools and packages, and record benchmark artifacts separately from normal build output. CI and documentation generation are planned here, not installed in this planning-only repository.
+CI now runs locked restore, formatting, Release builds, tests, the managed MonoGame compatibility check, XML compiler-failure probes and CLI smoke checks. At M5, add rendered-documentation checks and broader core OS coverage. Tools and packages remain pinned; benchmark artifacts stay separate from normal source output. Generated XML is available locally, while full API-site publishing is deferred.
 
 The GitHub remote is [M3G4W4TT5/ParticleLife2](https://github.com/M3G4W4TT5/ParticleLife2), created as a private repository. The local repository uses `origin` for this remote. Project licensing remains to be selected before a public release. Old repositories do not need to be rewritten or repurposed.
 

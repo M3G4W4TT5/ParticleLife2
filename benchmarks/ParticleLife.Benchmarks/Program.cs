@@ -1,0 +1,48 @@
+using BenchmarkDotNet.Running;
+using ParticleLife.Benchmarks;
+
+try
+{
+    if (args.Length > 0 && args[0] == "latency")
+    {
+        string outputDirectory = args.Length > 1 ? args[1] : "artifacts/benchmarks/reference";
+        int samples = args.Length > 2 ? int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 31;
+        string selection = args.Length > 3 ? args[3] : "quick";
+        if (args.Length > 4)
+        {
+            throw new ArgumentException("Too many latency arguments.");
+        }
+
+        LatencyRunner.Run(outputDirectory, samples, selection);
+        return 0;
+    }
+
+    if (args.Length > 1 && args[0] == "bdn")
+    {
+        string inputDirectory = Path.GetFullPath(Environment.GetEnvironmentVariable("PARTICLELIFE_BENCHMARK_INPUTS")
+            ?? Path.Combine("artifacts", "benchmarks", "bdn-inputs"));
+        Directory.CreateDirectory(inputDirectory);
+        Environment.SetEnvironmentVariable("PARTICLELIFE_BENCHMARK_INPUTS", inputDirectory);
+        File.WriteAllText(Path.Combine(inputDirectory, "session.json"), System.Text.Json.JsonSerializer.Serialize(new
+        {
+            capturedAtUtc = DateTimeOffset.UtcNow,
+            environment = LatencyRunner.CaptureEnvironment(),
+            arguments = args
+        }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        BenchmarkSwitcher.FromAssembly(typeof(DirectStepBenchmarks).Assembly).Run(args[1..]);
+        return 0;
+    }
+
+    Console.WriteLine("Particle Life direct-reference benchmarks (run Release without a debugger)");
+    Console.WriteLine("  latency [output-directory] [samples >= 5] [quick|all|case-name|experiment.json]");
+    Console.WriteLine("  bdn --filter '*uniform-fixed-500*' --job short");
+    Console.WriteLine("  bdn --filter '*' --job short");
+    Console.WriteLine("Cases: " + string.Join(", ", BenchmarkWorkload.AllCases));
+    return args.Length == 0 || args[0] is "--help" or "-h" ? 0 : 2;
+}
+catch (Exception error) when (error is ArgumentException or FormatException or ArithmeticException or IOException
+    or UnauthorizedAccessException or System.Text.Json.JsonException or NotSupportedException or InvalidOperationException)
+{
+    Console.Error.WriteLine(error.Message);
+    return 2;
+}

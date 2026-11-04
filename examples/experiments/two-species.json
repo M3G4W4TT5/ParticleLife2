@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "modelVersion": "particle-life/1",
+  "solverVersion": "direct-damped-semi-implicit-euler/1",
+  "units": "reduced-l0-t0-m0",
+  "boundary": "soft-wall",
+  "name": "two-species",
+  "timeStep": 0.006944444444444444,
+  "parameters": {
+    "worldWidth": 1,
+    "worldHeight": 1,
+    "cutoff": 0.1,
+    "forceScale": 1,
+    "repulsionFraction": 0.3,
+    "dampingHalfLife": 0.025,
+    "wallWidth": 0.05,
+    "wallStrength": 1.44
+  },
+  "matrix": {
+    "speciesCount": 2,
+    "values": [1, 0.2, -0.4, 1]
+  },
+  "initialState": {
+    "ids": [10, 20, 30, 40, 50, 60],
+    "positions": [
+      { "x": 0.4, "y": 0.45 },
+      { "x": 0.465, "y": 0.45 },
+      { "x": 0.42, "y": 0.48 },
+      { "x": 0.7, "y": 0.7 },
+      { "x": 0.745, "y": 0.74 },
+      { "x": 0.02, "y": 0.5 }
+    ],
+    "velocities": [
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 }
+    ],
+    "species": [0, 1, 0, 1, 0, 1]
+  },
+  "generator": {
+    "name": "manual-six-particle-fixture",
+    "version": "1",
+    "seed": null,
+    "runtime": "manually specified decimal initial conditions"
+  }
+}

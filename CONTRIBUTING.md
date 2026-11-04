@@ -2,7 +2,31 @@
 
 Particle Life 2 should be understandable enough to learn from and efficient enough to explore meaningful particle systems. Changes should make the model, numerical method and performance tradeoffs clear to the next contributor.
 
-The current scope and milestone order are in the [architecture and migration plan](docs/architecture-and-migration.md). The repository is currently at the planning stage. Build, test, benchmark and documentation-generation commands will be added alongside the projects that implement them.
+The current scope and milestone order are in the [architecture and migration plan](docs/architecture-and-migration.md). M1 and M2 provide the tested headless reference implementation; the viewer is M3 and spatial acceleration is M4.
+
+## Build and verification
+
+Use .NET SDK **10.0.302**, pinned without roll-forward in `global.json`. Projects target `net10.0` with C# 14, nullable references, SDK analyzers and warnings as errors. This is the installed, verified SDK baseline, not a claim to use the newest servicing patch. Review SDK updates deliberately and rerun these gates. Direct dependencies are pinned to xUnit v3 **4.0.2**, MonoGame DesktopGL **3.8.6** and BenchmarkDotNet **0.15.8**; tracked lock files pin transitive resolution. The core and CLI have no package dependencies.
+
+Run from the repository root:
+
+```sh
+dotnet restore ParticleLife.slnx --locked-mode
+dotnet format ParticleLife.slnx --verify-no-changes --no-restore
+dotnet build ParticleLife.slnx -c Release --no-restore
+dotnet test --solution ParticleLife.slnx -c Release --no-build
+dotnet run --project tests/ParticleLife.MonoGame.Compatibility -c Release --no-build
+pwsh -NoProfile -File scripts/check-xml-docs.ps1
+pwsh -NoProfile -File scripts/check-cli.ps1
+```
+
+The test runner uses Microsoft Testing Platform selected in `global.json`; the explicit `--solution` option is required by that mode. Use `dotnet format ParticleLife.slnx --no-restore` to apply formatting. After intentionally changing dependencies, restore without `--locked-mode` and review the lock-file diff. PowerShell 7 is needed for the two portable verification scripts. CI runs these checks on Linux; local baseline measurements are on Windows.
+
+The MonoGame check compiles a `Game` subclass and runs a managed type conversion without creating a graphics device or window. It establishes package/target compatibility; interactive rendering and native graphics startup remain M3.
+
+The core build generates `src/ParticleLife.Core/bin/Release/net10.0/ParticleLife.Core.xml`. The XML gate temporarily adds malformed/missing documentation probes, checks that CS1591, CS1570 and CS1574 are errors, removes them in a `finally` block, and rebuilds the unmodified core. Generated API website publishing remains outside M1–M2.
+
+For timing commands and their measurement boundaries, use the [reference benchmark protocol and results](docs/performance-baseline.md). Performance tests check zero allocations for warmed successful steps; diagnostics, serialization and snapshots are intentionally outside that contract.
 
 ## Readable numerical code
 
@@ -55,7 +79,7 @@ For example, the documentation for a radial coefficient function should make cle
 
 This illustrates documentation style, not an already implemented API. The actual method's comments must also state its exact curve, repulsive-core parameter and preconditions. Numerical claims in comments must agree with tests and measurements.
 
-When the core project is created, enable [`GenerateDocumentationFile`](https://learn.microsoft.com/en-us/dotnet/core/project-sdk/msbuild-props#generatedocumentationfile). Treat missing public XML comments and malformed or unresolved documentation references as build failures for authored library code. Compiler checks cannot judge the scientific content; review units, signs and assumptions explicitly.
+The core enables [`GenerateDocumentationFile`](https://learn.microsoft.com/en-us/dotnet/core/project-sdk/msbuild-props#generatedocumentationfile). Missing public XML comments and malformed or unresolved documentation references fail the authored library build. Compiler checks cannot judge the scientific content; review units, signs and assumptions explicitly.
 
 Use [Docfx](https://dotnet.github.io/docfx/docs/dotnet-api-docs.html) as the proposed API renderer, with a pinned tool version when introduced. Generated API metadata and HTML are build artifacts. Handwritten Markdown is reserved for the project overview, architecture decisions, contribution instructions and experiment walkthroughs. A comment change and the corresponding code change belong in the same commit.
 

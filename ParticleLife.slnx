@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ParticleLife.Core/ParticleLife.Core.csproj" />
+    <Project Path="src/ParticleLife.Cli/ParticleLife.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ParticleLife.Core.Tests/ParticleLife.Core.Tests.csproj" />
+    <Project Path="tests/ParticleLife.MonoGame.Compatibility/ParticleLife.MonoGame.Compatibility.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/ParticleLife.Benchmarks/ParticleLife.Benchmarks.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,213 @@
+#requires -Version 7.2
+# Exercise the built CLI as a user would, retaining reports in ignored artifacts/.
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$repository = Split-Path -Parent $PSScriptRoot
+$assembly = Join-Path $repository 'src/ParticleLife.Cli/bin/Release/net10.0/ParticleLife.Cli.dll'
+if (-not (Test-Path -LiteralPath $assembly -PathType Leaf)) {
+    throw 'Build the solution in Release before running the CLI checks.'
+}
+
+$outputDirectory = Join-Path $repository ('artifacts/cli-check/' + [Guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $outputDirectory
+$script:commandCount = 0
+
+function Assert-That {
+    param([bool]$Condition, [string]$Message)
+    if (-not $Condition) { throw $Message }
+}
+
+function Assert-Close {
+    param([double]$Expected, [double]$Actual, [string]$Message)
+    # Reduced-unit times of order one: allow double summation roundoff only.
+    $tolerance = 1e-12 + 1e-12 * [Math]::Max([Math]::Abs($Expected), [Math]::Abs($Actual))
+    Assert-That ([double]::IsFinite($Actual) -and [Math]::Abs($Expected - $Actual) -le $tolerance) $Message
+}
+
+function ConvertTo-CanonicalValue {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $result = [ordered]@{}
+        foreach ($key in ($Value.Keys | Sort-Object)) {
+            $result[$key] = ConvertTo-CanonicalValue -Value $Value[$key]
+        }
+        return $result
+    }
+    if ($Value -is [pscustomobject]) {
+        $result = [ordered]@{}
+        foreach ($property in ($Value.PSObject.Properties | Sort-Object Name)) {
+            $result[$property.Name] = ConvertTo-CanonicalValue -Value $property.Value
+        }
+        return $result
+    }
+    if ($Value -is [array]) {
+        $result = [object[]]::new($Value.Count)
+        for ($i = 0; $i -lt $Value.Count; $i++) {
+            $result[$i] = ConvertTo-CanonicalValue -Value $Value[$i]
+        }
+        return ,$result
+    }
+    return $Value
+}
+
+function ConvertTo-CanonicalJson {
+    param([AllowNull()][object]$Value)
+    # Sort object keys, preserve array order, and serialize parsed numeric values.
+    $canonical = ConvertTo-CanonicalValue -Value $Value
+    return ConvertTo-Json -InputObject $canonical -Depth 100 -Compress
+}
+
+function Read-Json {
+    param([string]$Path)
+    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+}
+
+function Write-Json {
+    param([string]$Path, [object]$Value)
+    $json = ConvertTo-Json -InputObject $Value -Depth 100
+    [IO.File]::WriteAllText($Path, $json + "`n")
+}
+
+function Invoke-Cli {
+    param([string[]]$Arguments, [int]$ExpectedExit = 0, [string]$ErrorPattern = '')
+    $script:commandCount++
+    $startInfo = [Diagnostics.ProcessStartInfo]::new('dotnet')
+    $startInfo.WorkingDirectory = $repository
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.ArgumentList.Add($assembly)
+    foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::new()
+    try {
+        $process.StartInfo = $startInfo
+        $null = $process.Start()
+        # Read both streams concurrently so neither pipe can block the child.
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        $exitCode = $process.ExitCode
+    }
+    finally {
+        $process.Dispose()
+    }
+
+    $logPath = Join-Path $outputDirectory ('command-{0:d2}.json' -f $script:commandCount)
+    Write-Json $logPath ([ordered]@{ arguments = $Arguments; exitCode = $exitCode; stdout = $stdout; stderr = $stderr })
+    Assert-That ($exitCode -eq $ExpectedExit) "CLI exited $exitCode, expected $ExpectedExit. Arguments: $Arguments`n$stdout`n$stderr"
+    if ($ExpectedExit -eq 0) {
+        Assert-That ([string]::IsNullOrWhiteSpace($stderr)) "Successful CLI command wrote an error: $stderr"
+    }
+    else {
+        Assert-That ($stderr -match '(?m)^Error:') "CLI failure did not provide its concise error message: $stderr"
+        Assert-That ($stderr -notmatch '(?m)Unhandled exception|^\s+at\s') "CLI leaked an unhandled exception or stack trace: $stderr"
+        if ($ErrorPattern.Length -gt 0) {
+            Assert-That ($stderr -match $ErrorPattern) "CLI error did not match '$ErrorPattern': $stderr"
+        }
+    }
+}
+
+$seed = 20261104
+$population = 25
+$species = 4
+$randomPath = ''
+foreach ($preset in @('random', 'chains', 'snakes')) {
+    $experimentPath = Join-Path $outputDirectory "$preset.json"
+    $sampledPath = Join-Path $outputDirectory "$preset-sampled.json"
+    $unsampledPath = Join-Path $outputDirectory "$preset-unsampled.json"
+    Invoke-Cli -Arguments @('create', '--preset', $preset, '--particles', "$population", '--species', "$species",
+        '--seed', "$seed", '--output', $experimentPath)
+    Invoke-Cli -Arguments @('validate', $experimentPath)
+    $experiment = Read-Json $experimentPath
+    $sourceHash = (Get-FileHash -LiteralPath $experimentPath -Algorithm SHA256).Hash
+    Assert-That ($experiment.initialState.ids.Count -eq $population) "$preset did not save the requested population."
+    Assert-That ($experiment.initialState.positions.Count -eq $population -and $experiment.initialState.velocities.Count -eq $population) "$preset omitted particle state."
+    Assert-That ($experiment.matrix.values.Count -eq $species * $species) "$preset did not save actual matrix entries."
+    Assert-That ($experiment.generator.seed -eq $seed -and $experiment.generator.name.Length -gt 0 -and $experiment.generator.version.Length -gt 0) "$preset omitted generator provenance."
+
+    Invoke-Cli -Arguments @('run', $experimentPath, '--steps', '20', '--sample-every', '5', '--output', $sampledPath)
+    Invoke-Cli -Arguments @('run', $experimentPath, '--steps', '20', '--sample-every', '0', '--output', $unsampledPath)
+    $sampled = Read-Json $sampledPath
+    $unsampled = Read-Json $unsampledPath
+    Assert-That ((ConvertTo-CanonicalJson $sampled.finalState) -ceq (ConvertTo-CanonicalJson $unsampled.finalState)) "$preset diagnostics changed the exact final state."
+    Assert-That ($sampled.requestedSteps -eq 20 -and $sampled.finalState.step -eq 20) "$preset report has an incorrect step count."
+    Assert-Close (20 * $experiment.timeStep) $sampled.finalState.time "$preset report has an incorrect final simulation time."
+    Assert-That ($sampled.sampleEvery -eq 5 -and $unsampled.sampleEvery -eq 0) "$preset report omitted its measurement cadence."
+    Assert-That (($sampled.measurements.step -join ',') -ceq '0,5,10,15,20') "$preset diagnostics have an incorrect cadence."
+    Assert-That ($unsampled.measurements.Count -eq 0) "$preset still sampled diagnostics when disabled."
+    foreach ($sample in $sampled.measurements) {
+        Assert-That ($sample.count -eq $population -and $sample.finiteCount -eq $population) "$preset lost particles or reported non-finite state."
+        Assert-Close ($sample.step * $experiment.timeStep) $sample.time "$preset sample has an incorrect simulation time."
+        Assert-Close $sampled.clusterDistance $sample.clusterDistance "$preset sample omitted its cluster criterion."
+    }
+    foreach ($report in @($sampled, $unsampled)) {
+        Assert-That ((ConvertTo-CanonicalJson $report.experiment) -ceq (ConvertTo-CanonicalJson $experiment)) "$preset run report did not retain the complete original experiment."
+        Assert-That ($report.sourceExperimentSha256 -ceq $sourceHash) "$preset report source digest does not identify the saved input."
+        Assert-That ($report.environment.runtime.Length -gt 0 -and $report.environment.sdk.Length -gt 0) "$preset report omitted runtime metadata."
+        Assert-That ($report.environment.numericalBackend -ceq $experiment.solverVersion) "$preset report omitted the numerical backend."
+        Assert-That ($report.environment.buildConfiguration -ceq 'Release' -and $report.environment.simulationThreads -eq 1) "$preset report has incorrect build or solver metadata."
+        Assert-That ($report.environment.coreAssemblySha256 -match '^[0-9A-F]{64}$') "$preset report omitted the core assembly digest."
+        Assert-That ($report.lastForceEvaluation.candidatePairs -eq $population * ($population - 1)) "$preset report has an incorrect directed-pair count."
+    }
+    Assert-That ((Get-FileHash -LiteralPath $experimentPath -Algorithm SHA256).Hash -ceq $sourceHash) "$preset run modified its input experiment."
+    if ($preset -ceq 'random') { $randomPath = $experimentPath }
+}
+
+$zeroPath = Join-Path $outputDirectory 'zero-steps.json'
+Invoke-Cli -Arguments @('run', $randomPath, '--steps', '0', '--sample-every', '5', '--output', $zeroPath)
+$zero = Read-Json $zeroPath
+$original = Read-Json $randomPath
+$expectedZero = [ordered]@{
+    time = 0; step = 0; ids = $original.initialState.ids; positions = $original.initialState.positions
+    velocities = $original.initialState.velocities; species = $original.initialState.species
+}
+Assert-That ((ConvertTo-CanonicalJson $zero.finalState) -ceq (ConvertTo-CanonicalJson $expectedZero)) 'A zero-step run changed the saved initial state.'
+Assert-That ($zero.requestedSteps -eq 0 -and $null -eq $zero.lastForceEvaluation) 'A zero-step report implies force evaluation occurred.'
+Assert-That ($zero.measurements.Count -eq 1 -and $zero.measurements[0].step -eq 0) 'A zero-step run should include its requested initial diagnostic.'
+
+$partialPath = Join-Path $outputDirectory 'partial-cadence.json'
+Invoke-Cli -Arguments @('run', $randomPath, '--steps', '18', '--sample-every', '5', '--output', $partialPath)
+$partial = Read-Json $partialPath
+Assert-That (($partial.measurements.step -join ',') -ceq '0,5,10,15,18') 'The final off-cadence state was not sampled exactly once.'
+
+Invoke-Cli -Arguments @('run', $randomPath) -ExpectedExit 1 -ErrorPattern 'Missing --steps'
+Invoke-Cli -Arguments @('run', $randomPath, '--steps', 'invalid') -ExpectedExit 1 -ErrorPattern 'requires an integer'
+Invoke-Cli -Arguments @('run', $randomPath, '--steps', '-1') -ExpectedExit 1
+Invoke-Cli -Arguments @('run', $randomPath, '--steps') -ExpectedExit 1 -ErrorPattern 'incomplete option'
+Invoke-Cli -Arguments @('run', $randomPath, '--steps', '1', '--unknown', '1') -ExpectedExit 1 -ErrorPattern 'Unknown or incomplete option'
+Invoke-Cli -Arguments @('create', '--dt', '0', '--output', (Join-Path $outputDirectory 'invalid-dt.json')) -ExpectedExit 1
+Invoke-Cli -Arguments @('create', '--dt', 'NaN', '--output', (Join-Path $outputDirectory 'nonfinite-dt.json')) -ExpectedExit 1 -ErrorPattern 'finite number'
+
+$invalidSchemaPath = Join-Path $outputDirectory 'invalid-schema.json'
+$invalidSchema = Read-Json $randomPath
+$invalidSchema.schemaVersion = 999
+Write-Json $invalidSchemaPath $invalidSchema
+Invoke-Cli -Arguments @('validate', $invalidSchemaPath) -ExpectedExit 1 -ErrorPattern 'Unsupported experiment schema'
+Invoke-Cli -Arguments @('run', $invalidSchemaPath, '--steps', '1') -ExpectedExit 1 -ErrorPattern 'Unsupported experiment schema'
+
+$existingHash = (Get-FileHash -LiteralPath $randomPath -Algorithm SHA256).Hash
+Invoke-Cli -Arguments @('create', '--output', $randomPath) -ExpectedExit 1 -ErrorPattern 'Output already exists'
+Invoke-Cli -Arguments @('run', $randomPath, '--steps', '1', '--output', $randomPath) -ExpectedExit 1 -ErrorPattern 'Output already exists'
+Assert-That ((Get-FileHash -LiteralPath $randomPath -Algorithm SHA256).Hash -ceq $existingHash) 'Output protection changed an existing experiment.'
+
+$overflowPath = Join-Path $outputDirectory 'numerical-overflow.json'
+$overflowOutput = Join-Path $outputDirectory 'numerical-overflow-result.json'
+$overflow = Read-Json $randomPath
+$overflow.timeStep = 2
+$overflow.parameters.forceScale = 0
+$overflow.parameters.wallStrength = 0
+$overflow.parameters.dampingHalfLife = $null
+$overflow.initialState = [ordered]@{
+    ids = @(991); positions = @(@{ x = 0.5; y = 0.5 }); velocities = @(@{ x = 1e308; y = 0 }); species = @(0)
+}
+Write-Json $overflowPath $overflow
+Invoke-Cli -Arguments @('validate', $overflowPath)
+Invoke-Cli -Arguments @('run', $overflowPath, '--steps', '1', '--sample-every', '0', '--output', $overflowOutput) -ExpectedExit 1 -ErrorPattern 'Integration for particle 991 is non-finite'
+Assert-That (-not (Test-Path -LiteralPath $overflowOutput)) 'A failed numerical step published a run report.'
+
+Write-Output "CLI checks passed ($script:commandCount commands). Reports retained at $outputDirectory"

@@ -1,0 +1,21 @@
+name: build-and-test
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet restore ParticleLife.slnx --locked-mode
+      - run: dotnet format ParticleLife.slnx --verify-no-changes --no-restore
+      - run: dotnet build ParticleLife.slnx -c Release --no-restore
+      - run: dotnet test --solution ParticleLife.slnx -c Release --no-build
+      - run: dotnet run --project tests/ParticleLife.MonoGame.Compatibility -c Release --no-build
+      - run: pwsh -NoProfile -File scripts/check-xml-docs.ps1
+      - run: pwsh -NoProfile -File scripts/check-cli.ps1
