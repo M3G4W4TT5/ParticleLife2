@@ -6,7 +6,7 @@ Particle Life 2 is a continuation of [Particle Life](https://github.com/M3G4W4TT
 
 The initial focus is on two-dimensional simulations, with an engine-independent C# core and MonoGame for rendering. Models and numerical methods should be explicit and testable, with attention to performance, readable code and scientific explanations in C# XML documentation.
 
-The interactive viewer and headless runner share the same simulation. They include directed species interactions, soft walls, damping, random/chain/snake presets and saved experiments with their complete initial conditions. The serial solver uses double precision and advances independently of rendering. An exact uniform grid accelerates neighbour discovery, with the direct all-pairs solver available for comparison.
+The interactive viewer and headless runner share the same simulation. They include directed species interactions, soft walls, damping, random/chain/snake presets and saved experiments with their complete initial conditions. The solver uses double precision and advances independently of rendering. An exact uniform grid accelerates neighbour discovery, with the direct all-pairs solver available for comparison.
 
 ## Explore the simulation
 
@@ -24,7 +24,7 @@ The viewer starts with 500 particles, seven species, seed 1 and grid search. Loa
 dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- examples/experiments/two-species.json --paused
 ```
 
-Use `--help` for startup options, including `--preset random|chains|snakes`, `--particles`, `--species`, `--seed`, `--backend direct|grid`, `--sample-every` and `--save-dir`. Saved experiments retain their backend; older schema-1 files use direct search. An explicit `--backend` overrides that choice, including on reload, and saves retain the effective choice. DesktopGL needs a working OpenGL display. Resize to at least 420 × 340 pixels for readable controls. Resizing preserves world geometry; off-world particles remain in the simulation.
+Use `--help` for startup options, including `--preset random|chains|snakes`, `--particles`, `--species`, `--seed`, `--backend direct|grid`, `--workers`, `--sample-every` and `--save-dir`. Grid search defaults to one worker; `--workers 4` explicitly selects parallel evaluation (1–8 workers). Saved experiments retain their backend and workers; older files remain serial and schema-1 files use direct search. Explicit overrides also apply on reload and are retained when saving. DesktopGL needs a working OpenGL display. Resize to at least 420 × 340 pixels for readable controls. Resizing preserves world geometry; off-world particles remain in the simulation.
 
 Click **HELP** for clickable controls, or click the playback badge to pause and resume.
 
@@ -45,7 +45,7 @@ Click **HELP** for clickable controls, or click the playback badge to pause and 
 
 Resampling, matrix changes and preset selection restart at time and step zero, preserve the timestep, and record new seeds and actual generated values. Reset restores those saved values without generating anything. Saving preserves the initial experiment for CLI replay; it does not save the evolved state as a checkpoint, and existing files are never overwritten. Invalid reloads retain the current valid experiment and pause playback.
 
-Playback uses the experiment's fixed timestep, with at most eight steps per frame. Excess playback time is dropped and shown in the display rather than increasing the timestep. Diagnostics are sampled every 144 completed steps by default and show their measurement time. Dense interactions and diagnostics remain quadratic; large populations can be slow even for a single step. Grid search falls back to direct evaluation at extreme coordinate or force-accumulation scales and reports that fallback.
+Playback uses the experiment's fixed timestep, with at most eight steps per frame. Excess playback time is dropped and shown in the display rather than increasing the timestep. Exact spatial diagnostics reuse storage, are sampled every 144 completed steps by default and show their measurement time. Dense interactions and worst-case diagnostics remain quadratic; large populations can be slow even for a single step. Grid search falls back to direct evaluation at extreme coordinate or force-accumulation scales and reports that fallback.
 
 ## Run without graphics
 
@@ -60,4 +60,4 @@ Use `chains` or `snakes` for the other presets, and `--help` for commands. New e
 
 This is a phenomenological model for exploring emergence. Soft walls confine rather than reflect particles, and directed interactions and damping generally do not conserve momentum or energy.
 
-See the [architecture and migration plan](docs/architecture-and-migration.md), [contributor guidance](CONTRIBUTING.md) and [direct/grid performance comparison](docs/performance-m4.md) for the numerical conventions, checks and current limits.
+See the [architecture and migration plan](docs/architecture-and-migration.md), [contributor guidance](CONTRIBUTING.md) and [CPU performance comparison](docs/performance-m4-1.md) for the numerical conventions, checks and current limits.

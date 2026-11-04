@@ -2,7 +2,7 @@
 
 Particle Life 2 will modernize the original two-dimensional Particle Life simulation around an engine-independent C# core. The first release should make its behaviour reproducible, its equations explicit, and its performance measurable while retaining the attraction matrices and emergent patterns that motivated the project.
 
-This is the implementation plan as of 4 November 2026. M1–M4 provide validated experiments, a tested serial simulation, headless CLI, interactive MonoGame viewer and exact uniform-grid acceleration. The numerical conventions below remain the reviewed baseline. M5 remains separate release work.
+This is the implementation plan as of 4 November 2026. M1–M4 provide validated experiments, a tested simulation, headless CLI, interactive MonoGame viewer and exact uniform-grid acceleration. M4.1 adds measured packed CPU traversal, explicit workers and reusable exact diagnostics. The numerical conventions below remain the reviewed baseline. M5 remains separate release work.
 
 ## Scope and priorities
 
@@ -190,7 +190,7 @@ Saving (`S`) serializes the complete current initial experiment in schema 2, inc
 
 Rendering obtains `Observe()` only after stepping, reads its spans immediately, and retains no view across a step or reset. The host runs input, simulation and drawing sequentially without a snapshot copy each frame. A single world-to-screen scale preserves world geometry across viewport shapes; no display dimension changes positions, forces or interaction cutoffs. Rendering may skip pixels outside the viewport but never removes finite off-world particles. Species colours are stable functions of species identifiers. Textures, font atlas, sprite batch and clipping state are reused and disposed with the host.
 
-Viewer diagnostics default to every 144 completed steps, independently of rendered frames, with their own sampled time and step displayed. Zero disables sampling; `D` toggles it. Sampling remains quadratic and allocating outside the core step. Reset, replacement and cadence changes clear stale measurements. Optional measurement failure is reported separately and does not change the simulated trajectory. Display controls and diagnostic choices do not change model equations or state advancement at a given completed step count.
+Viewer diagnostics default to every 144 completed steps, independently of rendered frames, with their own sampled time and step displayed. Zero disables sampling; `D` toggles it. Sampling rebuilds its own spatial index from completed state, reuses scratch storage, and remains outside the core step. Worst-case work is quadratic; each sample allocates its small immutable result. Reset, replacement and cadence changes clear stale measurements. Optional measurement failure is reported separately and does not change the simulated trajectory. The CLI uses the same sampler and records failures independently of successful numerical steps.
 
 ## Performance design and measurement
 
@@ -209,9 +209,9 @@ Performance is part of the data and execution design from the beginning. Keep a 
 
 Grid construction and storage should scale with particles and occupied cells. Exact local interaction work also depends on the number of candidate pairs. A cluster in which nearly every particle interacts can still require quadratic work. Benchmark density and interaction radius as well as particle count.
 
-Parallel work can later assign disjoint output ranges to workers while all workers read the same input state and index. Introduce it only after the serial implementation is correct and measured. Do not apply action-reaction symmetry to nonreciprocal matrices. SIMD, reduced precision, unsafe code, GPU execution and approximation each require a measured benefit and a numerical-error check before adoption.
+Parallel work assigns disjoint output ranges while all workers read the same input state and index. Do not apply action-reaction symmetry to nonreciprocal matrices. SIMD, reduced precision, unsafe code, GPU execution and approximation each require a measured benefit and a numerical-error check before adoption.
 
-### M4 exact grid and backend selection
+### Accepted M4 exact grid and backend selection
 
 `Simulation` selects one of two serial `IForceEvaluator` implementations. The reference retains its independent nested receiver/source loops in storage order. Both evaluators share the reviewed pair mathematics, including subnormal-distance handling; the mathematical tests remain independent of search parity. The grid changes candidate discovery and accumulation order, never the directed matrix, radial curve, soft wall, damping or integrator.
 
@@ -224,6 +224,18 @@ Arrays and dictionary slots reserve for the largest population seen, allowing a 
 Completed state, pair counts and execution metadata publish together only after integration succeeds. Failed force, integration or time checks leave all published values intact. Scratch index telemetry can change on a rejected stage, so hosts report the copied last-successful-step metadata. Cumulative counters record successful direct-fallback steps since reset, distinguishing coordinate range from accumulation range; reporting just the latest step would hide earlier fallback.
 
 Core constructors and generators retain a direct default for API compatibility. Newly generated CLI and viewer experiments explicitly choose grid search. Loaded files use their saved choice, with schema 1 always meaning direct. CLI `create`/`run` and viewer startup accept `--backend direct|grid`. An explicit viewer override also applies on reload; reset, resampling, matrix editing and preset replacement retain the effective backend. Saving records that effective configuration. CLI reports retain the source experiment configuration separately from the override and actual execution. No parallel execution, SIMD, reduced precision, unsafe code or approximate search is introduced in M4.
+
+### M4.1 CPU traversal, workers and diagnostics
+
+The grid now counts cell occupancy and scatters sources into contiguous ranges, then packs positions and species. The nine-cell traversal and ascending source order within each cell remain unchanged from M4. Receiver results map back to original storage, preserving stable identities and each receiver's summation order. `uniform-grid/1` continues to name the same saved search convention; runtime reports additionally identify `uniform-grid-packed/1`. The direct evaluator remains independent enumeration, and the accepted M4 source is reconstructed under ignored artifacts for comparisons rather than retained as duplicate production code.
+
+Grid `workerCount` is explicitly 1–8, including the caller. One is serial; additional persistent workers claim batches of 32 whole receivers from one immutable prepared input. Workers own disjoint outputs, never reduce partial force sums or share directed contributions. Every worker finishes before integration, direct retry, exception propagation or publication. Simulations and controllers own their worker lifecycle and implement `IDisposable`; experiment replacement constructs a valid replacement before releasing the previous simulation. No backend or worker count is selected from timings.
+
+Schema 2 adds optional `workerCount`, defaulting to one when absent; schema 1 remains direct and serial. Saved choices survive editing, presets and reset. `--workers` explicitly overrides the current backend's workers; a backend change without a worker override selects one. Direct requires one. Reports distinguish saved, requested and actual settings, the implementation version and cumulative fallback causes. Workers preserve the serial grid's arithmetic order, but direct/grid accumulation roundoff and long chaotic divergence remain distinct issues.
+
+`Diagnostics.Sample` remains the direct reference. `DiagnosticSampler` separately validates linear speed measurements, counts exact duplicate positions, and finds inclusive geometric connected components with reusable union/find and spatial storage. Connections use the reference `double.Hypot(dx,dy) <= radius` predicate, never force accepted-pair counts. Its binary cell width is strictly greater than the radius, covering inclusive rounded-boundary cases that the force index's width policy would miss. Positive finite radii whose square underflows or overflows remain valid; unrepresentable widths or coordinates use exact direct connectivity. Duplicate counting precedes connectivity early exit, and all scratch is instance-owned.
+
+The [M4.1 evidence](performance-m4-1.md) separates static density/population scaling, adjacent-double cutoff transitions, developed preset snapshots, subsequent evolving trajectories, worker counts, diagnostic latency, retained capacity and allocation boundaries. Buffered Verlet lists remain a later experiment; no SIMD, approximation, reduced precision, GPU, BVH or computational-geometry subsystem is introduced here.
 
 ### Benchmark protocol
 

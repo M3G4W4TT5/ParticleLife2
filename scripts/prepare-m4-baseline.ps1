@@ -1,7 +1,8 @@
 param(
     [string]$Destination = 'artifacts/m4-1/baseline',
     [string]$InputDirectory = 'artifacts/benchmarks/m4',
-    [string]$OutputDirectory = 'artifacts/m4-1/baseline-results'
+    [string]$OutputDirectory = 'artifacts/m4-1/baseline-results',
+    [switch]$SkipEvolution
 )
 $ErrorActionPreference = 'Stop'
 $baselineCommit = 'e2d8a272582602206a6aa38d5b854eaf33dca86a'
@@ -17,10 +18,16 @@ if (-not (Test-Path -LiteralPath (Join-Path $destinationPath 'ParticleLife.slnx'
     Expand-Archive -LiteralPath $archivePath -DestinationPath $destinationPath
 }
 $runnerPath = Join-Path $destinationPath 'benchmarks/ParticleLife.Benchmarks/ComparisonRunner.cs'
-$runner = [IO.File]::ReadAllText($runnerPath)
-# Bounded warm-up matches the M4.1 runner. No core source, timing boundary or pair equation changes.
+$runner = (& git show "$($baselineCommit):benchmarks/ParticleLife.Benchmarks/ComparisonRunner.cs") -join "`n"
+if ($LASTEXITCODE -ne 0) { throw 'Cannot read accepted comparison runner.' }
+# Bounded paired warm-up; M4.1 warms each complete/stage path independently. Core source is unchanged.
 $runner = $runner.Replace('MinimumWarmupSteps = 64;', 'MinimumWarmupSteps = 8;')
 $runner = $runner.Replace('MinimumWarmupSeconds = 1;', 'MinimumWarmupSeconds = 0.5;')
+if ($SkipEvolution)
+{
+    $runner = $runner.Replace('object evolving = MeasureEvolving(evolvingExperiment, evolvingPath, repetitions);', 'object? evolving = null;')
+    $runner = $runner.Replace('Console.WriteLine($"Evolving comparison: {evolvingExperiment.Name}, {repetitions} x {EvolvingSteps} consecutive steps.");', 'Console.WriteLine("Static comparison only; evolution is measured separately.");')
+}
 [IO.File]::WriteAllText($runnerPath, $runner)
 $profileSource = Join-Path $PSScriptRoot '../benchmarks/ParticleLife.Benchmarks/TraversalProfile.cs'
 Copy-Item -LiteralPath $profileSource -Destination (Join-Path $destinationPath 'benchmarks/ParticleLife.Benchmarks/TraversalProfile.cs')
@@ -54,6 +61,7 @@ foreach ($input in Get-ChildItem -LiteralPath $InputDirectory -Filter '*.experim
     acceptedCommit = $baselineCommit
     sourceArchive = $destinationPath
     runnerChanges = 'Minimum warm-up: 8 steps and 0.5 seconds; standalone candidate/geometry profiler added; core source unchanged.'
+    skipEvolution = $SkipEvolution.IsPresent
     inputs = @(Get-ChildItem -LiteralPath $outputPath -Filter '*.experiment.json' | ForEach-Object {
         @{ file = $_.Name; sha256 = (Get-FileHash -LiteralPath $_.FullName).Hash }
     })
