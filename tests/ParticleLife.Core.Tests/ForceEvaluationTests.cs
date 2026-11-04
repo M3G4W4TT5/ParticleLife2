@@ -62,6 +62,78 @@ public sealed class ForceEvaluationTests
         NumericalAssert.Close(0.8, ParticleLifeForce.RadialCoefficient(0.65, 0.8, 0.3));
     }
 
+    [Theory]
+    [InlineData(1, 1, -0.5)]
+    [InlineData(3, 2, -0.25)]
+    public void SubnormalDistanceRatioPreservesTheRepulsiveCoreFraction(int separationUnits, int betaUnits, double expectedForce)
+    {
+        double separation = separationUnits * double.Epsilon;
+        double beta = betaUnits * double.Epsilon;
+        ParticleSnapshot initial = new([1, 2], [default, new(separation, 0)], [default, default], [0, 0]);
+        DirectForceEvaluator evaluator = new(new ModelParameters
+        {
+            Cutoff = 2,
+            RepulsionFraction = beta,
+            WallStrength = 0
+        }, new InteractionMatrix(1, [1]));
+        Vector2d[] forces = new Vector2d[2];
+
+        evaluator.Evaluate(initial.Observe(), forces);
+
+        // In exact arithmetic r/(R beta) is 1/2 or 3/4. Forming r/R first
+        // instead rounds to zero or beta, changing the core coefficient.
+        NumericalAssert.Close(new Vector2d(expectedForce, 0), forces[0]);
+        NumericalAssert.Close(new Vector2d(-expectedForce, 0), forces[1]);
+    }
+
+    [Theory]
+    [InlineData(1, -1074)]
+    [InlineData(-512, -561)]
+    public void DiagonalSubnormalSeparationPreservesTheCoreDistance(int cutoffExponent, int betaExponent)
+    {
+        ParticleSnapshot initial = new([1, 2], [default, new(double.Epsilon, double.Epsilon)],
+            [default, default], [0, 0]);
+        DirectForceEvaluator evaluator = new(new ModelParameters
+        {
+            Cutoff = Math.ScaleB(1, cutoffExponent),
+            RepulsionFraction = Math.ScaleB(1, betaExponent),
+            WallStrength = 0
+        }, new InteractionMatrix(1, [1]));
+        Vector2d[] forces = new Vector2d[2];
+
+        evaluator.Evaluate(initial.Observe(), forces);
+
+        // Both configurations have R beta = 2 epsilon. The exact distance is
+        // sqrt(2) epsilon, so the coefficient is sqrt(2)/2 - 1. The second
+        // configuration has a normal r/R but still loses precision in scalar r.
+        double component = (Math.Sqrt(2) / 2 - 1) / Math.Sqrt(2);
+        NumericalAssert.Close(new Vector2d(component, component), forces[0]);
+        NumericalAssert.Close(new Vector2d(-component, -component), forces[1]);
+    }
+
+    [Fact]
+    public void TinyDistanceAboveCoreRetainsTheRisingAttractionBranch()
+    {
+        ParticleSnapshot initial = new([1, 2], [default, new(4 * double.Epsilon, 0)],
+            [default, default], [0, 0]);
+        DirectForceEvaluator evaluator = new(new ModelParameters
+        {
+            Cutoff = 2,
+            RepulsionFraction = double.Epsilon,
+            ForceScale = Math.ScaleB(1, 1023),
+            WallStrength = 0
+        }, new InteractionMatrix(1, [1]));
+        Vector2d[] forces = new Vector2d[2];
+
+        evaluator.Evaluate(initial.Observe(), forces);
+
+        // q = 2 epsilon and beta = epsilon give g = 2 epsilon; powers of two
+        // make the scaled force exactly representable, including its sign.
+        double expectedForce = Math.ScaleB(1, -50);
+        Assert.Equal(new Vector2d(expectedForce, 0), forces[0]);
+        Assert.Equal(new Vector2d(-expectedForce, 0), forces[1]);
+    }
+
     [Fact]
     public void PairAndWallTermsAddInForceUnitsBeforeIntegration()
     {

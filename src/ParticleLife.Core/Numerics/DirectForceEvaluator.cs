@@ -41,8 +41,10 @@ public sealed class DirectForceEvaluator
     /// Exactly equal positions contribute zero and are counted once per unordered overlap.
     /// Finite off-world positions are retained. Squared distances reject pairs before square roots;
     /// scaled magnitude is used for subnormal squared separations to distinguish tiny distances
-    /// from exact coincidence. When the squared cutoff is subnormal, rejection also uses the scaled
-    /// magnitude because squaring can erase the separation from the cutoff. Floating-point sums
+    /// from exact coincidence. Subnormal distances or distance ratios use a scaled core-distance
+    /// calculation so rounding cannot erase the repulsive-core fraction. When the squared cutoff
+    /// is subnormal, rejection also uses the scaled magnitude because squaring can erase the
+    /// separation from the cutoff. Floating-point sums
     /// follow source storage order.</para>
     /// <para>The input is never mutated. On a numerical failure, the output buffer may be partially
     /// written and must not be published. No I/O, reporting, allocation or integration occurs here.</para>
@@ -125,10 +127,10 @@ public sealed class DirectForceEvaluator
 
                 acceptedPairs++;
                 double distanceRatio = distance / parameters.Cutoff;
-                // Distinct positions can have a ratio below the smallest representable double.
-                // Their core coefficient tends to -1; only geometric coincidence contributes zero.
-                double coefficient = distanceRatio == 0 ? -1 : ParticleLifeForce.EvaluateValidated(distanceRatio,
-                    coefficients[row + species[source]], parameters.RepulsionFraction);
+                double attraction = coefficients[row + species[source]];
+                double coefficient = distance < SmallestNormal || distanceRatio < SmallestNormal
+                    ? EvaluateTinyDistanceCoefficient(displacement, attraction)
+                    : ParticleLifeForce.EvaluateValidated(distanceRatio, attraction, parameters.RepulsionFraction);
                 double magnitude = parameters.ForceScale * coefficient;
                 totalForce += direction * magnitude;
             }
@@ -143,6 +145,25 @@ public sealed class DirectForceEvaluator
         }
 
         return new((long)input.Count * (input.Count - 1), acceptedPairs, overlapPairs);
+    }
+
+    /// <summary>Evaluates a tiny separation without first rounding its distance or normalized distance to a subnormal value.</summary>
+    /// <remarks>
+    /// <para>Compute r/(R beta) by dividing displacement components by beta before taking their
+    /// magnitude. This preserves a finite core fraction even when r/R rounds to zero or beta.
+    /// Normalizing an already rounded subnormal scalar distance would also lose diagonal geometry.</para>
+    /// <para>The caller uses this only for subnormal r or r/R. With 0 &lt; beta &lt; 1 and a positive
+    /// finite R squared, these scaled components and their final ratio remain finite. In either
+    /// case r/R is far below the outer triangle's peak, so its rising branch can be expressed as
+    /// 2 beta (r/(R beta) - 1)/(1 - beta). Multiplying by beta last avoids premature underflow.</para>
+    /// </remarks>
+    private double EvaluateTinyDistanceCoefficient(Vector2d displacement, double attraction)
+    {
+        double beta = parameters.RepulsionFraction;
+        double coreRatio = double.Hypot(displacement.X / beta, displacement.Y / beta) / parameters.Cutoff;
+        return coreRatio < 1
+            ? coreRatio - 1
+            : attraction * (2 * (coreRatio - 1) * beta / (1 - beta));
     }
 
     /// <summary>Checks model-dependent species bounds and numerical state before any stage writes output.</summary>
