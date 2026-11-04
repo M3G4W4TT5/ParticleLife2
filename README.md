@@ -60,4 +60,4 @@ Use `chains` or `snakes` for the other presets, and `--help` for commands. New e
 
 This is a phenomenological model for exploring emergence. Soft walls confine rather than reflect particles, and directed interactions and damping generally do not conserve momentum or energy.
 
-See the [architecture and migration plan](docs/architecture-and-migration.md), [contributor guidance](CONTRIBUTING.md) and [reference performance measurements](docs/performance-baseline.md) for the numerical conventions, checks and current limits.
+See the [architecture and migration plan](docs/architecture-and-migration.md), [contributor guidance](CONTRIBUTING.md) and [direct/grid performance comparison](docs/performance-m4.md) for the numerical conventions, checks and current limits.
