@@ -296,4 +296,36 @@ Invoke-Cli -Arguments @('validate', $overflowPath)
 Invoke-Cli -Arguments @('run', $overflowPath, '--steps', '1', '--sample-every', '0', '--output', $overflowOutput) -ExpectedExit 1 -ErrorPattern 'Integration for particle 991 is non-finite'
 Assert-That (-not (Test-Path -LiteralPath $overflowOutput)) 'A failed numerical step published a run report.'
 
+$parallelInput = Join-Path $outputDirectory 'parallel.json'
+$parallelReport = Join-Path $outputDirectory 'parallel-report.json'
+$serialOverrideReport = Join-Path $outputDirectory 'serial-override.json'
+Invoke-Cli -Arguments @('create', '--particles', '64', '--backend', 'grid', '--workers', '4', '--output', $parallelInput)
+Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '20', '--sample-every', '5', '--output', $parallelReport)
+Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '20', '--workers', '1', '--sample-every', '5', '--output', $serialOverrideReport)
+$parallel = Read-Json $parallelReport
+$serialOverride = Read-Json $serialOverrideReport
+Assert-That ($parallel.execution.savedWorkerCount -eq 4 -and $parallel.execution.lastCompletedStep.actualWorkerCount -eq 4) 'Saved worker selection was not replayed.'
+Assert-That ($serialOverride.execution.savedWorkerCount -eq 4 -and $serialOverride.execution.workerCountOverride -eq 1) 'Worker override lost provenance.'
+Assert-That ((ConvertTo-CanonicalJson $parallel.finalState) -ceq (ConvertTo-CanonicalJson $serialOverride.finalState)) 'Worker scheduling changed receiver sums.'
+Assert-That ($parallel.diagnostics.algorithmVersion -eq 'spatial-components/1') 'CLI did not use reusable diagnostics.'
+Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--workers', '0') -ExpectedExit 1
+Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--workers', '9') -ExpectedExit 1
+Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--backend', 'direct', '--workers', '4') -ExpectedExit 1
+
+# Finite velocity components can have an overflowing diagnostic Hypot while a small dt still integrates.
+$measurementFailureInput = Join-Path $outputDirectory 'measurement-failure.json'
+$measurementFailureReport = Join-Path $outputDirectory 'measurement-failure-report.json'
+$measurementFailure = Read-Json $randomPath
+$measurementFailure.timeStep = 0.0001
+$measurementFailure.parameters.forceScale = 0
+$measurementFailure.parameters.wallStrength = 0
+$measurementFailure.parameters.dampingHalfLife = $null
+$measurementFailure.initialState = [ordered]@{
+    ids = @(992); positions = @(@{ x = 0; y = 0 }); velocities = @(@{ x = 1.3e308; y = 1.3e308 }); species = @(0)
+}
+Write-Json $measurementFailureInput $measurementFailure
+Invoke-Cli -Arguments @('run', $measurementFailureInput, '--steps', '2', '--sample-every', '1', '--output', $measurementFailureReport)
+$measurementFailureResult = Read-Json $measurementFailureReport
+Assert-That ($measurementFailureResult.finalState.step -eq 2 -and $measurementFailureResult.diagnostics.failures.Count -eq 3) 'Optional diagnostic failure stopped valid integration.'
+
 Write-Output "CLI checks passed ($script:commandCount commands). Reports retained at $outputDirectory"

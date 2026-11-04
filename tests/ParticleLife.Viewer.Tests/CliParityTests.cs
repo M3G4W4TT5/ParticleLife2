@@ -26,21 +26,28 @@ public sealed class CliParityTests(ITestOutputHelper output)
     [InlineData("resampled", ForceBackend.UniformGrid)]
     [InlineData("new-matrix", ForceBackend.UniformGrid)]
     [InlineData("off-world", ForceBackend.UniformGrid)]
-    public async Task SavedExperimentMatchesActualCliThroughViewerController(string scenario, ForceBackend backend)
+    [InlineData("saved-fixture", ForceBackend.UniformGrid, 4)]
+    [InlineData("random", ForceBackend.UniformGrid, 4)]
+    [InlineData("chains", ForceBackend.UniformGrid, 4)]
+    [InlineData("snakes", ForceBackend.UniformGrid, 4)]
+    [InlineData("resampled", ForceBackend.UniformGrid, 4)]
+    [InlineData("new-matrix", ForceBackend.UniformGrid, 4)]
+    [InlineData("off-world", ForceBackend.UniformGrid, 4)]
+    public async Task SavedExperimentMatchesActualCliThroughViewerController(string scenario, ForceBackend backend, int workers = 1)
     {
         string repository = FindRepository();
         string directory = Path.Combine(Path.GetTempPath(), $"particlelife-parity-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         try
         {
-            ExperimentDefinition original = CreateExperiment(scenario, repository).WithBackend(backend);
+            ExperimentDefinition original = CreateExperiment(scenario, repository).WithBackend(backend, workers);
             string inputPath = Path.Combine(directory, "experiment.json");
             string reportPath = Path.Combine(directory, "run.json");
             ExperimentStorage.SaveNew(inputPath, original);
             ExperimentDefinition saved = ExperimentFile.Load(inputPath);
             Assert.Equal(ExperimentFile.Serialize(original), ExperimentFile.Serialize(saved));
 
-            PlaybackController controller = new(saved, diagnosticEverySteps: 7);
+            using PlaybackController controller = new(saved, diagnosticEverySteps: 7);
             ExercisePlayback(controller, 120);
             await RunCli(repository, inputPath, reportPath, 120);
 
@@ -50,6 +57,11 @@ public sealed class CliParityTests(ITestOutputHelper output)
             Assert.Equal(120, controller.Observe().Step);
             Assert.Equal(backend, controller.LastExecution!.Value.ActualBackend);
             JsonElement execution = report.RootElement.GetProperty("execution");
+            Assert.Equal(workers, execution.GetProperty("savedWorkerCount").GetInt32());
+            Assert.Equal(workers, execution.GetProperty("configuredWorkerCount").GetInt32());
+            Assert.Equal(workers, execution.GetProperty("lastCompletedStep").GetProperty("actualWorkerCount").GetInt32());
+            Assert.Equal(DiagnosticSampler.AlgorithmVersion,
+                report.RootElement.GetProperty("diagnostics").GetProperty("algorithmVersion").GetString());
             string search = ExperimentFile.GetNeighbourSearchVersion(backend);
             Assert.Equal(search, execution.GetProperty("savedNeighbourSearchVersion").GetString());
             Assert.Equal(search, execution.GetProperty("requestedNeighbourSearchVersion").GetString());

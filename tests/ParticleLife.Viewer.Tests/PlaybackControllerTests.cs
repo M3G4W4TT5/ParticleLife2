@@ -240,6 +240,61 @@ public sealed class PlaybackControllerTests
     }
 
     [Fact]
+    public void ReusableMeasurementsMatchReferenceAfterResetAndDifferentPopulationReplacement()
+    {
+        PlaybackController controller = new(PresetGenerator.Create(PresetKind.Chains, 64, 3, 8), diagnosticEverySteps: 1);
+        for (int i = 0; i < 3; i++)
+        {
+            controller.SingleStep();
+            Assert.Equal(Diagnostics.Sample(controller.Observe(), controller.Experiment.Parameters.Cutoff), controller.LatestDiagnostic);
+        }
+
+        controller.Reset();
+        Assert.Null(controller.LatestDiagnostic);
+        controller.SingleStep();
+        Assert.Equal(Diagnostics.Sample(controller.Observe(), controller.Experiment.Parameters.Cutoff), controller.LatestDiagnostic);
+        foreach (int count in new[] { 7, 128, 0, 24 })
+        {
+            controller.ReplaceExperiment(PresetGenerator.Create(PresetKind.Random, count, 3, 9,
+                new ModelParameters { Cutoff = 0.125 }));
+            Assert.Null(controller.LatestDiagnostic);
+            controller.SingleStep();
+            Assert.Equal(Diagnostics.Sample(controller.Observe(), 0.125), controller.LatestDiagnostic);
+            Assert.Equal(1, controller.LatestDiagnostic!.Step);
+        }
+    }
+
+    [Fact]
+    public void WarmScheduledMeasurementsAllocateOnlyOneResultPerCompletedStep()
+    {
+        PlaybackController small = new(SmallExperiment(), diagnosticEverySteps: 1);
+        PlaybackController larger = new(PresetGenerator.Create(PresetKind.Chains, 128, 3, 11), diagnosticEverySteps: 1);
+        for (int i = 0; i < 64; i++)
+        {
+            small.SingleStep();
+            larger.SingleStep();
+        }
+
+        long startSmall = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 32; i++)
+        {
+            small.SingleStep();
+        }
+
+        long smallBytes = GC.GetAllocatedBytesForCurrentThread() - startSmall;
+        long startLarger = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 32; i++)
+        {
+            larger.SingleStep();
+        }
+
+        long largerBytes = GC.GetAllocatedBytesForCurrentThread() - startLarger;
+        Assert.InRange(smallBytes / 32, 1, 128);
+        Assert.Equal(smallBytes, largerBytes);
+        Assert.Equal(larger.Observe().Step, larger.LatestDiagnostic!.Step);
+    }
+
+    [Fact]
     public void FiniteOffWorldParticlesRemainMembersRegardlessOfMapping()
     {
         ModelParameters parameters = new() { ForceScale = 0, WallStrength = 0, DampingHalfLife = null };
@@ -281,6 +336,21 @@ public sealed class PlaybackControllerTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new PlaybackController(SmallExperiment(), maxStepsPerFrame: 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => new PlaybackController(SmallExperiment(), diagnosticEverySteps: -1));
+    }
+
+    [Fact]
+    public void DisposalKeepsCompletedStateReadableButPreventsFurtherWork()
+    {
+        PlaybackController controller = new(SmallExperiment());
+        controller.SingleStep();
+        ParticleSnapshot completed = Copy(controller.Observe());
+        controller.Dispose();
+        controller.Dispose();
+        SameState(completed, controller.Observe());
+        Assert.Throws<ObjectDisposedException>(controller.SingleStep);
+        Assert.Throws<ObjectDisposedException>(controller.Reset);
+        Assert.Throws<ObjectDisposedException>(() => controller.AdvanceFrame(0));
+        Assert.Throws<ObjectDisposedException>(() => controller.ReplaceExperiment(SmallExperiment()));
     }
 
     private static ExperimentDefinition SmallExperiment() => PresetGenerator.Create(PresetKind.Random, 8, 3, 42);

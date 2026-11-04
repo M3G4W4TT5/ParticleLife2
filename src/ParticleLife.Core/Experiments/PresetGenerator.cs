@@ -36,10 +36,12 @@ public static class PresetGenerator
     /// <param name="parameters">Optional model parameters; null selects the migration defaults.</param>
     /// <param name="timeStep">Positive finite step duration in reduced time units.</param>
     /// <param name="backend">Intended neighbour search; the API defaults to the direct reference.</param>
+    /// <param name="workerCount">Explicit grid workers, 1..8 including the caller; direct requires one.</param>
     /// <returns>A validated experiment containing actual initial state and matrix values.</returns>
     /// <exception cref="ArgumentException">Counts, preset, parameters or timestep are invalid.</exception>
     public static ExperimentDefinition Create(PresetKind kind, int particleCount = 500, int speciesCount = 7,
-        int seed = 1, ModelParameters? parameters = null, double timeStep = 1d / 144, ForceBackend backend = ForceBackend.Direct)
+        int seed = 1, ModelParameters? parameters = null, double timeStep = 1d / 144, ForceBackend backend = ForceBackend.Direct,
+        int workerCount = 1)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(particleCount);
         ArgumentOutOfRangeException.ThrowIfLessThan(speciesCount, 1);
@@ -52,6 +54,8 @@ public static class PresetGenerator
         {
             throw new ArgumentOutOfRangeException(nameof(backend));
         }
+
+        ForceWorkerConfiguration.Validate(backend, workerCount);
 
         parameters ??= new ModelParameters();
         parameters.Validate();
@@ -85,6 +89,6 @@ public static class PresetGenerator
 
         return new ExperimentDefinition(kind.ToString().ToLowerInvariant(), parameters,
             new InteractionMatrix(speciesCount, values), new ParticleSnapshot(ids, positions, velocities, species), timeStep,
-            new GeneratorMetadata($"uniform-{kind.ToString().ToLowerInvariant()}", "1", seed, RuntimeInformation.FrameworkDescription), backend);
+            new GeneratorMetadata($"uniform-{kind.ToString().ToLowerInvariant()}", "1", seed, RuntimeInformation.FrameworkDescription), backend, workerCount);
     }
 }

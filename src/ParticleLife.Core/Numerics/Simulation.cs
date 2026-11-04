@@ -3,7 +3,7 @@ using ParticleLife.Core.State;
 
 namespace ParticleLife.Core.Numerics;
 
-/// <summary>Owns reusable state and work buffers for a serial, fixed-timestep Particle Life simulation.</summary>
+/// <summary>Owns reusable state and work buffers for a fixed-timestep Particle Life simulation.</summary>
 /// <remarks>
 /// <para>Simulation is independent of wall-clock and rendering time. Each step first evaluates all
 /// forces from complete input, then integrates into separate outputs, then swaps completed buffers.
@@ -11,8 +11,11 @@ namespace ParticleLife.Core.Numerics;
 /// <para>Steps and resets invalidate prior observations. Do not read or mutate a simulation concurrently.
 /// Warmed successful steps and resets at established capacity allocate no managed memory. Construction,
 /// index initialization, capacity growth and explicit snapshots allocate. There is no randomness in the stepping algorithm.</para>
+/// <para>One worker selects serial execution. Additional workers evaluate disjoint receivers from
+/// the same packed input and join before integration or publication. Dispose parallel simulations
+/// between steps to join their persistent threads; hosts still observe state sequentially.</para>
 /// </remarks>
-public sealed class Simulation
+public sealed class Simulation : IDisposable
 {
     private readonly IForceEvaluator evaluator;
     private readonly double dampingFactor;
@@ -26,32 +29,41 @@ public sealed class Simulation
     private int count;
     private double time;
     private long step;
+    private bool disposed;
 
-    /// <summary>Copies initial state and selects a serial force search with reusable state buffers.</summary>
+    /// <summary>Copies initial state and selects exact force search with explicit workers and reusable buffers.</summary>
     /// <param name="initial">Owned initial state or checkpoint; never mutated by the simulation.</param>
     /// <param name="parameters">Immutable model parameters in reduced units.</param>
     /// <param name="matrix">Immutable directed species coefficients.</param>
     /// <param name="timeStep">Positive finite fixed timestep in reduced time units.</param>
     /// <param name="backend">Neighbour search; the API default retains the direct reference implementation.</param>
+    /// <param name="workerCount">Explicit grid workers including the caller, 1..8; direct requires one.</param>
     /// <exception cref="ArgumentNullException">An argument object is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A parameter or timestep is invalid.</exception>
     /// <exception cref="ArgumentException">An initial species is outside the matrix.</exception>
     public Simulation(ParticleSnapshot initial, ModelParameters parameters, InteractionMatrix matrix, double timeStep,
-        ForceBackend backend = ForceBackend.Direct)
+        ForceBackend backend = ForceBackend.Direct, int workerCount = 1)
     {
         ArgumentNullException.ThrowIfNull(initial);
-        evaluator = backend switch
-        {
-            ForceBackend.Direct => new DirectForceEvaluator(parameters, matrix),
-            ForceBackend.UniformGrid => new UniformGridForceEvaluator(parameters, matrix),
-            _ => throw new ArgumentOutOfRangeException(nameof(backend), "Unsupported neighbour-search backend.")
-        };
-        Backend = backend;
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentNullException.ThrowIfNull(matrix);
+        ForceWorkerConfiguration.Validate(backend, workerCount);
+        parameters.Validate();
+        DirectForceEvaluator.ValidateState(initial.Observe(), matrix.SpeciesCount);
         dampingFactor = SemiImplicitEuler.DampingFactor(timeStep, parameters.DampingHalfLife);
+        Backend = backend;
+        WorkerCount = workerCount;
         Parameters = parameters;
         Matrix = matrix;
         TimeStep = timeStep;
         Reset(initial);
+        // Establish state storage before starting owned background workers.
+        evaluator = backend switch
+        {
+            ForceBackend.Direct => new DirectForceEvaluator(parameters, matrix),
+            ForceBackend.UniformGrid => new UniformGridForceEvaluator(parameters, matrix, workerCount),
+            _ => throw new ArgumentOutOfRangeException(nameof(backend), "Unsupported neighbour-search backend.")
+        };
     }
 
     /// <summary>Gets the fixed timestep in reduced time units.</summary>
@@ -65,6 +77,9 @@ public sealed class Simulation
 
     /// <summary>Gets the requested neighbour search; model equations and integration are unchanged.</summary>
     public ForceBackend Backend { get; }
+
+    /// <summary>Gets configured receiver workers, including the caller; fallback may execute with one.</summary>
+    public int WorkerCount { get; }
 
     /// <summary>Gets counts from the last successful step's input, or zero counts after construction/reset.</summary>
     public ForceEvaluationStatistics LastStatistics { get; private set; }
@@ -100,6 +115,7 @@ public sealed class Simulation
     /// <exception cref="ArgumentException">A species is outside the interaction matrix.</exception>
     public void Reset(ParticleSnapshot snapshot)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(snapshot);
         DirectForceEvaluator.ValidateState(snapshot.Observe(), Matrix.SpeciesCount);
         if (snapshot.Count > positions.Length)
@@ -135,6 +151,7 @@ public sealed class Simulation
     /// <exception cref="ArithmeticException">Forces, state or time overflow, time cannot advance in double precision, or the step count is exhausted.</exception>
     public void Step()
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         double nextTime = time + TimeStep;
         if (!double.IsFinite(nextTime) || nextTime <= time || step == long.MaxValue)
         {
@@ -158,6 +175,18 @@ public sealed class Simulation
             {
                 AccumulationFallbackSteps++;
             }
+        }
+    }
+
+    /// <summary>Joins and releases owned worker threads and synchronization resources.</summary>
+    /// <remarks>Call between steps, never concurrently with evaluation or observation. Repeated disposal
+    /// is harmless. The completed state remains readable, but stepping and resetting are prohibited.</remarks>
+    public void Dispose()
+    {
+        if (!disposed)
+        {
+            (evaluator as IDisposable)?.Dispose();
+            disposed = true;
         }
     }
 }

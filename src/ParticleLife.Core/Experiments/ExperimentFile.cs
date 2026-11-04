@@ -12,7 +12,9 @@ namespace ParticleLife.Core.Experiments;
 /// entry, and complete initial state. Unknown fields, unsupported versions, omitted required fields,
 /// non-finite numbers and invalid model inputs are rejected. JSON doubles round-trip without rounding
 /// to display precision. Schema 1 remains readable with its original direct-solver meaning.
-/// Saving always writes schema 2. This is an initial-condition format; run reports are separate documents.
+/// Saving always writes schema 2 with an explicit workerCount. Older schema-2 files without this
+/// optional field retain serial execution. Search conventions remain unchanged by packed storage.
+/// This is an initial-condition format; run reports are separate documents.
 /// </remarks>
 public static class ExperimentFile
 {
@@ -30,7 +32,7 @@ public static class ExperimentFile
     /// <summary>Gets the unchanged double-precision damped semi-implicit Euler integration identifier.</summary>
     public const string IntegratorVersion = "damped-semi-implicit-euler/1";
 
-    /// <summary>Gets the serial neighbour-search identifier for an intended or actual backend.</summary>
+    /// <summary>Gets the neighbour-search convention for an intended or actual backend, independent of workers.</summary>
     /// <param name="backend">Direct or uniform-grid enumeration.</param>
     /// <returns>A versioned search identifier independent of the physical model and integrator.</returns>
     /// <exception cref="ArgumentOutOfRangeException">The backend is unsupported.</exception>
@@ -38,6 +40,18 @@ public static class ExperimentFile
     {
         ForceBackend.Direct => "direct/1",
         ForceBackend.UniformGrid => "uniform-grid/1",
+        _ => throw new ArgumentOutOfRangeException(nameof(backend))
+    };
+
+    /// <summary>Identifies the current implementation layout without changing the saved search convention.</summary>
+    /// <param name="backend">The actual or requested backend.</param>
+    /// <returns>A versioned implementation identifier for runtime provenance.</returns>
+    /// <remarks>The grid retains its nine-cell and ascending in-cell enumeration contract; packing changes
+    /// storage, not the meaning of schema-2 uniform-grid/1. Worker scheduling owns disjoint receivers.</remarks>
+    public static string GetForceAlgorithmVersion(ForceBackend backend) => backend switch
+    {
+        ForceBackend.Direct => "direct/1",
+        ForceBackend.UniformGrid => UniformGridForceEvaluator.AlgorithmVersion,
         _ => throw new ArgumentOutOfRangeException(nameof(backend))
     };
 
@@ -79,7 +93,7 @@ public static class ExperimentFile
             experiment.Name, experiment.TimeStep, ParameterData.From(experiment.Parameters),
             new MatrixData(experiment.Matrix.SpeciesCount, experiment.Matrix.Values.ToArray()),
             new StateData(initial.Ids.ToArray(), ToPoints(initial.Positions), ToPoints(initial.Velocities), initial.Species.ToArray()),
-            experiment.Generator), Options);
+            experiment.Generator, experiment.WorkerCount), Options);
     }
 
     /// <summary>Parses and validates a versioned experiment; it never runs its generator.</summary>
@@ -129,7 +143,7 @@ public static class ExperimentFile
                 _ => throw new NotSupportedException("Unsupported experiment neighbour-search convention.")
             };
             return CreateDefinition(data.Name, data.Parameters, data.Matrix, data.InitialState, data.TimeStep,
-                data.Generator, backend);
+                data.Generator, backend, data.WorkerCount);
         }
 
         throw new NotSupportedException("Unsupported experiment schema.");
@@ -144,13 +158,13 @@ public static class ExperimentFile
     }
 
     private static ExperimentDefinition CreateDefinition(string name, ParameterData parameters, MatrixData matrix,
-        StateData state, double timeStep, GeneratorMetadata generator, ForceBackend backend)
+        StateData state, double timeStep, GeneratorMetadata generator, ForceBackend backend, int workerCount = 1)
     {
         // Constructor contracts additionally validate lengths, identities, species and finite state.
         return new ExperimentDefinition(name, parameters.ToParameters(),
             new InteractionMatrix(matrix.SpeciesCount, matrix.Values),
             new ParticleSnapshot(state.Ids, ToVectors(state.Positions), ToVectors(state.Velocities), state.Species),
-            timeStep, generator, backend);
+            timeStep, generator, backend, workerCount);
     }
 
     private sealed record FileDataV1(int SchemaVersion, string ModelVersion, string SolverVersion, string Units,
@@ -159,7 +173,7 @@ public static class ExperimentFile
 
     private sealed record FileDataV2(int SchemaVersion, string ModelVersion, string IntegratorVersion, string NeighbourSearchVersion, string Units,
         string Boundary, string Name, double TimeStep, ParameterData Parameters, MatrixData Matrix,
-        StateData InitialState, GeneratorMetadata Generator);
+        StateData InitialState, GeneratorMetadata Generator, int WorkerCount = 1);
 
     private sealed record MatrixData(int SpeciesCount, double[] Values);
 

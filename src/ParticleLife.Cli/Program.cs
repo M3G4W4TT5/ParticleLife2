@@ -29,7 +29,7 @@ internal static class CommandLine
             switch (args[0])
             {
                 case "create":
-                    Create(ParseOptions(args, 1, ["preset", "particles", "species", "seed", "dt", "backend", "output"]));
+                    Create(ParseOptions(args, 1, ["preset", "particles", "species", "seed", "dt", "backend", "workers", "output"]));
                     break;
                 case "validate":
                     if (args.Length != 2)
@@ -46,7 +46,7 @@ internal static class CommandLine
                         throw new ArgumentException("Usage: run <experiment.json> --steps N [--sample-every N] [--cluster-distance R] [--output result.json]");
                     }
 
-                    RunExperiment(args[1], ParseOptions(args, 2, ["steps", "sample-every", "cluster-distance", "backend", "output"]));
+                    RunExperiment(args[1], ParseOptions(args, 2, ["steps", "sample-every", "cluster-distance", "backend", "workers", "output"]));
                     break;
                 default:
                     throw new ArgumentException($"Unknown command '{args[0]}'. Use --help.");
@@ -75,7 +75,8 @@ internal static class CommandLine
         string output = Required(options, "output");
         ExperimentDefinition experiment = PresetGenerator.Create(preset,
             Integer(options, "particles", 500), Integer(options, "species", 7), Integer(options, "seed", 1),
-            timeStep: Number(options, "dt", 1d / 144), backend: ParseBackend(Get(options, "backend", "grid")));
+            timeStep: Number(options, "dt", 1d / 144), backend: ParseBackend(Get(options, "backend", "grid")),
+            workerCount: Integer(options, "workers", 1));
         PrepareOutput(output);
         WriteNewOutput(output, ExperimentFile.Serialize(experiment));
         Console.WriteLine($"Saved {experiment.Name}: {experiment.InitialState.Count} particles, {experiment.Matrix.SpeciesCount} species to {Path.GetFullPath(output)}");
@@ -92,6 +93,7 @@ internal static class CommandLine
         string inputText = ReadExperimentText(inputBytes);
         ExperimentDefinition experiment = ExperimentFile.Deserialize(inputText);
         ForceBackend? backendOverride = options.TryGetValue("backend", out string? backendText) ? ParseBackend(backendText) : null;
+        int? workerOverride = options.ContainsKey("workers") ? Integer(options, "workers", 1) : null;
         double clusterDistance = Number(options, "cluster-distance", experiment.Parameters.Cutoff);
         if (!double.IsFinite(clusterDistance) || clusterDistance <= 0)
         {
@@ -103,12 +105,15 @@ internal static class CommandLine
             PrepareOutput(output);
         }
 
-        Simulation simulation = experiment.CreateSimulation(backendOverride);
+        using Simulation simulation = experiment.CreateSimulation(backendOverride, workerOverride);
+        DiagnosticSampler diagnostics = new();
         List<DiagnosticSample> samples = [];
+        List<object> diagnosticFailures = [];
+        long diagnosticFallbackSamples = 0;
         DateTimeOffset started = DateTimeOffset.UtcNow;
         if (sampleEvery > 0)
         {
-            samples.Add(Diagnostics.Sample(simulation.Observe(), clusterDistance));
+            SampleCompletedState();
         }
 
         Stopwatch elapsed = Stopwatch.StartNew();
@@ -118,7 +123,7 @@ internal static class CommandLine
             // Sampling is outside Step; it must never change the equations or output state.
             if (sampleEvery > 0 && ((i + 1) % sampleEvery == 0 || i + 1 == steps))
             {
-                samples.Add(Diagnostics.Sample(simulation.Observe(), clusterDistance));
+                SampleCompletedState();
             }
         }
 
@@ -138,6 +143,10 @@ internal static class CommandLine
                 integratorVersion = ExperimentFile.IntegratorVersion,
                 savedNeighbourSearchVersion = ExperimentFile.GetNeighbourSearchVersion(experiment.Backend),
                 requestedNeighbourSearchVersion = ExperimentFile.GetNeighbourSearchVersion(simulation.Backend),
+                requestedForceAlgorithmVersion = ExperimentFile.GetForceAlgorithmVersion(simulation.Backend),
+                savedWorkerCount = experiment.WorkerCount,
+                configuredWorkerCount = simulation.WorkerCount,
+                workerCountOverride = workerOverride,
                 backendOverride = backendOverride is ForceBackend selected ? ExperimentFile.GetNeighbourSearchVersion(selected) : null,
                 directFallbackSteps = simulation.DirectFallbackSteps,
                 directFallbackByReason = new
@@ -148,11 +157,20 @@ internal static class CommandLine
                 lastCompletedStep = simulation.LastExecution is ForceExecution execution ? new
                 {
                     actualNeighbourSearchVersion = ExperimentFile.GetNeighbourSearchVersion(execution.ActualBackend),
+                    actualForceAlgorithmVersion = ExperimentFile.GetForceAlgorithmVersion(execution.ActualBackend),
+                    execution.ActualWorkerCount,
                     fallbackReason = execution.FallbackReason.ToString(),
                     index = execution.Index
                 } : null
             },
-            environment = CaptureEnvironment(),
+            diagnostics = new
+            {
+                algorithmVersion = DiagnosticSampler.AlgorithmVersion,
+                directFallbackSamples = diagnosticFallbackSamples,
+                lastSuccessfulExecution = samples.Count > 0 ? (DiagnosticExecution?)diagnostics.LastExecution : null,
+                failures = diagnosticFailures
+            },
+            environment = CaptureEnvironment(simulation.WorkerCount),
             requestedSteps = steps,
             sampleEvery,
             clusterDistance,
@@ -192,9 +210,26 @@ internal static class CommandLine
         {
             Console.WriteLine($"Saved run report: {Path.GetFullPath(output)}");
         }
+
+        void SampleCompletedState()
+        {
+            try
+            {
+                samples.Add(diagnostics.Sample(simulation.Observe(), clusterDistance));
+                if (diagnostics.LastExecution.FallbackReason != DiagnosticFallbackReason.None)
+                {
+                    diagnosticFallbackSamples++;
+                }
+            }
+            catch (Exception error) when (error is InvalidOperationException or ArithmeticException)
+            {
+                // Optional measurement failure must not suppress otherwise valid numerical steps.
+                diagnosticFailures.Add(new { simulation.Observe().Time, simulation.Observe().Step, error.Message });
+            }
+        }
     }
 
-    private static object CaptureEnvironment()
+    private static object CaptureEnvironment(int configuredWorkerCount)
     {
         string checkoutStatus = ReadCommand("git", "status", "--porcelain");
         return new
@@ -204,7 +239,7 @@ internal static class CommandLine
             os = RuntimeInformation.OSDescription,
             architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             logicalProcessors = Environment.ProcessorCount,
-            simulationThreads = 1,
+            simulationThreads = configuredWorkerCount,
             coreVersion = typeof(Simulation).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
             coreAssemblySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(Simulation).Assembly.Location))),
             checkoutCommitAtRun = ReadCommand("git", "rev-parse", "HEAD"),
@@ -314,22 +349,23 @@ internal static class CommandLine
     }
 
     private static void PrintHelp() => Console.WriteLine("""
-        Particle Life 2 — headless, serial, double-precision experiments
+        Particle Life 2 — headless, double-precision experiments
 
         create --output experiment.json [--preset random|chains|snakes]
                [--particles 500] [--species 7] [--seed 1] [--dt 0.006944444444444444]
-               [--backend grid|direct]
+               [--backend grid|direct] [--workers 1]
         validate experiment.json
         run experiment.json --steps N [--sample-every 100] [--cluster-distance 0.1]
-                            [--backend direct|grid] [--output result.json]
+                            [--backend direct|grid] [--workers 1] [--output result.json]
 
         JSON experiments contain actual initial state, directed matrix values, parameters and provenance.
         New CLI experiments default to grid search. Runs honour the saved backend unless overridden.
+        Grid workers are explicit (1..8 including the caller); direct requires one. Default is serial.
         Legacy schema-1 experiments retain direct search. Reports retain source and effective settings,
         last actual search and direct fallback counts for coordinate or accumulation range limits.
         Edit validated JSON parameters for other cutoffs, soft walls or disabled damping (null half-life).
         Output files must not already exist. Reports include the original experiment and final state;
-        reports are not checkpoint inputs. Set --sample-every 0 to disable optional O(N^2) diagnostics.
+        reports are not checkpoint inputs. Set --sample-every 0 to disable exact spatial diagnostics.
         Seeds alone do not guarantee identical generation or trajectories across runtimes.
         """);
 }

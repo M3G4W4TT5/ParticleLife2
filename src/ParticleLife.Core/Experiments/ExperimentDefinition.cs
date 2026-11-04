@@ -20,9 +20,11 @@ public sealed class ExperimentDefinition
     /// <param name="timeStep">Positive finite integration timestep in reduced time units.</param>
     /// <param name="generator">Generator identity, version, seed and runtime provenance.</param>
     /// <param name="backend">Intended neighbour search; omitted values retain the direct reference behaviour.</param>
+    /// <param name="workerCount">Explicit grid workers, including the caller (1..8); direct requires one.</param>
     /// <exception cref="ArgumentException">Metadata, species, parameters or initial time are invalid.</exception>
     public ExperimentDefinition(string name, ModelParameters parameters, InteractionMatrix matrix,
-        ParticleSnapshot initialState, double timeStep, GeneratorMetadata generator, ForceBackend backend = ForceBackend.Direct)
+        ParticleSnapshot initialState, double timeStep, GeneratorMetadata generator, ForceBackend backend = ForceBackend.Direct,
+        int workerCount = 1)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(parameters);
@@ -37,6 +39,8 @@ public sealed class ExperimentDefinition
         {
             throw new ArgumentOutOfRangeException(nameof(backend));
         }
+
+        ForceWorkerConfiguration.Validate(backend, workerCount);
 
         _ = SemiImplicitEuler.DampingFactor(timeStep, parameters.DampingHalfLife);
         if (initialState.Time != 0 || initialState.Step != 0)
@@ -59,6 +63,7 @@ public sealed class ExperimentDefinition
         TimeStep = timeStep;
         Generator = generator;
         Backend = backend;
+        WorkerCount = workerCount;
     }
 
     /// <summary>Gets the experiment's human-readable name.</summary>
@@ -86,18 +91,29 @@ public sealed class ExperimentDefinition
     /// for actual successful execution; the intended configuration remains unchanged.</remarks>
     public ForceBackend Backend { get; }
 
+    /// <summary>Gets the saved CPU worker count, including the caller; one means serial execution.</summary>
+    /// <remarks>This is explicit configuration, not a timing-dependent choice. Schema-1 and older
+    /// schema-2 files default to one worker. Direct fallback always evaluates serially.</remarks>
+    public int WorkerCount { get; }
+
     /// <summary>Creates an experiment differing only in its intended neighbour search.</summary>
     /// <param name="backend">Direct reference or uniform-grid search.</param>
+    /// <param name="workerCount">Explicit override, or null to retain workers for the same backend.
+    /// Changing backend without a worker override selects one worker.</param>
     /// <returns>A validated experiment retaining the same owned immutable initial values and provenance.</returns>
     /// <exception cref="ArgumentOutOfRangeException">The backend is unsupported.</exception>
-    public ExperimentDefinition WithBackend(ForceBackend backend) =>
-        new(Name, Parameters, Matrix, InitialState, TimeStep, Generator, backend);
+    public ExperimentDefinition WithBackend(ForceBackend backend, int? workerCount = null) =>
+        new(Name, Parameters, Matrix, InitialState, TimeStep, Generator, backend,
+            workerCount ?? (backend == Backend ? WorkerCount : 1));
 
     /// <summary>Creates an independent simulation with owned reusable buffers.</summary>
     /// <param name="backendOverride">Explicit execution override, or null to honour the saved configuration.</param>
+    /// <param name="workerCountOverride">Explicit worker override, or null to honour saved workers
+    /// when retaining the backend; a changed backend defaults to one.</param>
     /// <returns>A simulation at the saved initial conditions; construction allocates outside the stepping loop.</returns>
     /// <remarks>An override does not mutate this experiment. Hosts must report the override alongside
     /// the source configuration, or save <see cref="WithBackend"/> when persisting the effective experiment.</remarks>
-    public Simulation CreateSimulation(ForceBackend? backendOverride = null) =>
-        new(InitialState, Parameters, Matrix, TimeStep, backendOverride ?? Backend);
+    public Simulation CreateSimulation(ForceBackend? backendOverride = null, int? workerCountOverride = null) =>
+        new(InitialState, Parameters, Matrix, TimeStep, backendOverride ?? Backend,
+            workerCountOverride ?? (backendOverride is null || backendOverride == Backend ? WorkerCount : 1));
 }

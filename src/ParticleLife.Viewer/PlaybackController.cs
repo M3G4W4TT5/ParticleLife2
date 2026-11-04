@@ -12,13 +12,19 @@ namespace ParticleLife.Viewer;
 /// Slow playback therefore falls behind wall time rather than changing the numerical method.</para>
 /// <para>Call input operations between frames, then advance, then observe for immediate rendering.
 /// This object is not thread-safe. Observations must not survive advancement, reset or replacement.
-/// Warm advancement without a scheduled diagnostic allocates no managed memory. Measurements are
-/// quadratic and allocate; their cadence counts completed simulation steps, not rendered frames.</para>
+/// Warm advancement without a scheduled diagnostic allocates no managed memory. Measurements reuse
+/// private spatial/component storage and allocate only their immutable result after capacity is established;
+/// worst-case connectivity remains quadratic. Cadence counts completed simulation steps, not rendered frames.</para>
+/// <para>The controller owns its simulation, including any configured force workers. Dispose it between
+/// frames to join those workers. Experiment replacement disposes the previous simulation only after
+/// a replacement has constructed successfully. Read-only state remains observable after disposal.</para>
 /// </remarks>
-public sealed class PlaybackController
+public sealed class PlaybackController : IDisposable
 {
     private Simulation simulation;
+    private readonly DiagnosticSampler diagnosticSampler = new();
     private int diagnosticEverySteps;
+    private bool disposed;
 
     /// <summary>Creates playback at the exact saved initial conditions, initially running.</summary>
     /// <param name="experiment">Validated experiment with initial time and step zero.</param>
@@ -68,6 +74,9 @@ public sealed class PlaybackController
     /// <summary>Gets the latest sampled state, including its own simulation time and step, or null if unavailable.</summary>
     public DiagnosticSample? LatestDiagnostic { get; private set; }
 
+    /// <summary>Gets spatial-query/fallback and storage metadata for <see cref="LatestDiagnostic"/>, or null when cleared.</summary>
+    public DiagnosticExecution? LatestDiagnosticExecution { get; private set; }
+
     /// <summary>Gets the last diagnostic failure message, or null after successful sampling or clearing.</summary>
     /// <remarks>A measurement failure does not change the simulated trajectory or playback state.</remarks>
     public string? DiagnosticError { get; private set; }
@@ -109,6 +118,7 @@ public sealed class PlaybackController
     /// <exception cref="ArithmeticException">The numerical step cannot complete within its valid range.</exception>
     public void SingleStep()
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         IsPaused = true;
         PendingPlaybackSeconds = 0;
         CompleteStep();
@@ -119,6 +129,7 @@ public sealed class PlaybackController
     /// stale measurements. No generator is run; the saved matrix and model remain unchanged.</remarks>
     public void Reset()
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         simulation.Reset(Experiment.InitialState);
         ClearPlayback();
     }
@@ -131,11 +142,14 @@ public sealed class PlaybackController
     /// <exception cref="ArgumentException">The replacement is null or cannot construct a valid simulation.</exception>
     public void ReplaceExperiment(ExperimentDefinition experiment)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(experiment);
         Simulation replacement = experiment.CreateSimulation();
+        Simulation previous = simulation;
         simulation = replacement;
         Experiment = experiment;
         ClearPlayback();
+        previous.Dispose();
     }
 
     /// <summary>Consumes elapsed playback time using only the experiment's fixed numerical timestep.</summary>
@@ -150,6 +164,7 @@ public sealed class PlaybackController
     /// <exception cref="ArithmeticException">A numerical step fails; the last completed state is preserved.</exception>
     public int AdvanceFrame(double elapsedSeconds)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         if (!double.IsFinite(elapsedSeconds) || elapsedSeconds < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(elapsedSeconds), "Elapsed playback time must be finite and nonnegative.");
@@ -194,6 +209,18 @@ public sealed class PlaybackController
         return completed;
     }
 
+    /// <summary>Releases the owned simulation and joins its persistent force workers, if configured.</summary>
+    /// <remarks>Call only between frames. Disposal is idempotent; subsequent advancement, reset and
+    /// experiment replacement throw <see cref="ObjectDisposedException"/>. Completed state remains readable.</remarks>
+    public void Dispose()
+    {
+        if (!disposed)
+        {
+            simulation.Dispose();
+            disposed = true;
+        }
+    }
+
     /// <summary>Completes one step, then samples only at the configured simulation-step cadence.</summary>
     /// <remarks>The observation is scoped entirely after stepping and is never retained. Diagnostic
     /// failures cannot undo a successful step and are reported separately from numerical failure.</remarks>
@@ -205,12 +232,14 @@ public sealed class PlaybackController
         {
             try
             {
-                LatestDiagnostic = Diagnostics.Sample(state, Experiment.Parameters.Cutoff);
+                LatestDiagnostic = diagnosticSampler.Sample(state, Experiment.Parameters.Cutoff);
+                LatestDiagnosticExecution = diagnosticSampler.LastExecution;
                 DiagnosticError = null;
             }
             catch (InvalidOperationException error)
             {
                 LatestDiagnostic = null;
+                LatestDiagnosticExecution = null;
                 DiagnosticError = error.Message;
             }
         }
@@ -226,6 +255,7 @@ public sealed class PlaybackController
     private void ClearDiagnostic()
     {
         LatestDiagnostic = null;
+        LatestDiagnosticExecution = null;
         DiagnosticError = null;
     }
 }

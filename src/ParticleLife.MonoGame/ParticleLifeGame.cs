@@ -93,6 +93,7 @@ internal sealed class ParticleLifeGame : Game
         Console.WriteLine($"Experiment: {controller.Experiment.Name}; {controller.Experiment.InitialState.Count} particles; " +
             $"dt={controller.Experiment.TimeStep:G17}; seed={controller.Experiment.Generator.Seed}; diagnostics every {controller.DiagnosticEverySteps} steps.");
         Console.WriteLine($"Search requested: {ExperimentFile.GetNeighbourSearchVersion(controller.Experiment.Backend)}; " +
+            $"workers: {controller.Experiment.WorkerCount}; algorithm: {ExperimentFile.GetForceAlgorithmVersion(controller.Experiment.Backend)}; " +
             $"startup override: {options.BackendOverride?.ToString() ?? "none"}; integrator: {ExperimentFile.IntegratorVersion}; model: {ExperimentFile.ModelVersion}.");
         Console.WriteLine($"S saves initial experiments under {options.SaveDirectory}. H shows controls; F9 prints timings.");
         previousTimestamp = Stopwatch.GetTimestamp();
@@ -237,7 +238,7 @@ internal sealed class ParticleLifeGame : Game
                 PresetKind kind = key == Keys.D1 ? PresetKind.Random : key == Keys.D2 ? PresetKind.Chains : PresetKind.Snakes;
                 ExperimentDefinition current = controller.Experiment;
                 Replace(PresetGenerator.Create(kind, current.InitialState.Count, current.Matrix.SpeciesCount,
-                    NewSeed(), current.Parameters, current.TimeStep, current.Backend), $"Selected {kind}: new state and matrix, same model and counts.");
+                    NewSeed(), current.Parameters, current.TimeStep, current.Backend, current.WorkerCount), $"Selected {kind}: new state and matrix, same model and counts.");
                 return true;
             case Keys.S:
                 string path = Path.Combine(options.SaveDirectory, $"experiment-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.json");
@@ -445,6 +446,10 @@ internal sealed class ParticleLifeGame : Game
             : execution.FallbackReason != GridFallbackReason.None ? "DIRECT FALLBACK"
             : execution.ActualBackend == ForceBackend.UniformGrid ? "GRID" : "DIRECT";
         Label($"SEARCH {requested} / {actual}", Accent);
+        if (experiment.WorkerCount > 1)
+        {
+            Label($"WORKERS {experiment.WorkerCount} / ACTUAL {controller.LastExecution?.ActualWorkerCount.ToString() ?? "-"}", Muted);
+        }
         Label($"{framesPerSecond:F0} FPS / UPDATE {meanUpdateMilliseconds:F2} MS", Muted);
         Label($"DROPPED {controller.DroppedPlaybackSeconds:F3} S", controller.DroppedPlaybackSeconds > 0 ? new Color(245, 203, 100) : Muted);
         if (wide)
@@ -504,6 +509,7 @@ internal sealed class ParticleLifeGame : Game
         $"controller update mean {meanUpdateMilliseconds:F3} ms, max {lastPeakUpdateMilliseconds:F3} ms (includes scheduled diagnostics); " +
         $"step {controller.Observe().Step}; dropped playback {controller.DroppedPlaybackSeconds:F6} s. CPU update excludes rendering/present. " +
         $"Search requested {controller.Experiment.Backend}; actual {controller.LastExecution?.ActualBackend.ToString() ?? "unstepped"}; " +
+        $"workers configured {controller.Experiment.WorkerCount}; actual {controller.LastExecution?.ActualWorkerCount.ToString() ?? "unstepped"}; " +
         $"fallback {controller.LastExecution?.FallbackReason.ToString() ?? "none"}; direct fallback steps {controller.DirectFallbackSteps}; " +
         $"coordinate range {controller.DirectFallbackSteps - controller.AccumulationFallbackSteps}; accumulation range {controller.AccumulationFallbackSteps}; " +
         $"candidates {controller.LastStatistics.CandidatePairs}; accepted {controller.LastStatistics.AcceptedPairs}.");
@@ -512,6 +518,7 @@ internal sealed class ParticleLifeGame : Game
     {
         if (disposing)
         {
+            controller.Dispose();
             Window.KeyDown -= OnKeyDown;
             Window.KeyUp -= OnKeyUp;
             font?.Dispose();

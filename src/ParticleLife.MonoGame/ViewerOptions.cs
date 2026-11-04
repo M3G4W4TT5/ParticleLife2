@@ -7,7 +7,7 @@ namespace ParticleLife.MonoGame;
 
 /// <summary>Parses presentation startup options before any native graphics resource is created.</summary>
 internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Species, int Seed,
-    bool Paused, int SampleEvery, string SaveDirectory, string? InputPath, ForceBackend? BackendOverride)
+    bool Paused, int SampleEvery, string SaveDirectory, string? InputPath, ForceBackend? BackendOverride, int? WorkerOverride = null)
 {
     internal static ViewerOptions Parse(string[] args)
     {
@@ -17,6 +17,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         string saveDirectory = "artifacts/viewer";
         string? input = null;
         ForceBackend? backendOverride = null;
+        int? workerOverride = null;
         HashSet<string> seen = new(StringComparer.Ordinal);
         for (int i = 0; i < args.Length; i++)
         {
@@ -65,6 +66,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
                 case "--seed": seed = Integer(value, key); break;
                 case "--sample-every": sampleEvery = Integer(value, key); break;
                 case "--save-dir": saveDirectory = value; break;
+                case "--workers": workerOverride = Integer(value, key); break;
                 case "--backend":
                     backendOverride = value switch
                     {
@@ -80,17 +82,23 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         ArgumentOutOfRangeException.ThrowIfNegative(particles);
         ArgumentOutOfRangeException.ThrowIfLessThan(species, 1);
         ArgumentOutOfRangeException.ThrowIfNegative(sampleEvery);
+        if (workerOverride is int workers)
+        {
+            ForceWorkerConfiguration.Validate(backendOverride ?? ForceBackend.UniformGrid, workers);
+        }
         return new ViewerOptions(preset, particles, species, seed, paused, sampleEvery,
-            Path.GetFullPath(saveDirectory), input, backendOverride);
+            Path.GetFullPath(saveDirectory), input, backendOverride, workerOverride);
     }
 
     /// <summary>Applies only an explicit startup override; loaded experiments otherwise retain their saved search.</summary>
     internal ExperimentDefinition ApplyBackend(ExperimentDefinition experiment) =>
-        BackendOverride is ForceBackend backend ? experiment.WithBackend(backend) : experiment;
+        BackendOverride is not null || WorkerOverride is not null
+            ? experiment.WithBackend(BackendOverride ?? experiment.Backend, WorkerOverride) : experiment;
 
     /// <summary>Generates fallback/default values only when no saved experiment was loaded.</summary>
     internal ExperimentDefinition CreateDefaultExperiment() =>
-        PresetGenerator.Create(Preset, Particles, Species, Seed, backend: BackendOverride ?? ForceBackend.UniformGrid);
+        PresetGenerator.Create(Preset, Particles, Species, Seed, backend: BackendOverride ?? ForceBackend.UniformGrid,
+            workerCount: WorkerOverride ?? 1);
 
     private static int Integer(string value, string option) => int.TryParse(value, NumberStyles.Integer,
         CultureInfo.InvariantCulture, out int parsed) ? parsed : throw new ArgumentException($"{option} requires an integer.");
@@ -100,7 +108,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
 
         dotnet run --project src/ParticleLife.MonoGame -c Release -- [experiment.json]
             [--preset random|chains|snakes] [--particles 500] [--species 7] [--seed 1]
-            [--paused] [--sample-every 144] [--save-dir artifacts/viewer] [--backend direct|grid]
+            [--paused] [--sample-every 144] [--save-dir artifacts/viewer] [--backend direct|grid] [--workers 1]
 
         A startup experiment takes precedence over generation options. Invalid files leave
         the generated default paused with a visible error. Run reports are not inputs.
@@ -108,6 +116,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         schema-1 files use direct. --backend overrides startup and reload, and saves record
         that effective choice. Reset, resampling, matrix edits and presets retain it.
         Grid uses direct fallback outside its reliable coordinate or accumulation range.
+        Grid workers are explicit (1..8 including the caller); direct requires one. Default is serial.
 
         Space     Pause/resume                 N / Right   Exactly one step, then pause
         R         Restore saved initial state  I           Resample positions, zero velocity
@@ -126,7 +135,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         finite off-world particles remain simulated. Units are reduced model units.
         Playback targets one model time unit per wall second, at most eight steps/frame.
         Excess whole-step playback time is discarded and displayed; dt never changes.
-        Diagnostics are quadratic and allocate, sampled every N completed steps (0 disables).
+        Exact spatial diagnostics reuse storage, sampled every N completed steps (0 disables).
         Dense populations and diagnostics may be slow, including one uninterruptible step.
         """);
 }

@@ -10,6 +10,32 @@ namespace ParticleLife.Viewer.Tests;
 public sealed class ViewerBackendTests
 {
     [Fact]
+    public void WorkerSelectionSurvivesEditingSavingReplacementAndReset()
+    {
+        ViewerOptions options = ViewerOptions.Parse(["--backend", "grid", "--workers", "4", "--particles", "20"]);
+        ExperimentDefinition initial = options.CreateDefaultExperiment();
+        Assert.Equal(4, initial.WorkerCount);
+        using PlaybackController controller = new(initial, diagnosticEverySteps: 1);
+        foreach (ExperimentDefinition edited in new[] { initial, ExperimentEditing.ResampleState(initial, 7),
+            ExperimentEditing.RandomizeMatrix(initial, 8), ExperimentFile.Deserialize(ExperimentFile.Serialize(initial)) })
+        {
+            Assert.Equal(4, edited.WorkerCount);
+            controller.ReplaceExperiment(edited);
+            controller.SingleStep();
+            Assert.Equal(4, controller.LastExecution!.Value.ActualWorkerCount);
+            Assert.NotNull(controller.LatestDiagnostic);
+            controller.Reset();
+            Assert.Null(controller.LatestDiagnostic);
+            Assert.Equal(4, controller.Experiment.WorkerCount);
+        }
+
+        ViewerOptions explicitDirect = ViewerOptions.Parse(["--backend", "direct"]);
+        Assert.Equal(1, explicitDirect.ApplyBackend(initial).WorkerCount);
+        Assert.Throws<ArgumentOutOfRangeException>(() => ViewerOptions.Parse(["--backend", "direct", "--workers", "4"]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ViewerOptions.Parse(["--workers", "9"]));
+    }
+
+    [Fact]
     public void GeneratedViewerDefaultsUseGridAndLegacyInputRetainsDirect()
     {
         ViewerOptions options = ViewerOptions.Parse(["--particles", "8", "--species", "2"]);
