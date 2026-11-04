@@ -53,7 +53,9 @@ The warm-up protocols are similar lower bounds, not identical histories: the arc
 | Accepted-M4 initial invocation | `42DE341F50EF9EA68F95CE0581F80C670DE64EEF21D18104E95B571C562A6F8C` |
 | Accepted-M4 later invocations | `E5D383A3B43053D5F4B7ACE848357749DF8ADEEAD89AD340E91954A051D3C734` |
 
-The two archived builds retain identical accepted core source; assembly metadata/build context differs. Full benchmark-assembly hashes, SDK/runtime information and power-plan identifiers are in each raw report.
+The two archived builds retain identical accepted core source; assembly metadata/build context differs. Full benchmark-assembly hashes, SDK/runtime information and power-plan identifiers are in the retained session reports.
+
+The 15 supplementary accepted-M4 invocations retained their per-case timings and input hashes but reused one aggregate `comparison.json` filename. Only the final invocation's environment record survives; the other 14 per-process environment records are unavailable. The principal 19-case baseline and all new-implementation session records remain intact. The later-build hash above comes from the retained final invocation, not independent metadata records for all 15 processes. Missing records have not been reconstructed as observations.
 
 ## Complete-step results
 
@@ -232,24 +234,24 @@ foreach ($preset in 'random', 'chains', 'snakes') {
 }
 ```
 
-The independently repeated baseline, evolved/cutoff baseline and traversal profiles use the same archived core:
+The independently repeated baseline, evolved/cutoff baseline and traversal profiles use the same archived core. These reproduction commands give each supplementary invocation its own output directory, preserving its aggregate environment record:
 
 ```powershell
 pwsh -NoProfile -File scripts/prepare-m4-baseline.ps1 -InputDirectory artifacts/benchmarks/m4-1/inputs -OutputDirectory artifacts/m4-1/baseline-extended -SkipEvolution
 $baselineDll = 'artifacts/m4-1/baseline/benchmarks/ParticleLife.Benchmarks/bin/Release/net10.0/ParticleLife.Benchmarks.dll'
 $repeatCases = 'uniform-fixed-500', 'uniform-fixed-2000', 'uniform-density-10000', 'cluster-2000', 'band-2000', 'boundary-overlap-2000', 'evolved-random-500-t200', 'evolved-chains-500-t200', 'evolved-snakes-500-t200'
 foreach ($case in $repeatCases) {
-    dotnet $baselineDll compare artifacts/m4-1/baseline-extended 15 "artifacts/benchmarks/m4-1/inputs/$case.experiment.json" 2
+    dotnet $baselineDll compare "artifacts/m4-1/baseline-extended/$case" 15 "artifacts/benchmarks/m4-1/inputs/$case.experiment.json" 2
 }
 foreach ($inputFile in Get-ChildItem artifacts/benchmarks/m4-1/inputs/cutoff-*.experiment.json) {
-    dotnet $baselineDll compare artifacts/m4-1/baseline-extended 15 $inputFile.FullName 2
+    dotnet $baselineDll compare "artifacts/m4-1/baseline-extended/$($inputFile.BaseName)" 15 $inputFile.FullName 2
 }
 foreach ($case in 'uniform-density-10000', 'uniform-fixed-10000', 'cluster-2000', 'band-2000') {
     dotnet $baselineDll profile-m41 "artifacts/benchmarks/m4-1/inputs/$case.experiment.json" "artifacts/m4-1/baseline-profiles/$case.profile.json"
 }
 ```
 
-Use fresh output directories for independent repetitions. The per-case baseline files persist; its aggregate `comparison.json` is replaced by each single-case invocation. `inputs.json` verifies saved hashes on repeated preparation; seeds alone are not replay inputs. Generated serial inputs omit the optional worker field so the original M4 parser and current parser consume identical bytes. If historical M4 files are absent, preparation generates complete static inputs and labels that provenance. Use those same files across implementations rather than substituting historical hashes; pass `-InputDirectory artifacts/benchmarks/m4-1/inputs` to baseline preparation in that fresh checkout.
+Use fresh output directories for independent repetitions. The recorded supplementary baseline files remain in their original shared directory, with the environment-record limitation described above; the revised commands prevent that loss in future runs. `inputs.json` verifies saved hashes on repeated preparation; seeds alone are not replay inputs. Generated serial inputs omit the optional worker field so the original M4 parser and current parser consume identical bytes. If historical M4 files are absent, preparation generates complete static inputs and labels that provenance. Use those same files across implementations rather than substituting historical hashes; pass `-InputDirectory artifacts/benchmarks/m4-1/inputs` to baseline preparation in that fresh checkout.
 
 Large/generated evidence stays ignored and is not a source/build dependency:
 
