@@ -40,11 +40,11 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
     public const string AlgorithmVersion = "uniform-grid-packed/1";
 
     private const int ReceiverChunkSize = 32;
-    private readonly ModelParameters parameters;
-    private readonly InteractionMatrix matrix;
-    private readonly PairForceKernel kernel;
+    private ModelParameters parameters;
+    private InteractionMatrix matrix;
+    private PairForceKernel kernel;
     private readonly UniformGridIndex index;
-    private readonly DirectForceEvaluator direct;
+    private DirectForceEvaluator direct;
     private readonly ForceWorkerPool? workers;
     private readonly RangeResult[] workerResults;
     private Vector2d[] packedPositions = [];
@@ -80,6 +80,25 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
 
     /// <summary>Gets the fixed worker count, including the calling thread.</summary>
     public int WorkerCount { get; }
+
+    /// <summary>Changes validated model values while retaining the index, packed buffers and worker pool.</summary>
+    /// <remarks>Only the owning simulation calls this at a completed barrier. Prepare replacement
+    /// kernels before publishing references, then invalidate derived index/prepared-state data.</remarks>
+    internal void Reconfigure(ModelParameters nextParameters, InteractionMatrix nextMatrix)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        PairForceKernel nextKernel = new(nextParameters, nextMatrix);
+        DirectForceEvaluator nextDirect = new(nextParameters, nextMatrix);
+        index.ReconfigureCutoff(nextParameters.Cutoff);
+        parameters = nextParameters;
+        matrix = nextMatrix;
+        kernel = nextKernel;
+        direct = nextDirect;
+        prepared = false;
+        LastWorkerAllocatedBytes = 0;
+        LastExecution = new(ForceBackend.UniformGrid, ForceBackend.UniformGrid, GridFallbackReason.None,
+            IndexStatistics, WorkerCount, WorkerCount);
+    }
 
     /// <summary>Gets background-worker managed bytes from the last successful evaluation; excludes the caller.</summary>
     /// <remarks>Measure the caller separately. Construction, index growth and thread setup are outside this counter.

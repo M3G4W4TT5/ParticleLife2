@@ -2,8 +2,8 @@ namespace ParticleLife.Core.State;
 
 /// <summary>A non-owning read-only observation of one completed particle state.</summary>
 /// <remarks>
-/// A simulation view is valid only until the next step or reset. Do not retain its spans across
-/// either operation or read them concurrently with mutation. A snapshot view remains valid for
+/// A simulation view is valid only until the next step, reset or successful reconfiguration. Do not retain its spans across
+/// these operations or read them concurrently with mutation. A snapshot view remains valid for
 /// the snapshot's lifetime. Obtaining a view allocates no managed memory.
 /// </remarks>
 public readonly ref struct ParticleStateView

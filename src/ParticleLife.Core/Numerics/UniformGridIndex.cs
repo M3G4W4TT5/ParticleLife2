@@ -28,7 +28,7 @@ internal sealed class UniformGridIndex
 {
     internal const double CoordinateLimit = 1125899906842624; // 2^50 cell widths.
     private readonly Dictionary<CellCoordinate, int> cells;
-    private readonly int cellExponent;
+    private int cellExponent;
     private CellCoordinate[] particleCells = [];
     private int[] particleCellIds = [];
     private int[] starts = [];
@@ -39,19 +39,30 @@ internal sealed class UniformGridIndex
 
     internal UniformGridIndex(double cutoff, IEqualityComparer<CellCoordinate>? comparer = null)
     {
-        ModelParameters.RequirePositiveFinite(cutoff, nameof(cutoff));
-        ModelParameters.RequirePositiveFinite(cutoff * cutoff, nameof(cutoff));
-        cellExponent = Math.ILogB(cutoff);
-        if (Math.ScaleB(1, cellExponent) < cutoff)
-        {
-            cellExponent++;
-        }
-
-        CellWidth = Math.ScaleB(1, cellExponent);
         cells = new Dictionary<CellCoordinate, int>(comparer);
+        ReconfigureCutoff(cutoff);
     }
 
-    internal double CellWidth { get; }
+    internal double CellWidth { get; private set; }
+
+    /// <summary>Invalidates completed ranges and updates cell geometry while retaining every capacity.</summary>
+    /// <remarks>Call only between builds/evaluations. The next build remaps all coordinates from the
+    /// completed input; no old cell assignment can survive a cutoff power-of-two transition.</remarks>
+    internal void ReconfigureCutoff(double cutoff)
+    {
+        ModelParameters.RequirePositiveFinite(cutoff, nameof(cutoff));
+        ModelParameters.RequirePositiveFinite(cutoff * cutoff, nameof(cutoff));
+        int nextExponent = Math.ILogB(cutoff);
+        if (Math.ScaleB(1, nextExponent) < cutoff)
+        {
+            nextExponent++;
+        }
+
+        cellExponent = nextExponent;
+        CellWidth = Math.ScaleB(1, nextExponent);
+        cells.Clear();
+        count = 0;
+    }
 
     internal GridIndexStatistics Statistics => new(sources.Length, cellCapacity, cells.Count,
         32L * sources.Length + 36L * cellCapacity, CellWidth);

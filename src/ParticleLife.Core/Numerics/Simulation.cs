@@ -3,12 +3,12 @@ using ParticleLife.Core.State;
 
 namespace ParticleLife.Core.Numerics;
 
-/// <summary>Owns reusable state and work buffers for a fixed-timestep Particle Life simulation.</summary>
+/// <summary>Owns reusable state and work buffers for a Particle Life simulation with explicit timestep increments.</summary>
 /// <remarks>
 /// <para>Simulation is independent of wall-clock and rendering time. Each step first evaluates all
 /// forces from complete input, then integrates into separate outputs, then swaps completed buffers.
 /// No particle observes an earlier particle's partially updated state.</para>
-/// <para>Steps and resets invalidate prior observations. Do not read or mutate a simulation concurrently.
+/// <para>Steps, resets and successful reconfiguration invalidate prior observations. Do not read or mutate a simulation concurrently.
 /// Warmed successful steps and resets at established capacity allocate no managed memory. Construction,
 /// index initialization, capacity growth and explicit snapshots allocate. There is no randomness in the stepping algorithm.</para>
 /// <para>One worker selects serial execution. Additional workers evaluate disjoint receivers from
@@ -17,8 +17,8 @@ namespace ParticleLife.Core.Numerics;
 /// </remarks>
 public sealed class Simulation : IDisposable
 {
-    private readonly IForceEvaluator evaluator;
-    private readonly double dampingFactor;
+    private IForceEvaluator evaluator;
+    private double dampingFactor;
     private long[] ids = [];
     private int[] species = [];
     private Vector2d[] positions = [];
@@ -45,41 +45,34 @@ public sealed class Simulation : IDisposable
         ForceBackend backend = ForceBackend.Direct, int workerCount = 1)
     {
         ArgumentNullException.ThrowIfNull(initial);
-        ArgumentNullException.ThrowIfNull(parameters);
-        ArgumentNullException.ThrowIfNull(matrix);
-        ForceWorkerConfiguration.Validate(backend, workerCount);
-        parameters.Validate();
+        Configuration = new(parameters, matrix, timeStep, backend, workerCount);
         DirectForceEvaluator.ValidateState(initial.Observe(), matrix.SpeciesCount);
         dampingFactor = SemiImplicitEuler.DampingFactor(timeStep, parameters.DampingHalfLife);
-        Backend = backend;
-        WorkerCount = workerCount;
-        Parameters = parameters;
-        Matrix = matrix;
-        TimeStep = timeStep;
         Reset(initial);
         // Establish state storage before starting owned background workers.
-        evaluator = backend switch
-        {
-            ForceBackend.Direct => new DirectForceEvaluator(parameters, matrix),
-            ForceBackend.UniformGrid => new UniformGridForceEvaluator(parameters, matrix, workerCount),
-            _ => throw new ArgumentOutOfRangeException(nameof(backend), "Unsupported neighbour-search backend.")
-        };
+        evaluator = CreateEvaluator(Configuration);
     }
 
-    /// <summary>Gets the fixed timestep in reduced time units.</summary>
-    public double TimeStep { get; }
+    /// <summary>Gets the immutable configuration currently governing subsequent steps.</summary>
+    public SimulationConfiguration Configuration { get; private set; }
+
+    /// <summary>Gets the timestep increment for subsequent steps, in reduced time units.</summary>
+    public double TimeStep => Configuration.TimeStep;
 
     /// <summary>Gets immutable model parameters.</summary>
-    public ModelParameters Parameters { get; }
+    public ModelParameters Parameters => Configuration.Parameters;
 
     /// <summary>Gets the immutable directed species matrix.</summary>
-    public InteractionMatrix Matrix { get; }
+    public InteractionMatrix Matrix => Configuration.Matrix;
 
     /// <summary>Gets the requested neighbour search; model equations and integration are unchanged.</summary>
-    public ForceBackend Backend { get; }
+    public ForceBackend Backend => Configuration.Backend;
 
     /// <summary>Gets configured receiver workers, including the caller; fallback may execute with one.</summary>
-    public int WorkerCount { get; }
+    public int WorkerCount => Configuration.WorkerCount;
+
+    /// <summary>Exposes resource identity to numerical contract tests, never to hosts.</summary>
+    internal IForceEvaluator Evaluator => evaluator;
 
     /// <summary>Gets counts from the last successful step's input, or zero counts after construction/reset.</summary>
     public ForceEvaluationStatistics LastStatistics { get; private set; }
@@ -98,7 +91,7 @@ public sealed class Simulation : IDisposable
     public long AccumulationFallbackSteps { get; private set; }
 
     /// <summary>Obtains a read-only view of completed state without allocating.</summary>
-    /// <returns>A view valid only until the next step or reset, including stable identities and simulation time.</returns>
+    /// <returns>A view valid only until the next step, reset or reconfiguration, including stable identities and simulation time.</returns>
     public ParticleStateView Observe() => new(ids.AsSpan(0, count), positions.AsSpan(0, count),
         velocities.AsSpan(0, count), species.AsSpan(0, count), time, step);
 
@@ -118,15 +111,101 @@ public sealed class Simulation : IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(snapshot);
         DirectForceEvaluator.ValidateState(snapshot.Observe(), Matrix.SpeciesCount);
-        if (snapshot.Count > positions.Length)
+        StateBuffers? replacement = snapshot.Count > positions.Length ? new(snapshot.Count) : null;
+        CopySnapshot(snapshot, replacement);
+        LastStatistics = default;
+        LastExecution = null;
+        DirectFallbackSteps = 0;
+        AccumulationFallbackSteps = 0;
+    }
+
+    /// <summary>Atomically applies complete settings and an optional structural state at the current boundary.</summary>
+    /// <param name="configuration">Already validated physical, timestep and execution settings.</param>
+    /// <param name="replacementState">Optional exact structural payload with the current time and step.
+    /// Omit it for ordinary settings edits, including world resizing, to retain all particle values.</param>
+    /// <remarks>
+    /// <para>Call only between completed steps, never concurrently with evaluation or observation.
+    /// All species and replacement-clock checks and capacity/resource preparation finish before publication.
+    /// Invalid edits leave completed state, configuration, telemetry and worker ownership unchanged.</para>
+    /// <para>Ordinary edits do not copy particle arrays. Model edits retain established index/packed
+    /// capacities and persistent workers; only backend or worker-count changes replace an evaluator.
+    /// Structural growth may allocate state storage. A replacement contains actual particle values;
+    /// this method never generates or remaps particles implicitly. Finite off-world positions remain valid.</para>
+    /// <para>Elapsed time and completed-step count never change. Last-step measurements are cleared
+    /// after actual edits, while cumulative fallback counts survive. A value-identical configuration
+    /// and absent or value-identical replacement is a no-op, preserving observations and measurements.</para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">The candidate contains unsupported species or a different clock.</exception>
+    /// <exception cref="ObjectDisposedException">The simulation has been disposed.</exception>
+    public void Reconfigure(SimulationConfiguration configuration, ParticleSnapshot? replacementState = null)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (replacementState is not null && (replacementState.Time != time || replacementState.Step != step))
         {
-            ids = new long[snapshot.Count];
-            species = new int[snapshot.Count];
-            positions = new Vector2d[snapshot.Count];
-            velocities = new Vector2d[snapshot.Count];
-            outputPositions = new Vector2d[snapshot.Count];
-            outputVelocities = new Vector2d[snapshot.Count];
-            forces = new Vector2d[snapshot.Count];
+            throw new ArgumentException("A structural edit must retain the current completed time and step.", nameof(replacementState));
+        }
+
+        DirectForceEvaluator.ValidateState(replacementState is null ? Observe() : replacementState.Observe(),
+            configuration.Matrix.SpeciesCount);
+        bool sameConfiguration = Configuration.EquivalentTo(configuration);
+        bool sameState = replacementState is null || StateEquals(replacementState);
+        if (sameConfiguration && sameState)
+        {
+            return;
+        }
+
+        double nextDamping = SemiImplicitEuler.DampingFactor(configuration.TimeStep, configuration.Parameters.DampingHalfLife);
+        StateBuffers? nextBuffers = replacementState is not null && replacementState.Count > positions.Length
+            ? new(replacementState.Count) : null;
+        bool replaceEvaluator = Backend != configuration.Backend || WorkerCount != configuration.WorkerCount;
+        IForceEvaluator? nextEvaluator = replaceEvaluator ? CreateEvaluator(configuration) : null;
+        if (!replaceEvaluator && (Parameters != configuration.Parameters || !ReferenceEquals(Matrix, configuration.Matrix)))
+        {
+            switch (evaluator)
+            {
+                case DirectForceEvaluator direct:
+                    direct.Reconfigure(configuration.Parameters, configuration.Matrix);
+                    break;
+                case UniformGridForceEvaluator grid:
+                    grid.Reconfigure(configuration.Parameters, configuration.Matrix);
+                    break;
+            }
+        }
+
+        IForceEvaluator previousEvaluator = evaluator;
+        if (nextEvaluator is not null)
+        {
+            evaluator = nextEvaluator;
+        }
+
+        Configuration = configuration;
+        dampingFactor = nextDamping;
+        if (!sameState)
+        {
+            CopySnapshot(replacementState!, nextBuffers);
+        }
+
+        LastStatistics = default;
+        LastExecution = null;
+        if (replaceEvaluator)
+        {
+            (previousEvaluator as IDisposable)?.Dispose();
+        }
+    }
+
+    /// <summary>Copies a validated payload after all possibly allocating preparation succeeds.</summary>
+    private void CopySnapshot(ParticleSnapshot snapshot, StateBuffers? replacement)
+    {
+        if (replacement is not null)
+        {
+            ids = replacement.Ids;
+            species = replacement.Species;
+            positions = replacement.Positions;
+            velocities = replacement.Velocities;
+            outputPositions = replacement.OutputPositions;
+            outputVelocities = replacement.OutputVelocities;
+            forces = replacement.Forces;
         }
 
         snapshot.Ids.CopyTo(ids);
@@ -136,10 +215,31 @@ public sealed class Simulation : IDisposable
         count = snapshot.Count;
         time = snapshot.Time;
         step = snapshot.Step;
-        LastStatistics = default;
-        LastExecution = null;
-        DirectFallbackSteps = 0;
-        AccumulationFallbackSteps = 0;
+    }
+
+    private bool StateEquals(ParticleSnapshot snapshot) => snapshot.Count == count
+        && snapshot.Ids.SequenceEqual(ids.AsSpan(0, count))
+        && snapshot.Species.SequenceEqual(species.AsSpan(0, count))
+        && snapshot.Positions.SequenceEqual(positions.AsSpan(0, count))
+        && snapshot.Velocities.SequenceEqual(velocities.AsSpan(0, count));
+
+    private static IForceEvaluator CreateEvaluator(SimulationConfiguration configuration) => configuration.Backend switch
+    {
+        ForceBackend.Direct => new DirectForceEvaluator(configuration.Parameters, configuration.Matrix),
+        ForceBackend.UniformGrid => new UniformGridForceEvaluator(configuration.Parameters, configuration.Matrix, configuration.WorkerCount),
+        _ => throw new ArgumentOutOfRangeException(nameof(configuration))
+    };
+
+    /// <summary>Prepares all state arrays before publishing any capacity change.</summary>
+    private sealed class StateBuffers(int capacity)
+    {
+        internal long[] Ids { get; } = new long[capacity];
+        internal int[] Species { get; } = new int[capacity];
+        internal Vector2d[] Positions { get; } = new Vector2d[capacity];
+        internal Vector2d[] Velocities { get; } = new Vector2d[capacity];
+        internal Vector2d[] OutputPositions { get; } = new Vector2d[capacity];
+        internal Vector2d[] OutputVelocities { get; } = new Vector2d[capacity];
+        internal Vector2d[] Forces { get; } = new Vector2d[capacity];
     }
 
     /// <summary>Advances one complete fixed timestep without managed allocation after index and buffer warm-up.</summary>
@@ -180,7 +280,7 @@ public sealed class Simulation : IDisposable
 
     /// <summary>Joins and releases owned worker threads and synchronization resources.</summary>
     /// <remarks>Call between steps, never concurrently with evaluation or observation. Repeated disposal
-    /// is harmless. The completed state remains readable, but stepping and resetting are prohibited.</remarks>
+    /// is harmless. The completed state remains readable, but stepping, resetting and reconfiguration are prohibited.</remarks>
     public void Dispose()
     {
         if (!disposed)

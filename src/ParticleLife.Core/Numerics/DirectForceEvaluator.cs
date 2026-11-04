@@ -6,15 +6,15 @@ namespace ParticleLife.Core.Numerics;
 /// <summary>A serial O(N squared) reference evaluation of all directed pair and soft-wall forces.</summary>
 /// <remarks>
 /// All receivers read the same completed input state. Every distinct ordered pair is considered once;
-/// no action-reaction shortcut is valid for a general directed matrix. Configuration is immutable.
+/// no action-reaction shortcut is valid for a general directed matrix. Public configuration is immutable.
 /// The evaluator owns no work buffers and allocates no memory on successful evaluation.
 /// Separate callers may use it concurrently with independent stable input and output buffers.
 /// </remarks>
 public sealed class DirectForceEvaluator : IForceEvaluator
 {
-    private readonly ModelParameters parameters;
-    private readonly InteractionMatrix matrix;
-    private readonly PairForceKernel kernel;
+    private ModelParameters parameters;
+    private InteractionMatrix matrix;
+    private PairForceKernel kernel;
 
     /// <summary>Validates and retains immutable model configuration.</summary>
     /// <param name="parameters">Model values in reduced units.</param>
@@ -29,6 +29,17 @@ public sealed class DirectForceEvaluator : IForceEvaluator
         this.parameters = parameters;
         this.matrix = matrix;
         kernel = new(parameters, matrix);
+    }
+
+    /// <summary>Replaces validated equations between evaluations without owning or copying state.</summary>
+    /// <remarks>The simulation establishes exclusive access and validates the complete candidate first.
+    /// Allocate the new immutable pair kernel before publishing any replacement reference.</remarks>
+    internal void Reconfigure(ModelParameters nextParameters, InteractionMatrix nextMatrix)
+    {
+        PairForceKernel nextKernel = new(nextParameters, nextMatrix);
+        parameters = nextParameters;
+        matrix = nextMatrix;
+        kernel = nextKernel;
     }
 
     /// <summary>Gets the direct search configuration; this evaluator never falls back or owns an index.</summary>
