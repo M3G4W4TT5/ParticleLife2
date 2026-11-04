@@ -104,39 +104,48 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         CultureInfo.InvariantCulture, out int parsed) ? parsed : throw new ArgumentException($"{option} requires an integer.");
 
     internal static void PrintHelp() => Console.WriteLine("""
-        Particle Life 2 - interactive 2D viewer (MonoGame DesktopGL)
+        Particle Life 2 - native live experiment editor (MonoGame DesktopGL)
 
         dotnet run --project src/ParticleLife.MonoGame -c Release -- [experiment.json]
             [--preset random|chains|snakes] [--particles 500] [--species 7] [--seed 1]
             [--paused] [--sample-every 144] [--save-dir artifacts/viewer] [--backend direct|grid] [--workers 1]
 
-        A startup experiment takes precedence over generation options. Invalid files leave
-        the generated default paused with a visible error. Run reports are not inputs.
-        New generated experiments use grid search. Loaded files honour their saved backend;
-        schema-1 files use direct. --backend overrides startup and reload, and saves record
-        that effective choice. Reset, resampling, matrix edits and presets retain it.
-        Grid uses direct fallback outside its reliable coordinate or accumulation range.
-        Grid workers are explicit (1..8 including the caller); direct requires one. Default is serial.
+        The editor opens beside the simulation. Expand a section and scroll to its controls.
+        Click a numeric value, type, then Enter to apply; Esc cancels a draft. Tab navigates.
+        Drag sliders for live edits; one drag is one Undo operation. R beside a slider resets
+        that value. Invalid/partial text never changes the simulation. Hover for explanations.
 
-        Space     Pause/resume                 N / Right   Exactly one step, then pause
-        R         Restore saved initial state  I           Resample positions, zero velocity
-        M         New random matrix            1 / 2 / 3   Random / chains / snakes preset
-        S         Save current initial experiment to a new unique file (never a checkpoint)
-        F5        Reload startup file argument (invalid input retains current experiment)
-        D         Toggle sampled diagnostics   H / F1      Toggle clickable controls
-        Esc       Close help, or quit          F9          Print current timing summary
+        Space     Pause/resume                 N / Right   One step, then pause
+        R         Reset defined baseline       I           Explicit live particle resampling
+        M         Randomize matrix, new seed   1 / 2 / 3   Random / chains / snakes matrix live
+        S / O     Open save/load file library  E           Hide/show editor
+        Ctrl+Z/Y  Undo/redo editor changes      F5          Reload startup file or open library
+        D         Toggle sampled diagnostics   H / F1      Toggle keyboard hints
+        Esc       Cancel field/modal or quit   F9          Print separated viewer timings
 
-        Click the playback badge to pause/resume; click HELP for every action.
+        Shortcuts do not fire while a control has keyboard focus. Click the world to return
+        focus to shortcuts. Focus loss pauses; resume explicitly. New experiments are explicit
+        actions under Generation recipe. Matrix templates retain particles, time and steps.
+        Ordinary rule/timestep/backend changes also retain completed state and accumulated time.
+        World drafts apply together; population drafts explain survivor/remapping/addition policy.
+        Generation seed, placement and initial velocity edits alone do not move particles.
 
-        I preserves identities, species, matrix, model and timestep. M preserves initial
-        state and model. Both restart at t=0. Presets regenerate state and matrix using
-        current population, species, model and timestep. New seeds and actual values are saved.
-        Focus loss pauses playback. The nominal world is fit isotropically on resize;
-        finite off-world particles remain simulated. Units are reduced model units.
-        Playback targets one model time unit per wall second, at most eight steps/frame.
-        Excess whole-step playback time is discarded and displayed; dt never changes.
-        Exact spatial diagnostics reuse storage, sampled every N completed steps (0 disables).
-        Dense populations and diagnostics may be slow, including one uninterruptible step.
+        FILES opens the in-app local browser. Enter a folder/name; save preset, save from here,
+        save initial or save session. Existing names are protected by exclusive creation.
+        Select a JSON file, then Load experiment, Preset live, Preset new or Replay session.
+        Preset live retains compatible populations; Preset new explicitly generates a baseline.
+        Save from here stores exact completed state at a new zero-time origin with source metadata.
+        Save initial exports the reset baseline. Sessions contain actual boundary changes and
+        replay through the shared engine to the recorded terminal step, paused. Esc cancels replay.
+
+        Loaded startup experiments take precedence over generation options. Invalid files retain
+        a valid paused fallback. Reports are not inputs. Saved solver choices are honoured unless
+        an explicit startup/reload --backend or --workers override is supplied. Direct needs one
+        worker; grid accepts 1..8 and falls back to direct when required by numerical range.
+        World display uses one isotropic scale. Appearance does not affect trajectories.
+        Units are reduced model units; interactions are phenomenological, not molecular validation.
+        Numerical dt is separate from wall-clock playback speed. Catch-up limits drop excess
+        whole-step playback time; dense populations may still make one step expensive.
         """);
 }
 

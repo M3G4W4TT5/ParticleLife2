@@ -45,15 +45,15 @@ internal sealed class BitmapFont : IDisposable
         atlas.SetData(pixels);
     }
 
-    /// <summary>Draws text at an integer pixel scale; newlines begin another nine-pixel row.</summary>
+    /// <summary>Draws text at a positive pixel scale; newlines begin another nine-unit row.</summary>
     /// <param name="batch">An already begun batch owned by the host.</param>
     /// <param name="text">Text to display; unsupported glyphs become question marks.</param>
     /// <param name="position">Top-left screen location in pixels.</param>
     /// <param name="color">Glyph tint, including alpha.</param>
-    /// <param name="scale">Positive integer pixel magnification.</param>
+    /// <param name="scale">Positive pixel magnification, including fractional interface scales.</param>
     /// <param name="maxCharacters">Maximum input characters consumed, including newlines.</param>
     internal void Draw(SpriteBatch batch, string text, Vector2 position, Color color,
-        int scale = 2, int maxCharacters = int.MaxValue)
+        float scale = 2, int maxCharacters = int.MaxValue)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(scale);
         ArgumentOutOfRangeException.ThrowIfNegative(maxCharacters);
@@ -66,7 +66,7 @@ internal sealed class BitmapFont : IDisposable
             if (character == '\n')
             {
                 x = position.X;
-                y += LineHeight(scale);
+                y += 9 * scale;
                 continue;
             }
 

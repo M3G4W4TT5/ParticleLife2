@@ -30,6 +30,19 @@
       },
       "particlelife.core": {
         "type": "Project"
+      },
+      "particlelife.monogame": {
+        "type": "Project",
+        "dependencies": {
+          "MonoGame.Framework.DesktopGL": "[3.8.6, )",
+          "ParticleLife.Viewer": "[1.0.0, )"
+        }
+      },
+      "particlelife.viewer": {
+        "type": "Project",
+        "dependencies": {
+          "ParticleLife.Core": "[1.0.0, )"
+        }
       }
     }
   }

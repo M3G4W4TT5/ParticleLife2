@@ -12,7 +12,7 @@ try
 
     ViewerOptions options = ViewerOptions.Parse(args);
     ExperimentDefinition? experiment = null;
-    string message = "SPACE pause | H controls | S save experiment";
+    string message = "Live experiment editor | Expand a section to explore | S opens save/load library";
     bool paused = options.Paused;
     if (options.InputPath is not null)
     {
