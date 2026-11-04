@@ -6,7 +6,7 @@ Particle Life 2 is a continuation of [Particle Life](https://github.com/M3G4W4TT
 
 The initial focus is on two-dimensional simulations, with an engine-independent C# core and MonoGame for rendering. Models and numerical methods should be explicit and testable, with attention to performance, readable code and scientific explanations in C# XML documentation.
 
-The interactive viewer and headless runner share the same simulation. They include directed species interactions, soft walls, damping, random/chain/snake presets and saved experiments with their complete initial conditions. The solver uses double precision and advances independently of rendering. An exact uniform grid accelerates neighbour discovery, with the direct all-pairs solver available for comparison.
+The interactive editor and headless runner share the same simulation. Change directed species interactions, forces and populations while particles move, inspect their force curves, and save complete experiments or replayable editing sessions. The solver uses double precision and advances independently of rendering. An exact uniform grid accelerates neighbour discovery, with the direct all-pairs solver available for comparison.
 
 ## Explore the simulation
 
@@ -24,28 +24,32 @@ The viewer starts with 500 particles, seven species, seed 1 and grid search. Loa
 dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- examples/experiments/two-species.json --paused
 ```
 
-Use `--help` for startup options, including `--preset random|chains|snakes`, `--particles`, `--species`, `--seed`, `--backend direct|grid`, `--workers`, `--sample-every` and `--save-dir`. Grid search defaults to one worker; `--workers 4` explicitly selects parallel evaluation (1–8 workers). Saved experiments retain their backend and workers; older files remain serial and schema-1 files use direct search. Explicit overrides also apply on reload and are retained when saving. DesktopGL needs a working OpenGL display. Resize to at least 420 × 340 pixels for readable controls. Resizing preserves world geometry; off-world particles remain in the simulation.
+Use `--help` for startup options, including `--preset random|chains|snakes`, `--particles`, `--species`, `--seed`, `--backend direct|grid`, `--workers`, `--sample-every` and `--save-dir`. Grid search defaults to one worker; `--workers 4` explicitly selects parallel evaluation (1–8 workers). Saved experiments retain their backend and workers; older files remain serial and schema-1 files use direct search. DesktopGL needs a working OpenGL display. Resizing preserves world geometry; off-world particles remain in the simulation.
 
-Click **HELP** for clickable controls, or click the playback badge to pause and resume.
+The scrollable editor groups interactions, forces, world/population, generation, simulation and appearance. Expand a group, drag a slider or click its value for exact entry. Matrix rows receive forces from columns; symmetry linking is optional. World and population drafts have explicit Apply buttons. **Files** opens named save/load workflows. See the [editor guide](docs/live-experiment-editor.md) for details.
 
 | Key | Action |
 | --- | --- |
 | Space | Pause or resume. Losing window focus also pauses. |
 | N / Right | Advance exactly one step, then remain paused. |
-| R | Reset the current experiment to its exact initial state, matrix, time and step count. |
-| I | Resample uniform positions and zero velocities; keep identities, species, matrix and model. |
-| M | Generate a new random matrix; keep the exact initial state and model. |
-| 1 / 2 / 3 | Select random / chains / snakes; regenerate state and matrix with the current counts and model. |
-| S | Save the current initial experiment to a new file under `artifacts/viewer`. |
-| F5 | Reload the startup experiment path. |
+| R | Reset the defined baseline to time/step zero and start a fresh timeline. |
+| I | Explicitly resample current positions/velocities using the generation recipe. |
+| M | Randomize the matrix live with a new recorded seed. |
+| 1 / 2 / 3 | Apply a random / chains / snakes matrix using the generation seed. |
+| Ctrl+Z / Ctrl+Y | Undo / redo an editor operation at the current simulation boundary. |
+| S / O | Open the file browser; default folder is `artifacts/viewer`. |
+| E | Show or hide the editor. |
+| F5 | Reload the startup experiment, or open Files if none was supplied. |
 | D | Toggle sampled diagnostics. |
-| H / F1 | Show or hide controls. |
-| F9 | Print the latest timing summary to the console. |
-| Esc | Close controls; otherwise quit. |
+| H / F1 | Show or hide shortcut help. |
+| F9 | Print timing summaries; the Timings button provides the same action. |
+| Esc | Cancel field editing or close the file browser; with world focus, quit. |
 
-Resampling, matrix changes and preset selection restart at time and step zero, preserve the timestep, and record new seeds and actual generated values. Reset restores those saved values without generating anything. Saving preserves the initial experiment for CLI replay; it does not save the evolved state as a checkpoint, and existing files are never overwritten. Invalid reloads retain the current valid experiment and pause playback.
+Click the world to give simulation shortcuts focus; typing and widget interaction capture keyboard input. Live rule edits preserve particles and the clock. Changing a generation seed alone does not regenerate anything. Undo changes settings at the current boundary without rewinding intervening motion. **Reset** restores the original baseline; **New experiment** establishes another one explicitly.
 
-Playback uses the experiment's fixed timestep, with at most eight steps per frame. Excess playback time is dropped and shown in the display rather than increasing the timestep. Exact spatial diagnostics reuse storage, are sampled every 144 completed steps by default and show their measurement time. Dense interactions and worst-case diagnostics remain quadratic; large populations can be slow even for a single step. Grid search falls back to direct evaluation at extreme coordinate or force-accumulation scales and reports that fallback.
+Save a **preset** for reusable settings and a generation recipe, **from here** for the exact current pattern rebased to time zero, **initial** for the reset baseline, or a **session** for the complete applied edit timeline. Load all of them from Files without restarting. Existing filenames are protected, and a failed load retains the valid experiment.
+
+Numerical timestep and playback speed are separate controls. Playback defaults to at most eight steps per frame; excess backlog is dropped rather than increasing the timestep. Diagnostics default to every 144 completed steps and show their measurement time. Dense interactions and worst-case diagnostics remain quadratic, so a large population can be slow even for a single step. Grid search reports direct fallback at extreme coordinate or force-accumulation scales.
 
 ## Run without graphics
 
@@ -57,6 +61,14 @@ dotnet run --project src/ParticleLife.Cli -c Release --no-build -- run artifacts
 ```
 
 Use `chains` or `snakes` for the other presets, and `--help` for commands. New experiments use grid search; add `--backend direct` to `create` or `run` to select the reference. Output files must have new names. Experiments are editable JSON; run reports preserve the input, effective backend, fallback counts, final state, measurements and runtime metadata. A seed alone does not guarantee identical results across runtimes.
+
+Replay an edited session through its saved terminal boundary, including timestep and population changes:
+
+```sh
+dotnet run --project src/ParticleLife.Cli -c Release --no-build -- replay examples/sessions/live-edits.session.json --output artifacts/session-run.json
+```
+
+Use `--continue-steps N` to continue afterwards. Replay follows simulation-step boundaries; rendered frame timing is not part of the scientific timeline. Reports preserve explicit execution overrides separately from recorded choices.
 
 This is a phenomenological model for exploring emergence. Soft walls confine rather than reflect particles, and directed interactions and damping generally do not conserve momentum or energy.
 
