@@ -1,0 +1,28 @@
+# Build and test output
+**/bin/
+**/obj/
+**/TestResults/
+**/BenchmarkDotNet.Artifacts/
+/artifacts/
+
+# Generated API documentation
+/docs/api/
+/docs/_site/
+/_site/
+
+# Local review snapshots, diagnostic builds, and tool state
+/review/
+/.dotnet-home/
+/.nuget/
+/tmp/
+
+# User and operating system files
+.vs/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
