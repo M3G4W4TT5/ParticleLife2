@@ -2,7 +2,9 @@ using ParticleLife.Core.State;
 
 namespace ParticleLife.Core.Experiments;
 
-/// <summary>Computes optional diagnostic measurements from a completed state outside the stepping loop.</summary>
+/// <summary>Provides the independent direct-pair reference for completed-state diagnostic measurements.</summary>
+/// <remarks>Use <see cref="DiagnosticSampler"/> for repeated host sampling with reusable spatial/component
+/// storage. This straightforward enumeration remains available for parity checks and independent evidence.</remarks>
 public static class Diagnostics
 {
     /// <summary>Samples speeds, exact overlaps and geometric connected components.</summary>
