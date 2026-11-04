@@ -71,7 +71,7 @@ function Write-Json {
 }
 
 function Invoke-Cli {
-    param([string[]]$Arguments, [int]$ExpectedExit = 0, [string]$ErrorPattern = '')
+    param([string[]]$Arguments, [int]$ExpectedExit = 0, [string]$ErrorPattern = '', [scriptblock]$WhileRunning = $null)
     $script:commandCount++
     $startInfo = [Diagnostics.ProcessStartInfo]::new('dotnet')
     $startInfo.WorkingDirectory = $repository
@@ -82,18 +82,25 @@ function Invoke-Cli {
     $startInfo.ArgumentList.Add($assembly)
     foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::new()
+    $processStarted = $false
     try {
         $process.StartInfo = $startInfo
-        $null = $process.Start()
+        $processStarted = $process.Start()
+        Assert-That $processStarted 'The CLI process did not start.'
         # Read both streams concurrently so neither pipe can block the child.
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
+        if ($null -ne $WhileRunning) { & $WhileRunning $process }
+        Assert-That ($process.WaitForExit(30000)) 'The CLI command exceeded its 30-second timeout.'
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         $exitCode = $process.ExitCode
     }
     finally {
+        if ($processStarted -and -not $process.HasExited) {
+            $process.Kill($true)
+            $null = $process.WaitForExit(5000)
+        }
         $process.Dispose()
     }
 
@@ -158,6 +165,30 @@ foreach ($preset in @('random', 'chains', 'snakes')) {
     if ($preset -ceq 'random') { $randomPath = $experimentPath }
 }
 
+# validate and run must decode the same input, while reports hash the original encoded bytes.
+$encodingCases = [ordered]@{
+    'utf8-bom' = [Text.UTF8Encoding]::new($true)
+    'utf16-le' = [Text.UnicodeEncoding]::new($false, $true)
+    'utf16-be' = [Text.UnicodeEncoding]::new($true, $true)
+    'utf32-le' = [Text.UTF32Encoding]::new($false, $true)
+    'utf32-be' = [Text.UTF32Encoding]::new($true, $true)
+}
+$sourceJson = [IO.File]::ReadAllText($randomPath)
+$baselineReport = Read-Json (Join-Path $outputDirectory 'random-unsampled.json')
+foreach ($encodingCase in $encodingCases.GetEnumerator()) {
+    $encodedPath = Join-Path $outputDirectory ($encodingCase.Key + '.json')
+    $encodedReportPath = Join-Path $outputDirectory ($encodingCase.Key + '-run.json')
+    [IO.File]::WriteAllText($encodedPath, $sourceJson, $encodingCase.Value)
+    $encodedHash = (Get-FileHash -LiteralPath $encodedPath -Algorithm SHA256).Hash
+    Invoke-Cli -Arguments @('validate', $encodedPath)
+    Invoke-Cli -Arguments @('run', $encodedPath, '--steps', '20', '--sample-every', '0', '--output', $encodedReportPath)
+    $encodedReport = Read-Json $encodedReportPath
+    Assert-That ((ConvertTo-CanonicalJson $encodedReport.experiment) -ceq (ConvertTo-CanonicalJson $baselineReport.experiment)) "$($encodingCase.Key) changed the decoded experiment."
+    Assert-That ((ConvertTo-CanonicalJson $encodedReport.finalState) -ceq (ConvertTo-CanonicalJson $baselineReport.finalState)) "$($encodingCase.Key) changed the simulation result."
+    Assert-That ($encodedReport.sourceExperimentSha256 -ceq $encodedHash) "$($encodingCase.Key) report did not hash the original encoded bytes."
+    Assert-That ((Get-FileHash -LiteralPath $encodedPath -Algorithm SHA256).Hash -ceq $encodedHash) "$($encodingCase.Key) input was modified."
+}
+
 $zeroPath = Join-Path $outputDirectory 'zero-steps.json'
 Invoke-Cli -Arguments @('run', $randomPath, '--steps', '0', '--sample-every', '5', '--output', $zeroPath)
 $zero = Read-Json $zeroPath
@@ -194,6 +225,33 @@ $existingHash = (Get-FileHash -LiteralPath $randomPath -Algorithm SHA256).Hash
 Invoke-Cli -Arguments @('create', '--output', $randomPath) -ExpectedExit 1 -ErrorPattern 'Output already exists'
 Invoke-Cli -Arguments @('run', $randomPath, '--steps', '1', '--output', $randomPath) -ExpectedExit 1 -ErrorPattern 'Output already exists'
 Assert-That ((Get-FileHash -LiteralPath $randomPath -Algorithm SHA256).Hash -ceq $existingHash) 'Output protection changed an existing experiment.'
+
+# Synchronize with PrepareOutput via a unique parent directory created by the child. The bounded
+# direct-solver workload gives this process time to create the destination before the final write.
+$raceInput = Join-Path $outputDirectory 'output-race-input.json'
+$raceParent = Join-Path $outputDirectory 'output-race'
+$raceOutput = Join-Path $raceParent 'result.json'
+$sentinelText = 'Created by another writer while the simulation was running.'
+Invoke-Cli -Arguments @('create', '--particles', '2000', '--species', '2', '--seed', "$seed", '--output', $raceInput)
+Invoke-Cli -Arguments @('run', $raceInput, '--steps', '300', '--sample-every', '0', '--output', $raceOutput) -ExpectedExit 1 -WhileRunning {
+    param($runningProcess)
+    $readyTimer = [Diagnostics.Stopwatch]::StartNew()
+    while (-not [IO.Directory]::Exists($raceParent)) {
+        Assert-That (-not $runningProcess.HasExited) 'The CLI exited before preparing its output directory.'
+        Assert-That ($readyTimer.ElapsedMilliseconds -lt 10000) 'The CLI did not prepare its output directory within ten seconds.'
+        Start-Sleep -Milliseconds 5
+    }
+    # CreateNew ensures this test cannot replace an already completed report and hide a failure.
+    $sentinelStream = [IO.FileStream]::new($raceOutput, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $sentinelBytes = [Text.Encoding]::UTF8.GetBytes($sentinelText)
+        $sentinelStream.Write($sentinelBytes, 0, $sentinelBytes.Length)
+    }
+    finally {
+        $sentinelStream.Dispose()
+    }
+}
+Assert-That ([IO.File]::ReadAllText($raceOutput) -ceq $sentinelText) 'The CLI replaced an output file created during the run.'
 
 $overflowPath = Join-Path $outputDirectory 'numerical-overflow.json'
 $overflowOutput = Join-Path $outputDirectory 'numerical-overflow-result.json'

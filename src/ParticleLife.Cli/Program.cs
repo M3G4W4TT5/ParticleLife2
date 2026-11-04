@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Models;
@@ -76,7 +77,7 @@ internal static class CommandLine
             Integer(options, "particles", 500), Integer(options, "species", 7), Integer(options, "seed", 1),
             timeStep: Number(options, "dt", 1d / 144));
         PrepareOutput(output);
-        ExperimentFile.Save(output, experiment);
+        WriteNewOutput(output, ExperimentFile.Serialize(experiment));
         Console.WriteLine($"Saved {experiment.Name}: {experiment.InitialState.Count} particles, {experiment.Matrix.SpeciesCount} species to {Path.GetFullPath(output)}");
     }
 
@@ -88,7 +89,7 @@ internal static class CommandLine
         ArgumentOutOfRangeException.ThrowIfNegative(steps);
         ArgumentOutOfRangeException.ThrowIfNegative(sampleEvery);
         byte[] inputBytes = File.ReadAllBytes(path);
-        ExperimentDefinition experiment = ExperimentFile.Deserialize(System.Text.Encoding.UTF8.GetString(inputBytes).TrimStart('\uFEFF'));
+        ExperimentDefinition experiment = ExperimentFile.Deserialize(ReadExperimentText(inputBytes));
         double clusterDistance = Number(options, "cluster-distance", experiment.Parameters.Cutoff);
         if (!double.IsFinite(clusterDistance) || clusterDistance <= 0)
         {
@@ -149,7 +150,7 @@ internal static class CommandLine
 
         if (output is not null)
         {
-            File.WriteAllText(output, JsonSerializer.Serialize(report, ReportOptions) + "\n");
+            WriteNewOutput(output, JsonSerializer.Serialize(report, ReportOptions));
         }
 
         Console.WriteLine(FormattableString.Invariant($"Completed {steps} steps; t={final.Time:G17}; particles={final.Count}; elapsed={elapsed.Elapsed.TotalMilliseconds:F3} ms (including scheduled diagnostics)."));
@@ -258,6 +259,24 @@ internal static class CommandLine
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+    }
+
+    private static string ReadExperimentText(byte[] inputBytes)
+    {
+        // Match ExperimentFile.Load's BOM-aware File.ReadAllText policy without rereading the file;
+        // the captured bytes remain authoritative for both decoding and the source digest.
+        using MemoryStream stream = new(inputBytes, writable: false);
+        using StreamReader reader = new(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
+    private static void WriteNewOutput(string path, string text)
+    {
+        // Exclusive creation also protects a file created after the early PrepareOutput check.
+        using FileStream stream = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using StreamWriter writer = new(stream);
+        writer.Write(text);
+        writer.Write('\n');
     }
 
     private static void PrintHelp() => Console.WriteLine("""
