@@ -93,7 +93,7 @@ public static class ExperimentFile
             experiment.Name, experiment.TimeStep, ParameterData.From(experiment.Parameters),
             new MatrixData(experiment.Matrix.SpeciesCount, experiment.Matrix.Values.ToArray()),
             new StateData(initial.Ids.ToArray(), ToPoints(initial.Positions), ToPoints(initial.Velocities), initial.Species.ToArray()),
-            experiment.Generator, experiment.WorkerCount), Options);
+            experiment.Generator, experiment.WorkerCount, experiment.Provenance), Options);
     }
 
     /// <summary>Parses and validates a versioned experiment; it never runs its generator.</summary>
@@ -143,7 +143,7 @@ public static class ExperimentFile
                 _ => throw new NotSupportedException("Unsupported experiment neighbour-search convention.")
             };
             return CreateDefinition(data.Name, data.Parameters, data.Matrix, data.InitialState, data.TimeStep,
-                data.Generator, backend, data.WorkerCount);
+                data.Generator, backend, data.WorkerCount, data.Provenance);
         }
 
         throw new NotSupportedException("Unsupported experiment schema.");
@@ -158,13 +158,14 @@ public static class ExperimentFile
     }
 
     private static ExperimentDefinition CreateDefinition(string name, ParameterData parameters, MatrixData matrix,
-        StateData state, double timeStep, GeneratorMetadata generator, ForceBackend backend, int workerCount = 1)
+        StateData state, double timeStep, GeneratorMetadata generator, ForceBackend backend, int workerCount = 1,
+        ExperimentProvenance? provenance = null)
     {
         // Constructor contracts additionally validate lengths, identities, species and finite state.
         return new ExperimentDefinition(name, parameters.ToParameters(),
             new InteractionMatrix(matrix.SpeciesCount, matrix.Values),
             new ParticleSnapshot(state.Ids, ToVectors(state.Positions), ToVectors(state.Velocities), state.Species),
-            timeStep, generator, backend, workerCount);
+            timeStep, generator, backend, workerCount, provenance);
     }
 
     private sealed record FileDataV1(int SchemaVersion, string ModelVersion, string SolverVersion, string Units,
@@ -173,7 +174,8 @@ public static class ExperimentFile
 
     private sealed record FileDataV2(int SchemaVersion, string ModelVersion, string IntegratorVersion, string NeighbourSearchVersion, string Units,
         string Boundary, string Name, double TimeStep, ParameterData Parameters, MatrixData Matrix,
-        StateData InitialState, GeneratorMetadata Generator, int WorkerCount = 1);
+        StateData InitialState, GeneratorMetadata Generator, int WorkerCount = 1,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ExperimentProvenance? Provenance = null);
 
     private sealed record MatrixData(int SpeciesCount, double[] Values);
 

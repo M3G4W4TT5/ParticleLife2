@@ -21,10 +21,11 @@ public sealed class ExperimentDefinition
     /// <param name="generator">Generator identity, version, seed and runtime provenance.</param>
     /// <param name="backend">Intended neighbour search; omitted values retain the direct reference behaviour.</param>
     /// <param name="workerCount">Explicit grid workers, including the caller (1..8); direct requires one.</param>
+    /// <param name="provenance">Optional source boundary for a completed-state capture rebased to time zero.</param>
     /// <exception cref="ArgumentException">Metadata, species, parameters or initial time are invalid.</exception>
     public ExperimentDefinition(string name, ModelParameters parameters, InteractionMatrix matrix,
         ParticleSnapshot initialState, double timeStep, GeneratorMetadata generator, ForceBackend backend = ForceBackend.Direct,
-        int workerCount = 1)
+        int workerCount = 1, ExperimentProvenance? provenance = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(parameters);
@@ -64,6 +65,7 @@ public sealed class ExperimentDefinition
         Generator = generator;
         Backend = backend;
         WorkerCount = workerCount;
+        Provenance = provenance;
     }
 
     /// <summary>Gets the experiment's human-readable name.</summary>
@@ -96,6 +98,10 @@ public sealed class ExperimentDefinition
     /// schema-2 files default to one worker. Direct fallback always evaluates serially.</remarks>
     public int WorkerCount { get; }
 
+    /// <summary>Gets optional source-clock metadata for rebased completed state.</summary>
+    /// <remarks>The initial state's time and step remain zero. This metadata does not alter dynamics.</remarks>
+    public ExperimentProvenance? Provenance { get; }
+
     /// <summary>Creates an experiment differing only in its intended neighbour search.</summary>
     /// <param name="backend">Direct reference or uniform-grid search.</param>
     /// <param name="workerCount">Explicit override, or null to retain workers for the same backend.
@@ -104,7 +110,7 @@ public sealed class ExperimentDefinition
     /// <exception cref="ArgumentOutOfRangeException">The backend is unsupported.</exception>
     public ExperimentDefinition WithBackend(ForceBackend backend, int? workerCount = null) =>
         new(Name, Parameters, Matrix, InitialState, TimeStep, Generator, backend,
-            workerCount ?? (backend == Backend ? WorkerCount : 1));
+            workerCount ?? (backend == Backend ? WorkerCount : 1), Provenance);
 
     /// <summary>Creates an independent simulation with owned reusable buffers.</summary>
     /// <param name="backendOverride">Explicit execution override, or null to honour the saved configuration.</param>

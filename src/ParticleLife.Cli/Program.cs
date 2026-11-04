@@ -12,7 +12,7 @@ using ParticleLife.Core.State;
 
 return CommandLine.Run(args);
 
-internal static class CommandLine
+internal static partial class CommandLine
 {
     private static readonly JsonSerializerOptions ReportOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
 
@@ -47,6 +47,23 @@ internal static class CommandLine
                     }
 
                     RunExperiment(args[1], ParseOptions(args, 2, ["steps", "sample-every", "cluster-distance", "backend", "workers", "output"]));
+                    break;
+                case "validate-session":
+                    if (args.Length != 2)
+                    {
+                        throw new ArgumentException("Usage: validate-session <session.json>");
+                    }
+
+                    SessionDefinition session = SessionFile.Load(args[1]);
+                    Console.WriteLine($"Valid session structure: {session.Events.Count} ordered events, terminal boundary {session.TerminalStep}. Replay additionally verifies structural clocks and numerical completion.");
+                    break;
+                case "replay":
+                    if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
+                    {
+                        throw new ArgumentException("Usage: replay <session.json> [--continue-steps N] [--output result.json]");
+                    }
+
+                    ReplaySession(args[1], ParseOptions(args, 2, ["continue-steps", "sample-every", "cluster-distance", "backend", "workers", "output"]));
                     break;
                 default:
                     throw new ArgumentException($"Unknown command '{args[0]}'. Use --help.");
@@ -357,13 +374,21 @@ internal static class CommandLine
         validate experiment.json
         run experiment.json --steps N [--sample-every 100] [--cluster-distance 0.1]
                             [--backend direct|grid] [--workers 1] [--output result.json]
+        validate-session session.json
+        replay session.json [--continue-steps 0] [--sample-every 100] [--cluster-distance R]
+                            [--backend direct|grid] [--workers N] [--output result.json]
 
         JSON experiments contain actual initial state, directed matrix values, parameters and provenance.
         New CLI experiments default to grid search. Runs honour the saved backend unless overridden.
         Grid workers are explicit (1..8 including the caller); direct requires one. Default is serial.
         Legacy schema-1 experiments retain direct search. Reports retain source and effective settings,
         last actual search and direct fallback counts for coordinate or accumulation range limits.
-        Edit validated JSON parameters for other cutoffs, soft walls or disabled damping (null half-life).
+        The native editor changes rules live and saves presets, current-state experiments and sessions.
+        Session replay applies recorded edits at completed-step boundaries, including terminal edits.
+        validate-session checks the file contract without running numerical steps; replay also checks
+        structural payload clocks against actual accumulated time and verifies numerical completion.
+        Replay honours every saved backend/worker change. Explicit overrides apply to the entire replay
+        and are recorded separately in its report. --continue-steps advances after the terminal boundary.
         Output files must not already exist. Reports include the original experiment and final state;
         reports are not checkpoint inputs. Set --sample-every 0 to disable exact spatial diagnostics.
         Seeds alone do not guarantee identical generation or trajectories across runtimes.

@@ -328,4 +328,26 @@ Invoke-Cli -Arguments @('run', $measurementFailureInput, '--steps', '2', '--samp
 $measurementFailureResult = Read-Json $measurementFailureReport
 Assert-That ($measurementFailureResult.finalState.step -eq 2 -and $measurementFailureResult.diagnostics.failures.Count -eq 3) 'Optional diagnostic failure stopped valid integration.'
 
+$sessionPath = Join-Path $repository 'examples/sessions/live-edits.session.json'
+$sessionReport = Join-Path $outputDirectory 'session-replay.json'
+$sessionOverride = Join-Path $outputDirectory 'session-override.json'
+Invoke-Cli -Arguments @('validate-session', $sessionPath)
+Invoke-Cli -Arguments @('replay', $sessionPath, '--sample-every', '3', '--output', $sessionReport)
+Invoke-Cli -Arguments @('replay', $sessionPath, '--backend', 'direct', '--continue-steps', '2', '--sample-every', '0', '--output', $sessionOverride)
+$replayed = Read-Json $sessionReport
+$overridden = Read-Json $sessionOverride
+Assert-That ($replayed.finalState.step -eq 9 -and $replayed.replay.appliedEventCount -eq 5) 'Replay missed a boundary or terminal edit.'
+Assert-Close (3.0 / 144 + 6 * 0.002) $replayed.finalState.time 'Replay recomputed time from the final timestep.'
+Assert-That ($replayed.execution.currentTimeStep -eq 0.001) 'Replay omitted the terminal timestep edit.'
+Assert-That ($replayed.execution.segments.Count -eq 2) 'Replay lost requested/actual execution segments.'
+Assert-That ($replayed.execution.segments[0].actualWorkerCount -eq 1 -and $replayed.execution.segments[1].actualWorkerCount -eq 4) 'Replay did not honour recorded worker changes.'
+Assert-That ($replayed.sourceSessionSha256 -ceq (Get-FileHash -LiteralPath $sessionPath -Algorithm SHA256).Hash) 'Replay source digest does not identify the original bytes.'
+Assert-That ($overridden.finalState.step -eq 11 -and $overridden.replay.backendOverride -eq 'direct/1') 'Replay continuation or explicit override provenance failed.'
+Assert-That ($overridden.session.events[2].configuration.workerCount -eq 4) 'An override changed the recorded session.'
+Assert-Close ($replayed.finalState.time + 0.002) $overridden.finalState.time 'Continuation used the pre-terminal timestep.'
+Invoke-Cli -Arguments @('replay', $sessionPath, '--output', $sessionReport) -ExpectedExit 1 -ErrorPattern 'already exists'
+Invoke-Cli -Arguments @('replay', $sessionReport) -ExpectedExit 1
+Invoke-Cli -Arguments @('replay', $sessionPath, '--backend', 'direct', '--workers', '4') -ExpectedExit 1
+Invoke-Cli -Arguments @('replay', $sessionPath, '--continue-steps', '-1') -ExpectedExit 1
+
 Write-Output "CLI checks passed ($script:commandCount commands). Reports retained at $outputDirectory"

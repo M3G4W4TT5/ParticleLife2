@@ -189,6 +189,63 @@ public sealed class ReconfigurationTests
         Assert.Equal(0, backgroundBytes);
     }
 
+    [Fact]
+    public void StructuralGrowthThenShrinkAndWorkerSwitchRetainZeroAllocationAfterWarmup()
+    {
+        ExperimentDefinition initial = PresetGenerator.Create(PresetKind.Random, 16, 2, 19);
+        using Simulation simulation = initial.CreateSimulation();
+        simulation.Step();
+        ExperimentDefinition generated = PresetGenerator.Create(PresetKind.Random, 257, 3, 20);
+        ParticleSnapshot growth = new(generated.InitialState.Ids, generated.InitialState.Positions,
+            generated.InitialState.Velocities, generated.InitialState.Species, simulation.Observe().Time, simulation.Observe().Step);
+        simulation.Reconfigure(new(initial.Parameters, generated.Matrix, 0.001, ForceBackend.UniformGrid, 4), growth);
+        simulation.Step();
+        ParticleSnapshot completed = simulation.CaptureSnapshot();
+        ParticleSnapshot shrink = new(completed.Ids[..65], completed.Positions[..65], completed.Velocities[..65],
+            completed.Species[..65], completed.Time, completed.Step);
+        simulation.Reconfigure(new(simulation.Parameters with { Cutoff = 0.2 }, simulation.Matrix,
+            0.002, simulation.Backend, simulation.WorkerCount), shrink);
+        for (int i = 0; i < 128; i++)
+        {
+            simulation.Step();
+        }
+
+        UniformGridForceEvaluator evaluator = Assert.IsType<UniformGridForceEvaluator>(simulation.Evaluator);
+        Assert.Equal(257, evaluator.IndexStatistics.ParticleCapacity);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        long workers = 0;
+        for (int i = 0; i < 128; i++)
+        {
+            simulation.Step();
+            workers += evaluator.LastWorkerAllocatedBytes;
+        }
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, workers);
+    }
+
+    [Fact]
+    public void NumericalFailureAfterAcceptedEditRetainsTheLastCompletedParticleState()
+    {
+        ParticleSnapshot initial = new([1, 2], [new(0.1, 0.5), new(0.75, 0.5)], [default, default], [0, 0]);
+        ModelParameters parameters = new() { Cutoff = 1, ForceScale = 0, WallStrength = 0, DampingHalfLife = null };
+        using Simulation simulation = new(initial, parameters, new InteractionMatrix(1, [1]), 0.001,
+            ForceBackend.UniformGrid, 4);
+        simulation.Step();
+        ParticleSnapshot completed = simulation.CaptureSnapshot();
+        SimulationConfiguration accepted = new(parameters with { ForceScale = 1 }, simulation.Matrix,
+            1e308, simulation.Backend, simulation.WorkerCount);
+        simulation.Reconfigure(accepted);
+        Assert.Throws<ArithmeticException>(simulation.Step);
+        ReconfigurationTests.AssertExactState(completed, simulation.CaptureSnapshot());
+        Assert.Same(accepted, simulation.Configuration);
+        Assert.Null(simulation.LastExecution);
+        Assert.Equal(0, simulation.DirectFallbackSteps);
+        simulation.Reconfigure(new(parameters, simulation.Matrix, 0.001, simulation.Backend, simulation.WorkerCount));
+        simulation.Step();
+        Assert.Equal(completed.Step + 1, simulation.Observe().Step);
+    }
+
     internal static void AssertExactState(ParticleSnapshot expected, ParticleSnapshot actual)
     {
         Assert.Equal(expected.Ids.ToArray(), actual.Ids.ToArray());
