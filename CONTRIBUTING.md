@@ -59,6 +59,12 @@ When the core project is created, enable [`GenerateDocumentationFile`](https://l
 
 Use [Docfx](https://dotnet.github.io/docfx/docs/dotnet-api-docs.html) as the proposed API renderer, with a pinned tool version when introduced. Generated API metadata and HTML are build artifacts. Handwritten Markdown is reserved for the project overview, architecture decisions, contribution instructions and experiment walkthroughs. A comment change and the corresponding code change belong in the same commit.
 
+## Project README
+
+Keep the README concise and user-facing, in the project's author's voice. It should explain the project, its current status and, when available, how to run and explore it. Follow the direct, explanatory style of the original Particle Life README.
+
+Keep agent work logs, internal reasoning and detailed migration discussion out of the README. Put architecture decisions in the plan and implementation details in C# XML comments. Do not add links to private research repositories to the README.
+
 ## Correctness and performance evidence
 
 Use deterministic small cases to test equations and state transitions. Compare optimized neighbour sets and force evaluations with the direct reference implementation. Express tolerances with their units or scales and the reason they are appropriate. Conservation tests must match the model's assumptions.
@@ -79,4 +85,4 @@ Keep SDK versions, dependency versions and local tool versions reproducible once
 
 The existing `review/` directory contains local historical analysis and is ignored. Do not use it as an implicit dependency of production projects or maintained tests. Bring required regression cases into the new test project with clear provenance.
 
-Remote setup will select a repository name, visibility and license and push the local history. Publishing is separate from generating local API documentation. Do not configure deployment or upload simulation results merely because a documentation generator or CI workflow supports it.
+The GitHub remote is [M3G4W4TT5/ParticleLife2](https://github.com/M3G4W4TT5/ParticleLife2), currently private. Publishing is separate from generating local API documentation. Do not configure deployment or upload simulation results merely because a documentation generator or CI workflow supports it.

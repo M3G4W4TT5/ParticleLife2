@@ -1,11 +1,9 @@
-# Particle Life 2
+# Particle Life 2 (WIP)
 
-Particle Life 2 is a C# project for exploring emergence through particle simulations. The first development phase modernizes the original two-dimensional Particle Life simulation around an engine-independent numerical core.
+_Exploring emergent behaviour from simple interactions._
 
-The project prioritizes explicit models, numerical correctness, measurable performance, readable code, and scientific explanations in C# XML documentation comments. MonoGame is the proposed first viewer; Unity integration, three-dimensional models, and gameplay are later work.
+Particle Life 2 is a continuation of [Particle Life](https://github.com/M3G4W4TT5/ParticleLife). The goal is to create a lightweight, modifiable particle simulation for exploring how local interactions produce collective behaviour: particles forming patterns, clustering, separating and moving together.
 
-The repository currently contains the [architecture and migration plan](docs/architecture-and-migration.md) and [contributor guidance](CONTRIBUTING.md). Application implementation has not started.
+The initial focus is on two-dimensional simulations, with an engine-independent C# core and MonoGame for rendering. Models and numerical methods should be explicit and testable, with attention to performance, readable code and scientific explanations in C# XML documentation.
 
-The plan starts with a reproducible serial simulation and a runner without graphics, adapts the MonoGame viewer, and then adds measured spatial acceleration. C# XML comments will be the source for generated API documentation. Markdown records project decisions and workflows rather than duplicating code documentation.
-
-The original [ParticleLife](https://github.com/M3G4W4TT5/ParticleLife) is the migration reference. [ParticleLife v0.2 Prototype](https://github.com/M3G4W4TT5/ParticleLife_v0.2_Prototype) supplies research ideas for later work.
+The project is currently in the planning stage. See the [architecture and migration plan](docs/architecture-and-migration.md) for the proposed approach, and [contributor guidance](CONTRIBUTING.md) for development conventions.

@@ -239,7 +239,7 @@ Use short-lived branches for cohesive implementation work and make frequent comm
 
 At M1, add formatting, Release build and focused tests to CI; at M5, include generated-documentation checks and appropriate core OS coverage. Pin tools and packages, and record benchmark artifacts separately from normal build output. CI and documentation generation are planned here, not installed in this planning-only repository.
 
-The local repository has no remote initially. Select the GitHub repository name, visibility and project license when setting up remote publication, then push the existing history. Old repositories do not need to be rewritten or repurposed.
+The GitHub remote is [M3G4W4TT5/ParticleLife2](https://github.com/M3G4W4TT5/ParticleLife2), created as a private repository. The local repository uses `origin` for this remote. Project licensing remains to be selected before a public release. Old repositories do not need to be rewritten or repurposed.
 
 ## Source references and review evidence
 
