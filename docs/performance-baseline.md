@@ -119,3 +119,33 @@ Append `.experiment.json` to each case name for its input filename:
 | cluster-10000 | `2D416AB8C163FED20DA5540347CAB9F75746BE560A9D20CF7A5924E4B14D9A9D` |
 | band-10000 | `0679C7F9E5C6D2CEDF20B9D6B6002A40343D5FB4FD4C29AFC08C3B6A63EC633D` |
 | boundary-overlap-500 | `185B5E6ACB6E293A71A8A94C756C03EE86763A993160F05EBCB9383B6582B1B0` |
+
+## M3 interactive observation
+
+The MonoGame viewer was exercised on 4 November 2026 with the source committed as `4c0a9409ea3270b29f523c966d88f9c391745d6c`. The Release binaries were built immediately before that commit; the retained hashes below identify those measured binaries. The machine used an Intel Core Ultra 9 275HX (24 logical processors), NVIDIA GeForce RTX 5080 Laptop GPU, Windows 11 Home build 26300, SDK 10.0.302 and .NET runtime 10.0.10. DesktopGL 3.8.6 used vertical synchronization in a 1280 × 800 client window. The simulation remained serial.
+
+The input was the default 500-particle, seven-species random experiment with seed 1, unit-square world, cutoff 0.1, timestep 1/144 and all other migration defaults. Its complete initial values were saved through the actual viewer, loaded again through its startup argument, and replayed successfully through the CLI for 120 steps. The saved input SHA-256 is `F39ADA28798A3F6A95200C1F811DEDCE335D3ED67BB760C9F4209F4FD8F56B25`. Diagnostics sampled every 144 completed steps. Playback targets one reduced time unit per wall second and caps catch-up at eight fixed steps per frame.
+
+Three manually requested timing summaries each describe the latest approximately one-second interval. Update timing surrounds controller advancement, including scheduled diagnostics; it excludes input handling, drawing, GPU work and presentation. FPS includes presentation pacing. The help overlay was visible during collection.
+
+| Completed step when requested | FPS | Mean controller update (ms) | Maximum controller update (ms) | Total dropped playback (s) |
+| ---: | ---: | ---: | ---: | ---: |
+| 3,511 | 144.0 | 0.660 | 1.878 | 0 |
+| 6,295 | 143.1 | 0.686 | 1.992 | 0 |
+| 9,771 | 144.0 | 0.736 | 1.791 | 0 |
+
+These observations support responsiveness for this particular evolving 500-particle workload on this machine. They are not latency percentiles, an isolated rendering benchmark, an allocation measurement or a real-time capacity guarantee. Power plan, thermal state and background load were not controlled. The M2 large-population limits still apply: an eight-step cap cannot interrupt one expensive quadratic step or diagnostic. No solver optimization or numerical-model change was made in M3.
+
+Native checks covered initial rendering, startup from a saved experiment, invalid reload retaining the current completed state, successful reload/reset to time and step zero, clearing stale measurements, three preset selections, diagnostic updates/toggling, and separate state-resample and matrix-change saves. Comparing the actual saved files confirmed that state resampling retained matrix values and matrix randomization retained initial particle values. Wide, compact and tall window shapes preserved isotropic geometry, particle count and paused state. The viewer closed without stderr output.
+
+The Right-arrow keyboard step advanced exactly once. Other commands were exercised through clickable help rows and the playback badge: the Windows automation helper's letter/nonextended key injection did not deliver SDL key events, so those physical keyboard shortcuts were not independently verified by that helper. Linux CI builds the viewer and runs display-free tests; Linux/macOS native graphics startup remains unverified.
+
+The seven automated CLI/controller parity cases matched identities after 120 completed steps with zero measured position, velocity and time differences on this runtime, using `1e-12` absolute plus `1e-12` relative tolerances. Those tests exercise the actual controller used by the window, including irregular frames, pause/resume, reset and single-step. They establish host parity for the reviewed direct solver, not cross-runtime bitwise identity.
+
+Local ignored `artifacts/m3/` retains the input, CLI replay report, native logs and `native-verification.json` metadata. The three experiments used to check save/resample/matrix semantics are retained under ignored `artifacts/viewer/`. None is a source or build dependency. Measured binary SHA-256 values:
+
+| Assembly | SHA-256 |
+| --- | --- |
+| ParticleLife.MonoGame | `24DD5408CAE9ACB18310E64DE273EE21F1FF9B302A41B8A9867F74E13383734D` |
+| ParticleLife.Viewer | `A638459CED8FEF8BACFFAAE2F1B6C467336679765D6CE559E965A4D17B639177` |
+| ParticleLife.Core | `D020ECBA0F58630552D8A52C93D0873DE7E7B19BCA07F038A4C74F27EE14D7A1` |

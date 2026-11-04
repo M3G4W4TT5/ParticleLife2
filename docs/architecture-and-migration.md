@@ -2,7 +2,7 @@
 
 Particle Life 2 will modernize the original two-dimensional Particle Life simulation around an engine-independent C# core. The first release should make its behaviour reproducible, its equations explicit, and its performance measurable while retaining the attraction matrices and emergent patterns that motivated the project.
 
-This is the implementation plan as of 4 November 2026. M1 and M2 are implemented: a validated experiment format, tested serial simulation, headless CLI and reference measurements. The numerical conventions below are the implemented baseline. M3–M5 remain planned.
+This is the implementation plan as of 4 November 2026. M1–M3 are implemented: a validated experiment format, tested serial simulation, headless CLI, reference measurements and an interactive MonoGame viewer. The numerical conventions below remain the reviewed baseline. M4–M5 remain planned.
 
 ## Scope and priorities
 
@@ -19,8 +19,10 @@ The simulation core must build, run and be tested without loading a graphics fra
 ```mermaid
 flowchart LR
     CLI[Console runner] --> Core[Simulation core]
-    Viewer[MonoGame viewer] --> Core
+    Viewer[MonoGame viewer] --> Host[Graphics-free playback controller]
+    Host --> Core
     Tests[Correctness tests] --> Core
+    HostTests[Host and CLI parity tests] --> Host
     Benchmarks[Performance benchmarks] --> Core
     Core --> Results[State and measurements]
 ```
@@ -44,9 +46,11 @@ src/
     Numerics/
     Experiments/
   ParticleLife.Cli/
-  ParticleLife.MonoGame/             # M3, not created yet
+  ParticleLife.Viewer/              # Graphics-free playback and presentation mapping
+  ParticleLife.MonoGame/            # Window, input and rendering
 tests/
   ParticleLife.Core.Tests/
+  ParticleLife.Viewer.Tests/
   ParticleLife.MonoGame.Compatibility/
 benchmarks/
   ParticleLife.Benchmarks/
@@ -54,7 +58,9 @@ examples/
   experiments/
 ```
 
-These directories are created as their milestones begin. The verified baseline is .NET 10 LTS, SDK 10.0.302 pinned in `global.json`, and MonoGame DesktopGL 3.8.6 pinned in the compatibility project. A minimal `Game` subclass builds and managed core/MonoGame value conversion runs without a window; native graphics initialization is not yet tested. Microsoft's [support policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core) identifies .NET 10 as an LTS release, and the [MonoGame package](https://www.nuget.org/packages/MonoGame.Framework.DesktopGL/3.8.6) supports .NET 8 and later. Future Unity runtime compatibility and acceleration will be assessed separately; engine-independent source does not imply that every .NET assembly can be used unchanged in Unity.
+The verified baseline is .NET 10 LTS, SDK 10.0.302 pinned in `global.json`, and MonoGame DesktopGL 3.8.6 pinned in the viewer and compatibility project. Native viewer startup has been verified on Windows; Linux CI builds the viewer and runs tests without a display, so it does not verify Linux native graphics startup. Microsoft's [support policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core) identifies .NET 10 as an LTS release, and the [MonoGame package](https://www.nuget.org/packages/MonoGame.Framework.DesktopGL/3.8.6) supports .NET 8 and later. Future Unity runtime compatibility and acceleration will be assessed separately; engine-independent source does not imply that every .NET assembly can be used unchanged in Unity.
+
+`ParticleLife.Viewer` references only the core. It owns fixed-step playback policy, experiment variations, exclusive output creation and the isotropic coordinate transform. `ParticleLife.MonoGame` owns window events, graphics resources and display formatting. This boundary lets display-free tests exercise the same controller used by the native application while keeping presentation and engine dependencies out of the core.
 
 ### Particle state and ownership
 
@@ -162,7 +168,29 @@ The first working slice includes the three Particle Life presets: random, chains
 
 Restoring a legacy visual effect with explicit experimental naming and model-local saturation is different from replacing it with a physical force law. Record which choice is made. Full parity with every exploratory mode is not required for the first reliable 2D release; each omission must have a recorded disposition.
 
-The viewer retains mode selection and reset, adds pause and single-step, and displays model name, simulation time, timestep and numerical diagnostics. Reset restores the same experiment; resampling initial state and generating a new random matrix are separate actions. Map world coordinates to pixels using an isotropic scale so the window aspect ratio does not distort the simulated geometry.
+### Interactive playback and experiment changes
+
+The MonoGame host uses a variable presentation loop and a monotonic `Stopwatch` clock. It passes elapsed wall seconds to the graphics-free controller, which requests one reduced simulation-time unit per wall second and advances only the experiment's fixed timestep. At most eight steps complete per frame. Remaining whole-step playback time is discarded and displayed; only the fractional remainder is retained. This policy bounds catch-up work without changing `dt`. It does not bound the runtime of an individual quadratic step or measurement, so large populations can still delay input.
+
+Window events queue commands for the beginning of `Update`, between completed steps. Pause/resume, single-step, reset and experiment replacement clear pending playback time. Paused elapsed time cannot cause a burst on resume. Single-step pauses and completes exactly once. Focus loss pauses playback and requires explicit resume. Reset and replacement preserve pause status, clear dropped-time accounting and stale measurements, and suppress advancement in their command frame. A numerical failure leaves the last completed state visible and pauses playback.
+
+The operation boundaries are explicit:
+
+| Operation | Retained values | Replaced values |
+| --- | --- | --- |
+| Reset (`R`) | Entire current experiment, including actual initial values and matrix | Evolved state, time and step return to the saved initial state at zero |
+| State resample (`I`) | Identities, species, matrix, model and timestep | Uniform positions and zero velocities, with a new recorded seed |
+| Random matrix (`M`) | Exact saved initial state, model and timestep | Directed coefficients sampled independently in `[-1,1)`, with a new recorded seed |
+| Preset (`1` / `2` / `3`) | Population, species count, model and timestep | Initial state and random/chain/snake matrix, with a new recorded seed |
+| Startup file / reload (`F5`) | Previous valid experiment if loading fails | Complete validated experiment on success |
+
+Every successful variation becomes the new reset target at time and step zero. Matrix changes restart from saved initial state, not evolved positions. Generator metadata identifies the latest generation operation, seed and runtime; actual saved state and matrix values remain authoritative. Invalid interactive input shows an error and pauses without replacing the valid experiment. Invalid startup files retain the generated fallback experiment paused. Run reports are rejected as inputs.
+
+Saving (`S`) serializes the complete current initial experiment in schema 1 for CLI replay. It creates a timestamped unique file under `artifacts/viewer` by default, with exclusive file creation protecting existing or concurrent outputs. It is not a checkpoint or a current-state export. The input path, output directory and generation/cadence defaults can be supplied at startup; actual controls and launch commands are in the README.
+
+Rendering obtains `Observe()` only after stepping, reads its spans immediately, and retains no view across a step or reset. The host runs input, simulation and drawing sequentially without a snapshot copy each frame. A single world-to-screen scale preserves world geometry across viewport shapes; no display dimension changes positions, forces or interaction cutoffs. Rendering may skip pixels outside the viewport but never removes finite off-world particles. Species colours are stable functions of species identifiers. Textures, font atlas, sprite batch and clipping state are reused and disposed with the host.
+
+Viewer diagnostics default to every 144 completed steps, independently of rendered frames, with their own sampled time and step displayed. Zero disables sampling; `D` toggles it. Sampling remains quadratic and allocating outside the core step. Reset, replacement and cadence changes clear stale measurements. Optional measurement failure is reported separately and does not change the simulated trajectory. Display controls and diagnostic choices do not change model equations or state advancement at a given completed step count.
 
 ## Performance design and measurement
 
@@ -211,6 +239,8 @@ Tests should establish the mathematical and state contracts rather than mirror p
 | Model-specific invariants | Test momentum only for reciprocal interactions with driving, damping and external forces disabled. Do not require conservation from the driven baseline. |
 | Numerical safety | Reject non-finite state and invalid configuration; verify that no particles disappear or acquire NaNs in supported cases. |
 | Repeatability | Reset from a saved initial state and compare repeated runs under the same runtime and solver configuration. |
+| Host scheduling and geometry | Drive the viewer's actual controller with irregular frames, pause/resume, single-step, reset and replacement; verify bounded catch-up and isotropic mapping. |
+| CLI/viewer parity | Save fixtures and generated/edited experiments, invoke the actual CLI, and compare against the viewer controller after 120 steps by stable identity. |
 | Performance | Verify steady-capacity allocations and maintain representative benchmark results. |
 
 Use combined absolute and relative tolerances with a documented scale and reason. Short deterministic cases establish implementation correctness; long emergent runs should also be compared through statistics over multiple seeds. Chaotic trajectories need not remain point-for-point identical after a numerical-method change.
@@ -236,7 +266,7 @@ Each milestone should end in small verified commits and a useful result. The seq
 | M4 Spatial acceleration | Add the exact uniform grid, reusable buffers and profiling. Evaluate parallel work only if profiling justifies it. | Neighbour and force parity pass; no steady-capacity step allocation; benchmark comparisons include density/cluster cases and recorded capacity targets. |
 | M5 Documented 2D release | Review the remaining legacy modes, provide examples, generate API docs, finish CI checks and record limitations. | Every legacy mode has a disposition; public API docs build; contributors can reproduce tests, examples and benchmark protocol from a clean checkout. |
 
-M1 and M2 are complete. Build and validation commands are in [CONTRIBUTING.md](../CONTRIBUTING.md); workloads, measured timings, allocation evidence and limitations are in [the reference baseline](performance-baseline.md). The next implementation task is M3. No Unity adapter, octree, FMM, 3D state or gameplay system is needed to complete these milestones.
+M1–M3 are implemented. Build, automated validation and native window checks are described in [CONTRIBUTING.md](../CONTRIBUTING.md); workloads, measured timings, allocation evidence and limitations are in [the reference baseline](performance-baseline.md). The next implementation milestone is M4: an exact uniform-grid search checked against the direct solver, with reusable buffers and comparable performance measurements. No Unity adapter, octree, FMM, 3D state or gameplay system is needed to complete these milestones.
 
 ## Repository workflow and documentation
 
@@ -244,7 +274,7 @@ M1 and M2 are complete. Build and validation commands are in [CONTRIBUTING.md](.
 
 Use short-lived branches for cohesive implementation work and make frequent commits at verified boundaries. Introduce correctness fixes separately from optimizations where practical, so changes in results can be explained. Keep `main` usable, inspect staged changes before committing, and include source, relevant tests and XML updates together.
 
-CI now runs locked restore, formatting, Release builds, tests, the managed MonoGame compatibility check, XML compiler-failure probes and CLI smoke checks. At M5, add rendered-documentation checks and broader core OS coverage. Tools and packages remain pinned; benchmark artifacts stay separate from normal source output. Generated XML is available locally, while full API-site publishing is deferred.
+CI is configured for locked restore, formatting, Release builds including the viewer, numerical and host tests with actual CLI parity, display-free viewer help, the managed MonoGame compatibility check, XML compiler-failure probes and CLI smoke checks. Native window checks are a separate manual gate. At M5, add rendered-documentation checks and broader core OS coverage. Tools and packages remain pinned; benchmark artifacts stay separate from normal source output. Generated XML is available locally, while full API-site publishing is deferred.
 
 The GitHub remote is [M3G4W4TT5/ParticleLife2](https://github.com/M3G4W4TT5/ParticleLife2), created as a private repository. The local repository uses `origin` for this remote. Project licensing remains to be selected before a public release. Old repositories do not need to be rewritten or repurposed.
 
