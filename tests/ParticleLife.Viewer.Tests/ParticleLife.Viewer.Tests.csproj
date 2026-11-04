@@ -10,6 +10,7 @@
     <ProjectReference Include="../../src/ParticleLife.Viewer/ParticleLife.Viewer.csproj" />
     <ProjectReference Include="../../src/ParticleLife.Cli/ParticleLife.Cli.csproj" ReferenceOutputAssembly="false" />
     <Using Include="Xunit" />
+    <Compile Include="../../src/ParticleLife.MonoGame/ViewerOptions.cs" Link="Host/ViewerOptions.cs" />
     <None Include="../../examples/experiments/*.json" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

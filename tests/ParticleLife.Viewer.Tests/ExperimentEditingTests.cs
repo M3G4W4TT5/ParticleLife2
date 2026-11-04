@@ -1,4 +1,5 @@
 using ParticleLife.Core.Experiments;
+using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 using ParticleLife.Viewer;
 
@@ -6,14 +7,17 @@ namespace ParticleLife.Viewer.Tests;
 
 public sealed class ExperimentEditingTests
 {
-    [Fact]
-    public void StateResamplePreservesExactMatrixModelIdentitiesAndSpecies()
+    [Theory]
+    [InlineData(ForceBackend.Direct)]
+    [InlineData(ForceBackend.UniformGrid)]
+    public void StateResamplePreservesExactMatrixModelIdentitiesAndSpecies(ForceBackend backend)
     {
-        ExperimentDefinition original = PresetGenerator.Create(PresetKind.Snakes, 12, 3, 31);
+        ExperimentDefinition original = PresetGenerator.Create(PresetKind.Snakes, 12, 3, 31, backend: backend);
         ExperimentDefinition resampled = ExperimentEditing.ResampleState(original, 917);
         Assert.Same(original.Parameters, resampled.Parameters);
         Assert.Same(original.Matrix, resampled.Matrix);
         Assert.Equal(original.TimeStep, resampled.TimeStep);
+        Assert.Equal(backend, resampled.Backend);
         Assert.Equal(original.InitialState.Ids.ToArray(), resampled.InitialState.Ids.ToArray());
         Assert.Equal(original.InitialState.Species.ToArray(), resampled.InitialState.Species.ToArray());
         Assert.NotEqual(original.InitialState.Positions.ToArray(), resampled.InitialState.Positions.ToArray());
@@ -36,16 +40,19 @@ public sealed class ExperimentEditingTests
         PlaybackControllerTests.SameState(resampled.InitialState, controller.Observe());
     }
 
-    [Fact]
-    public void MatrixChangePreservesExactInitialStateModelAndTimestep()
+    [Theory]
+    [InlineData(ForceBackend.Direct)]
+    [InlineData(ForceBackend.UniformGrid)]
+    public void MatrixChangePreservesExactInitialStateModelAndTimestep(ForceBackend backend)
     {
-        ExperimentDefinition original = PresetGenerator.Create(PresetKind.Chains, 12, 3, 31);
+        ExperimentDefinition original = PresetGenerator.Create(PresetKind.Chains, 12, 3, 31, backend: backend);
         PlaybackController controller = new(original);
         controller.SingleStep();
         ExperimentDefinition changed = ExperimentEditing.RandomizeMatrix(controller.Experiment, 19);
         Assert.Same(original.Parameters, changed.Parameters);
         Assert.Same(original.InitialState, changed.InitialState);
         Assert.Equal(original.TimeStep, changed.TimeStep);
+        Assert.Equal(backend, changed.Backend);
         Assert.NotEqual(original.Matrix.Values.ToArray(), changed.Matrix.Values.ToArray());
         Assert.Equal(19, changed.Generator.Seed);
         Assert.Equal("viewer-random-matrix", changed.Generator.Name);
@@ -55,16 +62,19 @@ public sealed class ExperimentEditingTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void GeneratedValuesAndOperationSeedSurviveExistingExperimentFormat(bool resample)
+    [InlineData(true, ForceBackend.Direct)]
+    [InlineData(false, ForceBackend.Direct)]
+    [InlineData(true, ForceBackend.UniformGrid)]
+    [InlineData(false, ForceBackend.UniformGrid)]
+    public void GeneratedValuesAndOperationSeedSurviveExistingExperimentFormat(bool resample, ForceBackend backend)
     {
-        ExperimentDefinition original = PresetGenerator.Create(PresetKind.Random, 8, 4, 33);
+        ExperimentDefinition original = PresetGenerator.Create(PresetKind.Random, 8, 4, 33, backend: backend);
         ExperimentDefinition changed = resample
             ? ExperimentEditing.ResampleState(original, -771)
             : ExperimentEditing.RandomizeMatrix(original, -771);
         ExperimentDefinition loaded = ExperimentFile.Deserialize(ExperimentFile.Serialize(changed));
         Assert.Equal(changed.Generator, loaded.Generator);
+        Assert.Equal(backend, loaded.Backend);
         Assert.Equal(changed.Matrix.Values.ToArray(), loaded.Matrix.Values.ToArray());
         PlaybackControllerTests.SameState(changed.InitialState, loaded.InitialState.Observe());
     }

@@ -4,6 +4,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using ParticleLife.Core.Experiments;
+using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 using ParticleLife.Viewer;
 
@@ -91,6 +92,8 @@ internal sealed class ParticleLifeGame : Game
         Console.WriteLine($"Viewer: {GraphicsDevice.Adapter.Description}; {Environment.Version}; {Environment.OSVersion}");
         Console.WriteLine($"Experiment: {controller.Experiment.Name}; {controller.Experiment.InitialState.Count} particles; " +
             $"dt={controller.Experiment.TimeStep:G17}; seed={controller.Experiment.Generator.Seed}; diagnostics every {controller.DiagnosticEverySteps} steps.");
+        Console.WriteLine($"Search requested: {ExperimentFile.GetNeighbourSearchVersion(controller.Experiment.Backend)}; " +
+            $"startup override: {options.BackendOverride?.ToString() ?? "none"}; integrator: {ExperimentFile.IntegratorVersion}; model: {ExperimentFile.ModelVersion}.");
         Console.WriteLine($"S saves initial experiments under {options.SaveDirectory}. H shows controls; F9 prints timings.");
         previousTimestamp = Stopwatch.GetTimestamp();
         wasActive = IsActive;
@@ -234,7 +237,7 @@ internal sealed class ParticleLifeGame : Game
                 PresetKind kind = key == Keys.D1 ? PresetKind.Random : key == Keys.D2 ? PresetKind.Chains : PresetKind.Snakes;
                 ExperimentDefinition current = controller.Experiment;
                 Replace(PresetGenerator.Create(kind, current.InitialState.Count, current.Matrix.SpeciesCount,
-                    NewSeed(), current.Parameters, current.TimeStep), $"Selected {kind}: new state and matrix, same model and counts.");
+                    NewSeed(), current.Parameters, current.TimeStep, current.Backend), $"Selected {kind}: new state and matrix, same model and counts.");
                 return true;
             case Keys.S:
                 string path = Path.Combine(options.SaveDirectory, $"experiment-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.json");
@@ -270,7 +273,7 @@ internal sealed class ParticleLifeGame : Game
 
     private void LoadExperiment(string path)
     {
-        ExperimentDefinition experiment = ExperimentFile.Load(path);
+        ExperimentDefinition experiment = options.ApplyBackend(ExperimentFile.Load(path));
         controller.ReplaceExperiment(experiment);
         inputPath = path;
         SetMessage($"Loaded {path}. Exact initial state; time and step zero.");
@@ -437,6 +440,11 @@ internal sealed class ParticleLifeGame : Game
         Label($"{state.Count} PARTICLES / {experiment.Matrix.SpeciesCount} SPECIES", Ink);
         Label($"T {state.Time:F4}  STEP {state.Step}", Ink);
         Label($"DT {experiment.TimeStep:G6} (REDUCED)", Muted);
+        string requested = experiment.Backend == ForceBackend.UniformGrid ? "GRID" : "DIRECT";
+        string actual = controller.LastExecution is not ForceExecution execution ? "UNSTEPPED"
+            : execution.FallbackReason != GridFallbackReason.None ? "DIRECT FALLBACK"
+            : execution.ActualBackend == ForceBackend.UniformGrid ? "GRID" : "DIRECT";
+        Label($"SEARCH {requested} / {actual}", Accent);
         Label($"{framesPerSecond:F0} FPS / UPDATE {meanUpdateMilliseconds:F2} MS", Muted);
         Label($"DROPPED {controller.DroppedPlaybackSeconds:F3} S", controller.DroppedPlaybackSeconds > 0 ? new Color(245, 203, 100) : Muted);
         if (wide)
@@ -494,7 +502,10 @@ internal sealed class ParticleLifeGame : Game
 
     private void PrintTimings() => Console.WriteLine($"Viewer sample (~1 wall second): {framesPerSecond:F1} FPS; " +
         $"controller update mean {meanUpdateMilliseconds:F3} ms, max {lastPeakUpdateMilliseconds:F3} ms (includes scheduled diagnostics); " +
-        $"step {controller.Observe().Step}; dropped playback {controller.DroppedPlaybackSeconds:F6} s. CPU update excludes rendering/present.");
+        $"step {controller.Observe().Step}; dropped playback {controller.DroppedPlaybackSeconds:F6} s. CPU update excludes rendering/present. " +
+        $"Search requested {controller.Experiment.Backend}; actual {controller.LastExecution?.ActualBackend.ToString() ?? "unstepped"}; " +
+        $"fallback {controller.LastExecution?.FallbackReason.ToString() ?? "none"}; direct fallback steps {controller.DirectFallbackSteps}; " +
+        $"candidates {controller.LastStatistics.CandidatePairs}; accepted {controller.LastStatistics.AcceptedPairs}.");
 
     protected override void Dispose(bool disposing)
     {

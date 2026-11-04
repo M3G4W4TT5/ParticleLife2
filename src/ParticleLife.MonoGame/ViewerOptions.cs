@@ -1,12 +1,13 @@
 using System.Globalization;
 using System.Text.Json;
 using ParticleLife.Core.Experiments;
+using ParticleLife.Core.Numerics;
 
 namespace ParticleLife.MonoGame;
 
 /// <summary>Parses presentation startup options before any native graphics resource is created.</summary>
 internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Species, int Seed,
-    bool Paused, int SampleEvery, string SaveDirectory, string? InputPath)
+    bool Paused, int SampleEvery, string SaveDirectory, string? InputPath, ForceBackend? BackendOverride)
 {
     internal static ViewerOptions Parse(string[] args)
     {
@@ -15,6 +16,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         bool paused = false;
         string saveDirectory = "artifacts/viewer";
         string? input = null;
+        ForceBackend? backendOverride = null;
         HashSet<string> seen = new(StringComparer.Ordinal);
         for (int i = 0; i < args.Length; i++)
         {
@@ -63,6 +65,14 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
                 case "--seed": seed = Integer(value, key); break;
                 case "--sample-every": sampleEvery = Integer(value, key); break;
                 case "--save-dir": saveDirectory = value; break;
+                case "--backend":
+                    backendOverride = value switch
+                    {
+                        "direct" => ForceBackend.Direct,
+                        "grid" => ForceBackend.UniformGrid,
+                        _ => throw new ArgumentException("Backend must be direct or grid.")
+                    };
+                    break;
                 default: throw new ArgumentException($"Unknown option {key}.");
             }
         }
@@ -71,8 +81,16 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         ArgumentOutOfRangeException.ThrowIfLessThan(species, 1);
         ArgumentOutOfRangeException.ThrowIfNegative(sampleEvery);
         return new ViewerOptions(preset, particles, species, seed, paused, sampleEvery,
-            Path.GetFullPath(saveDirectory), input);
+            Path.GetFullPath(saveDirectory), input, backendOverride);
     }
+
+    /// <summary>Applies only an explicit startup override; loaded experiments otherwise retain their saved search.</summary>
+    internal ExperimentDefinition ApplyBackend(ExperimentDefinition experiment) =>
+        BackendOverride is ForceBackend backend ? experiment.WithBackend(backend) : experiment;
+
+    /// <summary>Generates fallback/default values only when no saved experiment was loaded.</summary>
+    internal ExperimentDefinition CreateDefaultExperiment() =>
+        PresetGenerator.Create(Preset, Particles, Species, Seed, backend: BackendOverride ?? ForceBackend.UniformGrid);
 
     private static int Integer(string value, string option) => int.TryParse(value, NumberStyles.Integer,
         CultureInfo.InvariantCulture, out int parsed) ? parsed : throw new ArgumentException($"{option} requires an integer.");
@@ -82,10 +100,14 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
 
         dotnet run --project src/ParticleLife.MonoGame -c Release -- [experiment.json]
             [--preset random|chains|snakes] [--particles 500] [--species 7] [--seed 1]
-            [--paused] [--sample-every 144] [--save-dir artifacts/viewer]
+            [--paused] [--sample-every 144] [--save-dir artifacts/viewer] [--backend direct|grid]
 
         A startup experiment takes precedence over generation options. Invalid files leave
         the generated default paused with a visible error. Run reports are not inputs.
+        New generated experiments use grid search. Loaded files honour their saved backend;
+        schema-1 files use direct. --backend overrides startup and reload, and saves record
+        that effective choice. Reset, resampling, matrix edits and presets retain it.
+        Grid uses direct fallback for finite states outside its reliable coordinate range.
 
         Space     Pause/resume                 N / Right   Exactly one step, then pause
         R         Restore saved initial state  I           Resample positions, zero velocity
@@ -105,7 +127,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         Playback targets one model time unit per wall second, at most eight steps/frame.
         Excess whole-step playback time is discarded and displayed; dt never changes.
         Diagnostics are quadratic and allocate, sampled every N completed steps (0 disables).
-        Large direct-solver populations may be slow, including a single uninterruptible step.
+        Dense populations and diagnostics may be slow, including one uninterruptible step.
         """);
 }
 

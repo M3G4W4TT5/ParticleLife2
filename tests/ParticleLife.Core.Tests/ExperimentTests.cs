@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Models;
+using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 
 namespace ParticleLife.Core.Tests;
@@ -10,10 +11,12 @@ public sealed class ExperimentTests
 {
     private static ExperimentDefinition Fixture() => ExperimentFile.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "two-species.json"));
 
-    [Fact]
-    public void SavedFixtureLoadsAndReplaysExactlyAfterRoundTrip()
+    [Theory]
+    [InlineData(ForceBackend.Direct)]
+    [InlineData(ForceBackend.UniformGrid)]
+    public void SavedFixtureLoadsAndReplaysExactlyAfterRoundTrip(ForceBackend backend)
     {
-        ExperimentDefinition first = Fixture();
+        ExperimentDefinition first = Fixture().WithBackend(backend);
         string json = ExperimentFile.Serialize(first);
         ExperimentDefinition second = ExperimentFile.Deserialize(json);
         Assert.Equal(json, ExperimentFile.Serialize(second));
@@ -22,6 +25,7 @@ public sealed class ExperimentTests
         Assert.Equal(first.InitialState.Positions.ToArray(), second.InitialState.Positions.ToArray());
         Assert.Equal(first.InitialState.Velocities.ToArray(), second.InitialState.Velocities.ToArray());
         Assert.Equal(first.InitialState.Species.ToArray(), second.InitialState.Species.ToArray());
+        Assert.Equal(backend, second.Backend);
         var a = first.CreateSimulation();
         var b = second.CreateSimulation();
         for (int i = 0; i < 200; i++)
@@ -34,6 +38,59 @@ public sealed class ExperimentTests
         Assert.Equal(a.Observe().Positions.ToArray(), b.Observe().Positions.ToArray());
         Assert.Equal(a.Observe().Velocities.ToArray(), b.Observe().Velocities.ToArray());
         Assert.Equal(a.Observe().Time, b.Observe().Time);
+        Assert.Equal(backend, b.LastExecution!.Value.ActualBackend);
+    }
+
+    [Fact]
+    public void LegacyFixtureKeepsDirectMeaningAndSavesSeparateModelIntegratorAndSearch()
+    {
+        ExperimentDefinition legacy = Fixture();
+        Assert.Equal(ForceBackend.Direct, legacy.Backend);
+        using JsonDocument saved = JsonDocument.Parse(ExperimentFile.Serialize(legacy));
+        JsonElement root = saved.RootElement;
+        Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("particle-life/1", root.GetProperty("modelVersion").GetString());
+        Assert.Equal("damped-semi-implicit-euler/1", root.GetProperty("integratorVersion").GetString());
+        Assert.Equal("direct/1", root.GetProperty("neighbourSearchVersion").GetString());
+        Assert.False(root.TryGetProperty("solverVersion", out _));
+    }
+
+    [Fact]
+    public void ExplicitOverrideChangesExecutionWithoutMutatingSourceInitialConditions()
+    {
+        ExperimentDefinition source = Fixture();
+        Simulation overridden = source.CreateSimulation(ForceBackend.UniformGrid);
+        Assert.Equal(ForceBackend.Direct, source.Backend);
+        Assert.Equal(ForceBackend.UniformGrid, overridden.Backend);
+        Assert.Null(overridden.LastExecution);
+        overridden.Step();
+        Assert.Equal(ForceBackend.UniformGrid, overridden.LastExecution!.Value.ActualBackend);
+        ExperimentDefinition effective = source.WithBackend(ForceBackend.UniformGrid);
+        Assert.Same(source.InitialState, effective.InitialState);
+        Assert.Same(source.Matrix, effective.Matrix);
+        Assert.Equal(source.Generator, effective.Generator);
+        Assert.Equal(ForceBackend.UniformGrid, ExperimentFile.Deserialize(ExperimentFile.Serialize(effective)).Backend);
+    }
+
+    [Fact]
+    public void InvalidBackendEnumsAreRejectedAtConfigurationBoundaries()
+    {
+        ExperimentDefinition fixture = Fixture();
+        Assert.Throws<ArgumentOutOfRangeException>(() => fixture.WithBackend((ForceBackend)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => fixture.CreateSimulation((ForceBackend)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PresetGenerator.Create(PresetKind.Random, backend: (ForceBackend)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ExperimentFile.GetNeighbourSearchVersion((ForceBackend)99));
+    }
+
+    [Fact]
+    public void LegacySolverIdentityCannotBeReinterpretedAsGrid()
+    {
+        string legacy = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "two-species.json"));
+        Assert.Throws<NotSupportedException>(() => ExperimentFile.Deserialize(legacy.Replace(ExperimentFile.SolverVersion, "grid/1")));
+        Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(legacy.Replace("\"solverVersion\":", "\"unexpected\": 1, \"solverVersion\":")));
+        JsonObject missing = JsonNode.Parse(legacy)!.AsObject();
+        missing.Remove("solverVersion");
+        Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(missing.ToJsonString()));
     }
 
     [Fact]
@@ -51,9 +108,10 @@ public sealed class ExperimentTests
     }
 
     [Theory]
-    [InlineData("schemaVersion", "2")]
+    [InlineData("schemaVersion", "999")]
     [InlineData("modelVersion", "\"other/1\"")]
-    [InlineData("solverVersion", "\"grid/1\"")]
+    [InlineData("integratorVersion", "\"other/1\"")]
+    [InlineData("neighbourSearchVersion", "\"approximate/1\"")]
     [InlineData("boundary", "\"periodic\"")]
     [InlineData("units", "\"SI\"")]
     public void UnsupportedConventionsAreRejected(string property, string value)
@@ -68,6 +126,8 @@ public sealed class ExperimentTests
     [InlineData("initialState")]
     [InlineData("generator")]
     [InlineData("timeStep")]
+    [InlineData("integratorVersion")]
+    [InlineData("neighbourSearchVersion")]
     public void MissingRequiredFieldsAreRejected(string property)
     {
         JsonObject node = JsonNode.Parse(ExperimentFile.Serialize(Fixture()))!.AsObject();
@@ -91,7 +151,8 @@ public sealed class ExperimentTests
     {
         string json = ExperimentFile.Serialize(Fixture());
         Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(json.Replace("\"name\":", "\"unknown\": 1, \"name\":")));
-        Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(json.Replace("\"schemaVersion\": 1", "\"schemaVersion\": 1, \"schemaVersion\": 1")));
+        Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(json.Replace("\"schemaVersion\": 2", "\"schemaVersion\": 2, \"schemaVersion\": 2")));
+        Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(json.Replace("\"name\":", "\"solverVersion\": \"direct-damped-semi-implicit-euler/1\", \"name\":")));
     }
 
     [Theory]

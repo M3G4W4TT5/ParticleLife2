@@ -39,6 +39,15 @@ public sealed class PlaybackController
     /// <summary>Gets the immutable experiment whose exact initial conditions reset and save use.</summary>
     public ExperimentDefinition Experiment { get; private set; }
 
+    /// <summary>Gets actual search and fallback metadata from the last successful step, or null after reset/replacement.</summary>
+    public ForceExecution? LastExecution => simulation.LastExecution;
+
+    /// <summary>Gets successful grid-requested steps using direct fallback since reset or replacement.</summary>
+    public long DirectFallbackSteps => simulation.DirectFallbackSteps;
+
+    /// <summary>Gets geometric counts from the last successful step's input, or zero after reset/replacement.</summary>
+    public ForceEvaluationStatistics LastStatistics => simulation.LastStatistics;
+
     /// <summary>Gets whether automatic playback is paused.</summary>
     public bool IsPaused { get; private set; }
 

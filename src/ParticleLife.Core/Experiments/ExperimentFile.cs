@@ -1,27 +1,45 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ParticleLife.Core.Models;
+using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 
 namespace ParticleLife.Core.Experiments;
 
 /// <summary>Reads and writes the strict versioned JSON experiment format outside numerical hot loops.</summary>
 /// <remarks>
-/// Schema 1 stores reduced units, soft-wall boundaries, the model and solver identifiers, every matrix
+/// Schema 2 stores reduced units, soft-wall boundaries, separate model, integrator and neighbour-search identifiers, every matrix
 /// entry, and complete initial state. Unknown fields, unsupported versions, omitted required fields,
 /// non-finite numbers and invalid model inputs are rejected. JSON doubles round-trip without rounding
-/// to display precision. This is an initial-condition format; run reports are separate documents.
+/// to display precision. Schema 1 remains readable with its original direct-solver meaning.
+/// Saving always writes schema 2. This is an initial-condition format; run reports are separate documents.
 /// </remarks>
 public static class ExperimentFile
 {
-    /// <summary>Gets the supported experiment schema version.</summary>
-    public const int SchemaVersion = 1;
+    /// <summary>Gets the written experiment schema version; loading also accepts legacy schema 1.</summary>
+    public const int SchemaVersion = 2;
 
     /// <summary>Gets the versioned phenomenological radial and wall model identifier.</summary>
     public const string ModelVersion = "particle-life/1";
 
-    /// <summary>Gets the direct, serial, double-precision integration backend identifier.</summary>
+    /// <summary>Gets the legacy schema-1 combined direct-search/integrator identifier.</summary>
+    /// <remarks>Retained for legacy input compatibility only. Current execution reports separate
+    /// <see cref="IntegratorVersion"/> from <see cref="GetNeighbourSearchVersion"/>.</remarks>
     public const string SolverVersion = "direct-damped-semi-implicit-euler/1";
+
+    /// <summary>Gets the unchanged double-precision damped semi-implicit Euler integration identifier.</summary>
+    public const string IntegratorVersion = "damped-semi-implicit-euler/1";
+
+    /// <summary>Gets the serial neighbour-search identifier for an intended or actual backend.</summary>
+    /// <param name="backend">Direct or uniform-grid enumeration.</param>
+    /// <returns>A versioned search identifier independent of the physical model and integrator.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The backend is unsupported.</exception>
+    public static string GetNeighbourSearchVersion(ForceBackend backend) => backend switch
+    {
+        ForceBackend.Direct => "direct/1",
+        ForceBackend.UniformGrid => "uniform-grid/1",
+        _ => throw new ArgumentOutOfRangeException(nameof(backend))
+    };
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -51,13 +69,13 @@ public static class ExperimentFile
 
     /// <summary>Serializes complete initial conditions without regenerating any value from the seed.</summary>
     /// <param name="experiment">Validated experiment.</param>
-    /// <returns>Schema 1 JSON, including actual matrix and particle values.</returns>
+    /// <returns>Schema 2 JSON, including actual matrix, particle values and intended neighbour search.</returns>
     public static string Serialize(ExperimentDefinition experiment)
     {
         ArgumentNullException.ThrowIfNull(experiment);
         ParticleSnapshot initial = experiment.InitialState;
-        return JsonSerializer.Serialize(new FileData(
-            SchemaVersion, ModelVersion, SolverVersion, "reduced-l0-t0-m0", "soft-wall",
+        return JsonSerializer.Serialize(new FileDataV2(
+            SchemaVersion, ModelVersion, IntegratorVersion, GetNeighbourSearchVersion(experiment.Backend), "reduced-l0-t0-m0", "soft-wall",
             experiment.Name, experiment.TimeStep, ParameterData.From(experiment.Parameters),
             new MatrixData(experiment.Matrix.SpeciesCount, experiment.Matrix.Values.ToArray()),
             new StateData(initial.Ids.ToArray(), ToPoints(initial.Positions), ToPoints(initial.Velocities), initial.Species.ToArray()),
@@ -72,21 +90,74 @@ public static class ExperimentFile
     /// <exception cref="NotSupportedException">The document requests an unsupported version or convention.</exception>
     public static ExperimentDefinition Deserialize(string json)
     {
-        FileData data = JsonSerializer.Deserialize<FileData>(json, Options) ?? throw new JsonException("An experiment must be a JSON object.");
-        if (data.SchemaVersion != SchemaVersion || data.ModelVersion != ModelVersion || data.SolverVersion != SolverVersion
-            || data.Units != "reduced-l0-t0-m0" || data.Boundary != "soft-wall")
+        using JsonDocument document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Object
+            || !document.RootElement.TryGetProperty("schemaVersion", out JsonElement version)
+            || version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out int schema))
         {
-            throw new NotSupportedException("Unsupported experiment schema, model, solver, units or boundary convention.");
+            throw new JsonException("An experiment must be an object with an integer schemaVersion.");
         }
 
-        // Constructor contracts additionally validate lengths, identities, species and finite state.
-        return new ExperimentDefinition(data.Name, data.Parameters.ToParameters(),
-            new InteractionMatrix(data.Matrix.SpeciesCount, data.Matrix.Values),
-            new ParticleSnapshot(data.InitialState.Ids, ToVectors(data.InitialState.Positions), ToVectors(data.InitialState.Velocities), data.InitialState.Species),
-            data.TimeStep, data.Generator);
+        // Deserialize the complete original text with a schema-specific shape. This retains duplicate,
+        // unknown-field and required-field checks, including the version used for this dispatch.
+        if (schema == 1)
+        {
+            FileDataV1 data = JsonSerializer.Deserialize<FileDataV1>(json, Options)!;
+            ValidateConventions(data.ModelVersion, data.Units, data.Boundary);
+            if (data.SolverVersion != SolverVersion)
+            {
+                throw new NotSupportedException("Unsupported legacy experiment solver convention.");
+            }
+
+            return CreateDefinition(data.Name, data.Parameters, data.Matrix, data.InitialState, data.TimeStep,
+                data.Generator, ForceBackend.Direct);
+        }
+
+        if (schema == SchemaVersion)
+        {
+            FileDataV2 data = JsonSerializer.Deserialize<FileDataV2>(json, Options)!;
+            ValidateConventions(data.ModelVersion, data.Units, data.Boundary);
+            if (data.IntegratorVersion != IntegratorVersion)
+            {
+                throw new NotSupportedException("Unsupported experiment integrator convention.");
+            }
+
+            ForceBackend backend = data.NeighbourSearchVersion switch
+            {
+                "direct/1" => ForceBackend.Direct,
+                "uniform-grid/1" => ForceBackend.UniformGrid,
+                _ => throw new NotSupportedException("Unsupported experiment neighbour-search convention.")
+            };
+            return CreateDefinition(data.Name, data.Parameters, data.Matrix, data.InitialState, data.TimeStep,
+                data.Generator, backend);
+        }
+
+        throw new NotSupportedException("Unsupported experiment schema.");
     }
 
-    private sealed record FileData(int SchemaVersion, string ModelVersion, string SolverVersion, string Units,
+    private static void ValidateConventions(string model, string units, string boundary)
+    {
+        if (model != ModelVersion || units != "reduced-l0-t0-m0" || boundary != "soft-wall")
+        {
+            throw new NotSupportedException("Unsupported experiment model, units or boundary convention.");
+        }
+    }
+
+    private static ExperimentDefinition CreateDefinition(string name, ParameterData parameters, MatrixData matrix,
+        StateData state, double timeStep, GeneratorMetadata generator, ForceBackend backend)
+    {
+        // Constructor contracts additionally validate lengths, identities, species and finite state.
+        return new ExperimentDefinition(name, parameters.ToParameters(),
+            new InteractionMatrix(matrix.SpeciesCount, matrix.Values),
+            new ParticleSnapshot(state.Ids, ToVectors(state.Positions), ToVectors(state.Velocities), state.Species),
+            timeStep, generator, backend);
+    }
+
+    private sealed record FileDataV1(int SchemaVersion, string ModelVersion, string SolverVersion, string Units,
+        string Boundary, string Name, double TimeStep, ParameterData Parameters, MatrixData Matrix,
+        StateData InitialState, GeneratorMetadata Generator);
+
+    private sealed record FileDataV2(int SchemaVersion, string ModelVersion, string IntegratorVersion, string NeighbourSearchVersion, string Units,
         string Boundary, string Name, double TimeStep, ParameterData Parameters, MatrixData Matrix,
         StateData InitialState, GeneratorMetadata Generator);
 

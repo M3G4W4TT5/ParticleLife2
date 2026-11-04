@@ -29,7 +29,7 @@ internal static class CommandLine
             switch (args[0])
             {
                 case "create":
-                    Create(ParseOptions(args, 1, ["preset", "particles", "species", "seed", "dt", "output"]));
+                    Create(ParseOptions(args, 1, ["preset", "particles", "species", "seed", "dt", "backend", "output"]));
                     break;
                 case "validate":
                     if (args.Length != 2)
@@ -38,7 +38,7 @@ internal static class CommandLine
                     }
 
                     ExperimentDefinition experiment = ExperimentFile.Load(args[1]);
-                    Console.WriteLine($"Valid schema {ExperimentFile.SchemaVersion}: {experiment.Name}, {experiment.InitialState.Count} particles, {experiment.Matrix.SpeciesCount} species.");
+                    Console.WriteLine($"Valid experiment: {experiment.Name}, {experiment.InitialState.Count} particles, {experiment.Matrix.SpeciesCount} species; search {ExperimentFile.GetNeighbourSearchVersion(experiment.Backend)}.");
                     break;
                 case "run":
                     if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
@@ -46,7 +46,7 @@ internal static class CommandLine
                         throw new ArgumentException("Usage: run <experiment.json> --steps N [--sample-every N] [--cluster-distance R] [--output result.json]");
                     }
 
-                    RunExperiment(args[1], ParseOptions(args, 2, ["steps", "sample-every", "cluster-distance", "output"]));
+                    RunExperiment(args[1], ParseOptions(args, 2, ["steps", "sample-every", "cluster-distance", "backend", "output"]));
                     break;
                 default:
                     throw new ArgumentException($"Unknown command '{args[0]}'. Use --help.");
@@ -75,7 +75,7 @@ internal static class CommandLine
         string output = Required(options, "output");
         ExperimentDefinition experiment = PresetGenerator.Create(preset,
             Integer(options, "particles", 500), Integer(options, "species", 7), Integer(options, "seed", 1),
-            timeStep: Number(options, "dt", 1d / 144));
+            timeStep: Number(options, "dt", 1d / 144), backend: ParseBackend(Get(options, "backend", "grid")));
         PrepareOutput(output);
         WriteNewOutput(output, ExperimentFile.Serialize(experiment));
         Console.WriteLine($"Saved {experiment.Name}: {experiment.InitialState.Count} particles, {experiment.Matrix.SpeciesCount} species to {Path.GetFullPath(output)}");
@@ -89,7 +89,9 @@ internal static class CommandLine
         ArgumentOutOfRangeException.ThrowIfNegative(steps);
         ArgumentOutOfRangeException.ThrowIfNegative(sampleEvery);
         byte[] inputBytes = File.ReadAllBytes(path);
-        ExperimentDefinition experiment = ExperimentFile.Deserialize(ReadExperimentText(inputBytes));
+        string inputText = ReadExperimentText(inputBytes);
+        ExperimentDefinition experiment = ExperimentFile.Deserialize(inputText);
+        ForceBackend? backendOverride = options.TryGetValue("backend", out string? backendText) ? ParseBackend(backendText) : null;
         double clusterDistance = Number(options, "cluster-distance", experiment.Parameters.Cutoff);
         if (!double.IsFinite(clusterDistance) || clusterDistance <= 0)
         {
@@ -101,7 +103,7 @@ internal static class CommandLine
             PrepareOutput(output);
         }
 
-        Simulation simulation = experiment.CreateSimulation();
+        Simulation simulation = experiment.CreateSimulation(backendOverride);
         List<DiagnosticSample> samples = [];
         DateTimeOffset started = DateTimeOffset.UtcNow;
         if (sampleEvery > 0)
@@ -125,11 +127,26 @@ internal static class CommandLine
         ParticleSnapshot final = simulation.CaptureSnapshot();
         object report = new
         {
-            reportSchemaVersion = 1,
+            reportSchemaVersion = 2,
             startedAtUtc = started,
             completedAtUtc = completed,
             sourceExperimentSha256 = Convert.ToHexString(SHA256.HashData(inputBytes)),
-            experiment = JsonSerializer.Deserialize<JsonElement>(ExperimentFile.Serialize(experiment)),
+            experiment = JsonSerializer.Deserialize<JsonElement>(inputText),
+            execution = new
+            {
+                modelVersion = ExperimentFile.ModelVersion,
+                integratorVersion = ExperimentFile.IntegratorVersion,
+                savedNeighbourSearchVersion = ExperimentFile.GetNeighbourSearchVersion(experiment.Backend),
+                requestedNeighbourSearchVersion = ExperimentFile.GetNeighbourSearchVersion(simulation.Backend),
+                backendOverride = backendOverride is ForceBackend selected ? ExperimentFile.GetNeighbourSearchVersion(selected) : null,
+                directFallbackSteps = simulation.DirectFallbackSteps,
+                lastCompletedStep = simulation.LastExecution is ForceExecution execution ? new
+                {
+                    actualNeighbourSearchVersion = ExperimentFile.GetNeighbourSearchVersion(execution.ActualBackend),
+                    fallbackReason = execution.FallbackReason.ToString(),
+                    index = execution.Index
+                } : null
+            },
             environment = CaptureEnvironment(),
             requestedSteps = steps,
             sampleEvery,
@@ -154,7 +171,11 @@ internal static class CommandLine
         }
 
         Console.WriteLine(FormattableString.Invariant($"Completed {steps} steps; t={final.Time:G17}; particles={final.Count}; elapsed={elapsed.Elapsed.TotalMilliseconds:F3} ms (including scheduled diagnostics)."));
-        Console.WriteLine($"Backend: {ExperimentFile.SolverVersion}; runtime: {RuntimeInformation.FrameworkDescription}");
+        string actual = simulation.LastExecution is ForceExecution last
+            ? $"{ExperimentFile.GetNeighbourSearchVersion(last.ActualBackend)}; fallback reason: {last.FallbackReason}"
+            : "none (zero completed steps)";
+        Console.WriteLine($"Search requested: {ExperimentFile.GetNeighbourSearchVersion(simulation.Backend)}; last actual: {actual}; direct fallback steps: {simulation.DirectFallbackSteps}.");
+        Console.WriteLine($"Model: {ExperimentFile.ModelVersion}; integrator: {ExperimentFile.IntegratorVersion}; runtime: {RuntimeInformation.FrameworkDescription}");
         if (samples.Count > 0)
         {
             Console.WriteLine(JsonSerializer.Serialize(samples[^1], ReportOptions));
@@ -177,7 +198,6 @@ internal static class CommandLine
             architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             logicalProcessors = Environment.ProcessorCount,
             simulationThreads = 1,
-            numericalBackend = ExperimentFile.SolverVersion,
             coreVersion = typeof(Simulation).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
             coreAssemblySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(Simulation).Assembly.Location))),
             checkoutCommitAtRun = ReadCommand("git", "rev-parse", "HEAD"),
@@ -242,6 +262,13 @@ internal static class CommandLine
 
     private static string Get(Dictionary<string, string> options, string key, string fallback) => options.GetValueOrDefault(key, fallback);
 
+    private static ForceBackend ParseBackend(string value) => value switch
+    {
+        "direct" => ForceBackend.Direct,
+        "grid" => ForceBackend.UniformGrid,
+        _ => throw new ArgumentException("Backend must be direct or grid.")
+    };
+
     private static int Integer(Dictionary<string, string> options, string key, int fallback) =>
         !options.TryGetValue(key, out string? value) ? fallback : int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result)
             ? result : throw new ArgumentException($"--{key} requires an integer.");
@@ -284,11 +311,15 @@ internal static class CommandLine
 
         create --output experiment.json [--preset random|chains|snakes]
                [--particles 500] [--species 7] [--seed 1] [--dt 0.006944444444444444]
+               [--backend grid|direct]
         validate experiment.json
         run experiment.json --steps N [--sample-every 100] [--cluster-distance 0.1]
-                            [--output result.json]
+                            [--backend direct|grid] [--output result.json]
 
         JSON experiments contain actual initial state, directed matrix values, parameters and provenance.
+        New CLI experiments default to grid search. Runs honour the saved backend unless overridden.
+        Legacy schema-1 experiments retain direct search. Reports retain source and effective settings,
+        last actual search and the number of grid steps using the coordinate-range direct fallback.
         Edit validated JSON parameters for other cutoffs, soft walls or disabled damping (null half-life).
         Output files must not already exist. Reports include the original experiment and final state;
         reports are not checkpoint inputs. Set --sample-every 0 to disable optional O(N^2) diagnostics.

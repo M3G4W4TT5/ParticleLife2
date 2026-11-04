@@ -18,7 +18,7 @@ try
     {
         try
         {
-            experiment = ExperimentFile.Load(options.InputPath);
+            experiment = options.ApplyBackend(ExperimentFile.Load(options.InputPath));
             message = $"Loaded {options.InputPath}";
         }
         catch (Exception error) when (ViewerErrors.IsExpected(error))
@@ -30,7 +30,7 @@ try
     }
 
     // A loaded experiment supersedes generation options, including their allocation cost.
-    experiment ??= PresetGenerator.Create(options.Preset, options.Particles, options.Species, options.Seed);
+    experiment ??= options.CreateDefaultExperiment();
 
     // Formatting is presentation-only. Experiment JSON keeps full round-trip precision.
     CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;

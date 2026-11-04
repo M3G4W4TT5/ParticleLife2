@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Models;
+using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 using ParticleLife.Viewer;
 
@@ -11,21 +12,28 @@ namespace ParticleLife.Viewer.Tests;
 public sealed class CliParityTests(ITestOutputHelper output)
 {
     [Theory]
-    [InlineData("saved-fixture")]
-    [InlineData("random")]
-    [InlineData("chains")]
-    [InlineData("snakes")]
-    [InlineData("resampled")]
-    [InlineData("new-matrix")]
-    [InlineData("off-world")]
-    public async Task SavedExperimentMatchesActualCliThroughViewerController(string scenario)
+    [InlineData("saved-fixture", ForceBackend.Direct)]
+    [InlineData("random", ForceBackend.Direct)]
+    [InlineData("chains", ForceBackend.Direct)]
+    [InlineData("snakes", ForceBackend.Direct)]
+    [InlineData("resampled", ForceBackend.Direct)]
+    [InlineData("new-matrix", ForceBackend.Direct)]
+    [InlineData("off-world", ForceBackend.Direct)]
+    [InlineData("saved-fixture", ForceBackend.UniformGrid)]
+    [InlineData("random", ForceBackend.UniformGrid)]
+    [InlineData("chains", ForceBackend.UniformGrid)]
+    [InlineData("snakes", ForceBackend.UniformGrid)]
+    [InlineData("resampled", ForceBackend.UniformGrid)]
+    [InlineData("new-matrix", ForceBackend.UniformGrid)]
+    [InlineData("off-world", ForceBackend.UniformGrid)]
+    public async Task SavedExperimentMatchesActualCliThroughViewerController(string scenario, ForceBackend backend)
     {
         string repository = FindRepository();
         string directory = Path.Combine(Path.GetTempPath(), $"particlelife-parity-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         try
         {
-            ExperimentDefinition original = CreateExperiment(scenario, repository);
+            ExperimentDefinition original = CreateExperiment(scenario, repository).WithBackend(backend);
             string inputPath = Path.Combine(directory, "experiment.json");
             string reportPath = Path.Combine(directory, "run.json");
             ExperimentStorage.SaveNew(inputPath, original);
@@ -40,13 +48,135 @@ public sealed class CliParityTests(ITestOutputHelper output)
             JsonElement final = report.RootElement.GetProperty("finalState");
             Assert.Equal(120, final.GetProperty("step").GetInt64());
             Assert.Equal(120, controller.Observe().Step);
+            Assert.Equal(backend, controller.LastExecution!.Value.ActualBackend);
+            JsonElement execution = report.RootElement.GetProperty("execution");
+            string search = ExperimentFile.GetNeighbourSearchVersion(backend);
+            Assert.Equal(search, execution.GetProperty("savedNeighbourSearchVersion").GetString());
+            Assert.Equal(search, execution.GetProperty("requestedNeighbourSearchVersion").GetString());
+            Assert.Equal(search, execution.GetProperty("lastCompletedStep").GetProperty("actualNeighbourSearchVersion").GetString());
+            Assert.Equal(JsonValueKind.Null, execution.GetProperty("backendOverride").ValueKind);
+            Assert.Equal(0, execution.GetProperty("directFallbackSteps").GetInt64());
+            Assert.Equal(controller.LastStatistics.CandidatePairs,
+                report.RootElement.GetProperty("lastForceEvaluation").GetProperty("candidatePairs").GetInt64());
             double maximumError = CompareByIdentity(final, controller.Observe());
-            output.WriteLine($"{scenario}: 120 completed steps, {saved.InitialState.Count} particles; " +
+            output.WriteLine($"{scenario}/{backend}: 120 completed steps, {saved.InitialState.Count} particles; " +
                 $"maximum absolute position/velocity/time difference = {maximumError:R}; " +
                 "tolerance = 1e-12 absolute + 1e-12 relative in reduced units.");
 
             // Reports deliberately describe results, not a replacement experiment or a checkpoint.
             Assert.Throws<JsonException>(() => ExperimentFile.Load(reportPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(0, null)]
+    [InlineData(3, null)]
+    [InlineData(0, ForceBackend.UniformGrid)]
+    [InlineData(3, ForceBackend.UniformGrid)]
+    public async Task LegacyCliInputRetainsSourceAndReportsExplicitOverride(int steps, ForceBackend? backendOverride)
+    {
+        string repository = FindRepository();
+        string directory = Path.Combine(Path.GetTempPath(), $"particlelife-legacy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string input = Path.Combine(repository, "examples", "experiments", "two-species.json");
+            string reportPath = Path.Combine(directory, "run.json");
+            await RunCli(repository, input, reportPath, steps, backendOverride);
+            using JsonDocument report = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath, TestContext.Current.CancellationToken));
+            JsonElement source = report.RootElement.GetProperty("experiment");
+            Assert.Equal(1, source.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(ExperimentFile.SolverVersion, source.GetProperty("solverVersion").GetString());
+            JsonElement execution = report.RootElement.GetProperty("execution");
+            Assert.Equal("direct/1", execution.GetProperty("savedNeighbourSearchVersion").GetString());
+            string actual = ExperimentFile.GetNeighbourSearchVersion(backendOverride ?? ForceBackend.Direct);
+            Assert.Equal(actual, execution.GetProperty("requestedNeighbourSearchVersion").GetString());
+            Assert.Equal(backendOverride is null ? null : actual, execution.GetProperty("backendOverride").GetString());
+            Assert.Equal(0, execution.GetProperty("directFallbackSteps").GetInt64());
+            if (steps == 0)
+            {
+                Assert.Equal(JsonValueKind.Null, execution.GetProperty("lastCompletedStep").ValueKind);
+            }
+            else
+            {
+                Assert.Equal(actual, execution.GetProperty("lastCompletedStep").GetProperty("actualNeighbourSearchVersion").GetString());
+                PlaybackController controller = new(ExperimentFile.Load(input).WithBackend(backendOverride ?? ForceBackend.Direct));
+                for (int i = 0; i < steps; i++)
+                {
+                    controller.SingleStep();
+                }
+
+                _ = CompareByIdentity(report.RootElement.GetProperty("finalState"), controller.Observe());
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GridCliProvenanceDistinguishesFallbackFromExplicitDirectOverride(bool overrideDirect)
+    {
+        string repository = FindRepository();
+        string directory = Path.Combine(Path.GetTempPath(), $"particlelife-fallback-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            ExperimentDefinition experiment = new("finite-coordinate-fallback",
+                new ModelParameters { ForceScale = 0, WallStrength = 0, DampingHalfLife = null },
+                new InteractionMatrix(1, [0]),
+                new ParticleSnapshot([1, 2], [new(1e200, 0), new(1e200, 0)], [default, default], [0, 0]),
+                0.001, new GeneratorMetadata("explicit", "1", null, "test"), ForceBackend.UniformGrid);
+            string input = Path.Combine(directory, "experiment.json");
+            string reportPath = Path.Combine(directory, "report.json");
+            ExperimentFile.Save(input, experiment);
+            await RunCli(repository, input, reportPath, 3, overrideDirect ? ForceBackend.Direct : null, sampleEvery: 0);
+            using JsonDocument report = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath, TestContext.Current.CancellationToken));
+            JsonElement execution = report.RootElement.GetProperty("execution");
+            Assert.Equal("uniform-grid/1", execution.GetProperty("savedNeighbourSearchVersion").GetString());
+            Assert.Equal(overrideDirect ? "direct/1" : "uniform-grid/1", execution.GetProperty("requestedNeighbourSearchVersion").GetString());
+            Assert.Equal("direct/1", execution.GetProperty("lastCompletedStep").GetProperty("actualNeighbourSearchVersion").GetString());
+            Assert.Equal(overrideDirect ? "None" : "CoordinateRange", execution.GetProperty("lastCompletedStep").GetProperty("fallbackReason").GetString());
+            Assert.Equal(overrideDirect ? 0 : 3, execution.GetProperty("directFallbackSteps").GetInt64());
+            Assert.Equal(1, report.RootElement.GetProperty("lastForceEvaluation").GetProperty("overlapPairs").GetInt64());
+            Assert.Equal("uniform-grid/1", report.RootElement.GetProperty("experiment").GetProperty("neighbourSearchVersion").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CliReportRetainsEarlierFallbackWhenLastCompletedStepUsesGrid()
+    {
+        string repository = FindRepository();
+        string directory = Path.Combine(Path.GetTempPath(), $"particlelife-mixed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            ExperimentDefinition experiment = new("cross-index-range",
+                new ModelParameters { ForceScale = 0, WallStrength = 0, DampingHalfLife = null },
+                new InteractionMatrix(1, [0]), new ParticleSnapshot([91], [new(1e16, 0)], [new(-1e16, 0)], [0]),
+                1, new GeneratorMetadata("manual", "1", null, "exact ballistic values"), ForceBackend.UniformGrid);
+            string input = Path.Combine(directory, "experiment.json");
+            string reportPath = Path.Combine(directory, "report.json");
+            ExperimentFile.Save(input, experiment);
+            await RunCli(repository, input, reportPath, 2, sampleEvery: 0);
+            using JsonDocument report = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath, TestContext.Current.CancellationToken));
+            JsonElement execution = report.RootElement.GetProperty("execution");
+            Assert.Equal("uniform-grid/1", execution.GetProperty("requestedNeighbourSearchVersion").GetString());
+            Assert.Equal("uniform-grid/1", execution.GetProperty("lastCompletedStep").GetProperty("actualNeighbourSearchVersion").GetString());
+            Assert.Equal("None", execution.GetProperty("lastCompletedStep").GetProperty("fallbackReason").GetString());
+            Assert.Equal(1, execution.GetProperty("directFallbackSteps").GetInt64());
+            Assert.Equal(-1e16, report.RootElement.GetProperty("finalState").GetProperty("positions")[0].GetProperty("x").GetDouble());
         }
         finally
         {
@@ -155,7 +285,8 @@ public sealed class CliParityTests(ITestOutputHelper output)
         return error;
     }
 
-    private static async Task RunCli(string repository, string inputPath, string reportPath, int steps)
+    private static async Task RunCli(string repository, string inputPath, string reportPath, int steps,
+        ForceBackend? backendOverride = null, int sampleEvery = 11)
     {
 #if DEBUG
         const string configuration = "Debug";
@@ -173,9 +304,15 @@ public sealed class CliParityTests(ITestOutputHelper output)
             CreateNoWindow = true
         };
         foreach (string argument in new[] { executable, "run", inputPath, "--steps", steps.ToString(CultureInfo.InvariantCulture),
-            "--sample-every", "11", "--output", reportPath })
+            "--sample-every", sampleEvery.ToString(CultureInfo.InvariantCulture), "--output", reportPath })
         {
             start.ArgumentList.Add(argument);
+        }
+
+        if (backendOverride is ForceBackend backend)
+        {
+            start.ArgumentList.Add("--backend");
+            start.ArgumentList.Add(backend == ForceBackend.Direct ? "direct" : "grid");
         }
 
         using Process process = Process.Start(start) ?? throw new InvalidOperationException("Could not start the CLI parity process.");

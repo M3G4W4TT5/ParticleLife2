@@ -128,7 +128,7 @@ foreach ($preset in @('random', 'chains', 'snakes')) {
     $sampledPath = Join-Path $outputDirectory "$preset-sampled.json"
     $unsampledPath = Join-Path $outputDirectory "$preset-unsampled.json"
     Invoke-Cli -Arguments @('create', '--preset', $preset, '--particles', "$population", '--species', "$species",
-        '--seed', "$seed", '--output', $experimentPath)
+        '--seed', "$seed", '--backend', 'direct', '--output', $experimentPath)
     Invoke-Cli -Arguments @('validate', $experimentPath)
     $experiment = Read-Json $experimentPath
     $sourceHash = (Get-FileHash -LiteralPath $experimentPath -Algorithm SHA256).Hash
@@ -156,13 +156,39 @@ foreach ($preset in @('random', 'chains', 'snakes')) {
         Assert-That ((ConvertTo-CanonicalJson $report.experiment) -ceq (ConvertTo-CanonicalJson $experiment)) "$preset run report did not retain the complete original experiment."
         Assert-That ($report.sourceExperimentSha256 -ceq $sourceHash) "$preset report source digest does not identify the saved input."
         Assert-That ($report.environment.runtime.Length -gt 0 -and $report.environment.sdk.Length -gt 0) "$preset report omitted runtime metadata."
-        Assert-That ($report.environment.numericalBackend -ceq $experiment.solverVersion) "$preset report omitted the numerical backend."
+        Assert-That ($report.execution.requestedNeighbourSearchVersion -ceq $experiment.neighbourSearchVersion) "$preset report omitted the requested neighbour search."
+        Assert-That ($report.execution.integratorVersion -ceq $experiment.integratorVersion) "$preset report omitted the integration method."
+        Assert-That ($report.execution.lastCompletedStep.actualNeighbourSearchVersion -ceq 'direct/1') "$preset did not execute the selected direct search."
+        Assert-That ($report.execution.directFallbackSteps -eq 0 -and $null -eq $report.execution.backendOverride) "$preset reported an unexpected override or fallback."
         Assert-That ($report.environment.buildConfiguration -ceq 'Release' -and $report.environment.simulationThreads -eq 1) "$preset report has incorrect build or solver metadata."
         Assert-That ($report.environment.coreAssemblySha256 -match '^[0-9A-F]{64}$') "$preset report omitted the core assembly digest."
         Assert-That ($report.lastForceEvaluation.candidatePairs -eq $population * ($population - 1)) "$preset report has an incorrect directed-pair count."
     }
     Assert-That ((Get-FileHash -LiteralPath $experimentPath -Algorithm SHA256).Hash -ceq $sourceHash) "$preset run modified its input experiment."
     if ($preset -ceq 'random') { $randomPath = $experimentPath }
+}
+
+foreach ($preset in @('random', 'chains', 'snakes')) {
+    $experimentPath = Join-Path $outputDirectory "$preset-grid.json"
+    $gridReportPath = Join-Path $outputDirectory "$preset-grid-run.json"
+    $overrideReportPath = Join-Path $outputDirectory "$preset-direct-override.json"
+    # Omitting --backend deliberately checks the new host default, not only explicit selection.
+    Invoke-Cli -Arguments @('create', '--preset', $preset, '--particles', "$population", '--species', "$species",
+        '--seed', "$seed", '--output', $experimentPath)
+    $experiment = Read-Json $experimentPath
+    Assert-That ($experiment.schemaVersion -eq 2 -and $experiment.neighbourSearchVersion -ceq 'uniform-grid/1') "$preset did not save grid as the intended search."
+    Assert-That ($experiment.modelVersion -ceq 'particle-life/1' -and $experiment.integratorVersion -ceq 'damped-semi-implicit-euler/1') "$preset search optimization changed its physical model or integrator identity."
+    Invoke-Cli -Arguments @('validate', $experimentPath)
+    Invoke-Cli -Arguments @('run', $experimentPath, '--steps', '20', '--sample-every', '0', '--output', $gridReportPath)
+    Invoke-Cli -Arguments @('run', $experimentPath, '--steps', '20', '--sample-every', '0', '--backend', 'direct', '--output', $overrideReportPath)
+    $gridReport = Read-Json $gridReportPath
+    $overrideReport = Read-Json $overrideReportPath
+    Assert-That ($gridReport.execution.lastCompletedStep.actualNeighbourSearchVersion -ceq 'uniform-grid/1') "$preset grid run did not use the grid."
+    Assert-That ($gridReport.lastForceEvaluation.candidatePairs -lt $population * ($population - 1)) "$preset grid run did not prune any candidates."
+    Assert-That ($gridReport.execution.directFallbackSteps -eq 0) "$preset unexpectedly fell back to direct."
+    Assert-That ($overrideReport.execution.savedNeighbourSearchVersion -ceq 'uniform-grid/1' -and $overrideReport.execution.backendOverride -ceq 'direct/1') "$preset override lost source or effective provenance."
+    Assert-That ($overrideReport.execution.lastCompletedStep.actualNeighbourSearchVersion -ceq 'direct/1') "$preset explicit override did not execute direct search."
+    Assert-That ((ConvertTo-CanonicalJson $overrideReport.experiment) -ceq (ConvertTo-CanonicalJson $experiment)) "$preset override altered the report's original input."
 }
 
 # validate and run must decode the same input, while reports hash the original encoded bytes.
@@ -199,6 +225,7 @@ $expectedZero = [ordered]@{
 }
 Assert-That ((ConvertTo-CanonicalJson $zero.finalState) -ceq (ConvertTo-CanonicalJson $expectedZero)) 'A zero-step run changed the saved initial state.'
 Assert-That ($zero.requestedSteps -eq 0 -and $null -eq $zero.lastForceEvaluation) 'A zero-step report implies force evaluation occurred.'
+Assert-That ($null -eq $zero.execution.lastCompletedStep -and $zero.execution.directFallbackSteps -eq 0) 'A zero-step report implies actual search execution occurred.'
 Assert-That ($zero.measurements.Count -eq 1 -and $zero.measurements[0].step -eq 0) 'A zero-step run should include its requested initial diagnostic.'
 
 $partialPath = Join-Path $outputDirectory 'partial-cadence.json'
@@ -211,6 +238,7 @@ Invoke-Cli -Arguments @('run', $randomPath, '--steps', 'invalid') -ExpectedExit 
 Invoke-Cli -Arguments @('run', $randomPath, '--steps', '-1') -ExpectedExit 1
 Invoke-Cli -Arguments @('run', $randomPath, '--steps') -ExpectedExit 1 -ErrorPattern 'incomplete option'
 Invoke-Cli -Arguments @('run', $randomPath, '--steps', '1', '--unknown', '1') -ExpectedExit 1 -ErrorPattern 'Unknown or incomplete option'
+Invoke-Cli -Arguments @('run', $randomPath, '--steps', '1', '--backend', 'invalid') -ExpectedExit 1 -ErrorPattern 'Backend must be direct or grid'
 Invoke-Cli -Arguments @('create', '--dt', '0', '--output', (Join-Path $outputDirectory 'invalid-dt.json')) -ExpectedExit 1
 Invoke-Cli -Arguments @('create', '--dt', 'NaN', '--output', (Join-Path $outputDirectory 'nonfinite-dt.json')) -ExpectedExit 1 -ErrorPattern 'finite number'
 
@@ -232,7 +260,7 @@ $raceInput = Join-Path $outputDirectory 'output-race-input.json'
 $raceParent = Join-Path $outputDirectory 'output-race'
 $raceOutput = Join-Path $raceParent 'result.json'
 $sentinelText = 'Created by another writer while the simulation was running.'
-Invoke-Cli -Arguments @('create', '--particles', '2000', '--species', '2', '--seed', "$seed", '--output', $raceInput)
+Invoke-Cli -Arguments @('create', '--particles', '2000', '--species', '2', '--seed', "$seed", '--backend', 'direct', '--output', $raceInput)
 Invoke-Cli -Arguments @('run', $raceInput, '--steps', '300', '--sample-every', '0', '--output', $raceOutput) -ExpectedExit 1 -WhileRunning {
     param($runningProcess)
     $readyTimer = [Diagnostics.Stopwatch]::StartNew()

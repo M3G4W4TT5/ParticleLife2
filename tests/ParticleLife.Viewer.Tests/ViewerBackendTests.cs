@@ -1,0 +1,137 @@
+using ParticleLife.Core.Experiments;
+using ParticleLife.Core.Models;
+using ParticleLife.Core.Numerics;
+using ParticleLife.Core.State;
+using ParticleLife.MonoGame;
+using ParticleLife.Viewer;
+
+namespace ParticleLife.Viewer.Tests;
+
+public sealed class ViewerBackendTests
+{
+    [Fact]
+    public void GeneratedViewerDefaultsUseGridAndLegacyInputRetainsDirect()
+    {
+        ViewerOptions options = ViewerOptions.Parse(["--particles", "8", "--species", "2"]);
+        Assert.Null(options.BackendOverride);
+        Assert.Equal(ForceBackend.UniformGrid, options.CreateDefaultExperiment().Backend);
+        ExperimentDefinition saved = ExperimentFile.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "two-species.json"));
+        Assert.Equal(ForceBackend.Direct, saved.Backend);
+        Assert.Same(saved, options.ApplyBackend(saved));
+    }
+
+    [Theory]
+    [InlineData("direct", ForceBackend.Direct)]
+    [InlineData("grid", ForceBackend.UniformGrid)]
+    public void StartupOverrideAppliesToSavedInputReloadAndNewGeneration(string option, ForceBackend backend)
+    {
+        ViewerOptions options = ViewerOptions.Parse(["--backend", option, "--particles", "8", "--species", "2"]);
+        ExperimentDefinition saved = PresetGenerator.Create(PresetKind.Random, 7, 3, backend: ForceBackend.UniformGrid);
+        ExperimentDefinition effective = options.ApplyBackend(saved);
+        Assert.Equal(backend, effective.Backend);
+        Assert.Same(saved.InitialState, effective.InitialState);
+        Assert.Equal(backend, options.CreateDefaultExperiment().Backend);
+        Assert.Equal(backend, options.ApplyBackend(ExperimentFile.Deserialize(ExperimentFile.Serialize(saved))).Backend);
+        Assert.Equal(backend, ExperimentFile.Deserialize(ExperimentFile.Serialize(effective)).Backend);
+        PlaybackController controller = new(effective, diagnosticEverySteps: 0);
+        controller.SingleStep();
+        Assert.Equal(backend, controller.LastExecution!.Value.ActualBackend);
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("1")]
+    [InlineData("UniformGrid")]
+    public void ViewerRejectsInvalidBackendOption(string value)
+    {
+        Assert.Throws<ArgumentException>(() => ViewerOptions.Parse(["--backend", value]));
+    }
+
+    [Theory]
+    [InlineData(ForceBackend.Direct)]
+    [InlineData(ForceBackend.UniformGrid)]
+    public void ResetEditingReplacementAndDiagnosticsKeepBackendAndClearExecution(ForceBackend backend)
+    {
+        ExperimentDefinition initial = PresetGenerator.Create(PresetKind.Random, 24, 3, 61, backend: backend);
+        PlaybackController controller = new(initial, diagnosticEverySteps: 1);
+        controller.SingleStep();
+        Assert.Equal(backend, controller.LastExecution!.Value.ActualBackend);
+        Assert.NotNull(controller.LatestDiagnostic);
+        controller.Reset();
+        Assert.Null(controller.LastExecution);
+        Assert.Null(controller.LatestDiagnostic);
+        Assert.Equal(0, controller.DirectFallbackSteps);
+        Assert.Equal(backend, controller.Experiment.Backend);
+        PlaybackControllerTests.SameState(initial.InitialState, controller.Observe());
+
+        ExperimentDefinition[] variations =
+        [
+            ExperimentEditing.ResampleState(initial, 19),
+            ExperimentEditing.RandomizeMatrix(initial, 20),
+            PresetGenerator.Create(PresetKind.Snakes, 43, 4, 21, backend: backend)
+        ];
+        foreach (ExperimentDefinition variation in variations)
+        {
+            controller.ReplaceExperiment(variation);
+            Assert.Null(controller.LastExecution);
+            Assert.Null(controller.LatestDiagnostic);
+            Assert.True(controller.IsPaused);
+            controller.DiagnosticEverySteps = 0;
+            controller.SingleStep();
+            Assert.Null(controller.LatestDiagnostic);
+            Assert.Equal(backend, controller.LastExecution!.Value.ActualBackend);
+            controller.Reset();
+            PlaybackControllerTests.SameState(variation.InitialState, controller.Observe());
+        }
+    }
+
+    [Fact]
+    public void FallbackProvenanceClearsOnResetAndReplacement()
+    {
+        ExperimentDefinition extreme = new("fallback", new ModelParameters { WallStrength = 0, ForceScale = 0 },
+            new InteractionMatrix(1, [0]), new ParticleSnapshot([1], [new(1e200, 0)], [default], [0]),
+            0.001, new GeneratorMetadata("manual", "1", null, "test"), ForceBackend.UniformGrid);
+        PlaybackController controller = new(extreme, diagnosticEverySteps: 0);
+        controller.SingleStep();
+        Assert.Equal(ForceBackend.UniformGrid, controller.Experiment.Backend);
+        Assert.Equal(ForceBackend.Direct, controller.LastExecution!.Value.ActualBackend);
+        Assert.Equal(GridFallbackReason.CoordinateRange, controller.LastExecution!.Value.FallbackReason);
+        Assert.Equal(1, controller.DirectFallbackSteps);
+        controller.Reset();
+        Assert.Null(controller.LastExecution);
+        Assert.Equal(0, controller.DirectFallbackSteps);
+        controller.SingleStep();
+        controller.ReplaceExperiment(PresetGenerator.Create(PresetKind.Random, 4, 1, backend: ForceBackend.UniformGrid));
+        Assert.Null(controller.LastExecution);
+        Assert.Equal(0, controller.DirectFallbackSteps);
+        controller.SingleStep();
+        Assert.Equal(ForceBackend.UniformGrid, controller.LastExecution!.Value.ActualBackend);
+    }
+
+    [Fact]
+    public void MovingBetweenFallbackAndGridRetainsCumulativeSuccessfulFallbackCount()
+    {
+        ExperimentDefinition experiment = new("cross-index-range",
+            new ModelParameters { ForceScale = 0, WallStrength = 0, DampingHalfLife = null },
+            new InteractionMatrix(1, [0]), new ParticleSnapshot([91], [new(1e16, 0)], [new(-1e16, 0)], [0]),
+            1, new GeneratorMetadata("manual", "1", null, "exact ballistic values"), ForceBackend.UniformGrid);
+        PlaybackController controller = new(experiment, diagnosticEverySteps: 0);
+        controller.SingleStep();
+        Assert.Equal(default, controller.Observe().Positions[0]);
+        Assert.Equal(ForceBackend.Direct, controller.LastExecution!.Value.ActualBackend);
+        Assert.Equal(GridFallbackReason.CoordinateRange, controller.LastExecution.Value.FallbackReason);
+        Assert.Equal(1, controller.DirectFallbackSteps);
+
+        controller.SingleStep();
+        Assert.Equal(new Vector2d(-1e16, 0), controller.Observe().Positions[0]);
+        Assert.Equal(ForceBackend.UniformGrid, controller.LastExecution!.Value.ActualBackend);
+        Assert.Equal(GridFallbackReason.None, controller.LastExecution.Value.FallbackReason);
+        Assert.Equal(1, controller.DirectFallbackSteps);
+
+        controller.SingleStep();
+        Assert.Equal(new Vector2d(-2e16, 0), controller.Observe().Positions[0]);
+        Assert.Equal(ForceBackend.Direct, controller.LastExecution!.Value.ActualBackend);
+        Assert.Equal(GridFallbackReason.CoordinateRange, controller.LastExecution.Value.FallbackReason);
+        Assert.Equal(2, controller.DirectFallbackSteps);
+    }
+}

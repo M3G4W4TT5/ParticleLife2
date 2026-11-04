@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using ParticleLife.Core.Models;
+using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 
 namespace ParticleLife.Core.Experiments;
@@ -34,16 +35,22 @@ public static class PresetGenerator
     /// <param name="seed">Seed passed to System.Random during generation.</param>
     /// <param name="parameters">Optional model parameters; null selects the migration defaults.</param>
     /// <param name="timeStep">Positive finite step duration in reduced time units.</param>
+    /// <param name="backend">Intended neighbour search; the API defaults to the direct reference.</param>
     /// <returns>A validated experiment containing actual initial state and matrix values.</returns>
     /// <exception cref="ArgumentException">Counts, preset, parameters or timestep are invalid.</exception>
     public static ExperimentDefinition Create(PresetKind kind, int particleCount = 500, int speciesCount = 7,
-        int seed = 1, ModelParameters? parameters = null, double timeStep = 1d / 144)
+        int seed = 1, ModelParameters? parameters = null, double timeStep = 1d / 144, ForceBackend backend = ForceBackend.Direct)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(particleCount);
         ArgumentOutOfRangeException.ThrowIfLessThan(speciesCount, 1);
         if (!Enum.IsDefined(kind))
         {
             throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+
+        if (!Enum.IsDefined(backend))
+        {
+            throw new ArgumentOutOfRangeException(nameof(backend));
         }
 
         parameters ??= new ModelParameters();
@@ -78,6 +85,6 @@ public static class PresetGenerator
 
         return new ExperimentDefinition(kind.ToString().ToLowerInvariant(), parameters,
             new InteractionMatrix(speciesCount, values), new ParticleSnapshot(ids, positions, velocities, species), timeStep,
-            new GeneratorMetadata($"uniform-{kind.ToString().ToLowerInvariant()}", "1", seed, RuntimeInformation.FrameworkDescription));
+            new GeneratorMetadata($"uniform-{kind.ToString().ToLowerInvariant()}", "1", seed, RuntimeInformation.FrameworkDescription), backend);
     }
 }

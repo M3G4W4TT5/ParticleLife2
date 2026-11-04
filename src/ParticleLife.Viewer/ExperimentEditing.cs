@@ -30,7 +30,7 @@ public static class ExperimentEditing
 
         ParticleSnapshot resampled = new(initial.Ids, positions, new Vector2d[initial.Count], initial.Species);
         return new ExperimentDefinition(experiment.Name, experiment.Parameters, experiment.Matrix,
-            resampled, experiment.TimeStep, Metadata("viewer-uniform-state-resample", seed));
+            resampled, experiment.TimeStep, Metadata("viewer-uniform-state-resample", seed), experiment.Backend);
     }
 
     /// <summary>Samples a new directed matrix while retaining the exact saved initial state.</summary>
@@ -51,7 +51,7 @@ public static class ExperimentEditing
 
         return new ExperimentDefinition(experiment.Name, experiment.Parameters,
             new InteractionMatrix(experiment.Matrix.SpeciesCount, values), experiment.InitialState,
-            experiment.TimeStep, Metadata("viewer-random-matrix", seed));
+            experiment.TimeStep, Metadata("viewer-random-matrix", seed), experiment.Backend);
     }
 
     private static GeneratorMetadata Metadata(string name, int seed) =>

@@ -19,9 +19,10 @@ public sealed class ExperimentDefinition
     /// <param name="initialState">Actual initial positions, velocities, identities and species at time zero.</param>
     /// <param name="timeStep">Positive finite integration timestep in reduced time units.</param>
     /// <param name="generator">Generator identity, version, seed and runtime provenance.</param>
+    /// <param name="backend">Intended neighbour search; omitted values retain the direct reference behaviour.</param>
     /// <exception cref="ArgumentException">Metadata, species, parameters or initial time are invalid.</exception>
     public ExperimentDefinition(string name, ModelParameters parameters, InteractionMatrix matrix,
-        ParticleSnapshot initialState, double timeStep, GeneratorMetadata generator)
+        ParticleSnapshot initialState, double timeStep, GeneratorMetadata generator, ForceBackend backend = ForceBackend.Direct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(parameters);
@@ -32,6 +33,11 @@ public sealed class ExperimentDefinition
         ArgumentException.ThrowIfNullOrWhiteSpace(generator.Version);
         ArgumentException.ThrowIfNullOrWhiteSpace(generator.Runtime);
         parameters.Validate();
+        if (!Enum.IsDefined(backend))
+        {
+            throw new ArgumentOutOfRangeException(nameof(backend));
+        }
+
         _ = SemiImplicitEuler.DampingFactor(timeStep, parameters.DampingHalfLife);
         if (initialState.Time != 0 || initialState.Step != 0)
         {
@@ -52,6 +58,7 @@ public sealed class ExperimentDefinition
         InitialState = initialState;
         TimeStep = timeStep;
         Generator = generator;
+        Backend = backend;
     }
 
     /// <summary>Gets the experiment's human-readable name.</summary>
@@ -72,7 +79,24 @@ public sealed class ExperimentDefinition
     /// <summary>Gets provenance for the actual saved initial conditions.</summary>
     public GeneratorMetadata Generator { get; }
 
+    /// <summary>Gets the intended neighbour search, independent of model equations and integration.</summary>
+    /// <remarks>A grid execution may use the documented direct fallback for an unindexable finite state.
+    /// Inspect <see cref="Simulation.LastExecution"/> and <see cref="Simulation.DirectFallbackSteps"/>
+    /// for actual successful execution; the intended configuration remains unchanged.</remarks>
+    public ForceBackend Backend { get; }
+
+    /// <summary>Creates an experiment differing only in its intended neighbour search.</summary>
+    /// <param name="backend">Direct reference or uniform-grid search.</param>
+    /// <returns>A validated experiment retaining the same owned immutable initial values and provenance.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The backend is unsupported.</exception>
+    public ExperimentDefinition WithBackend(ForceBackend backend) =>
+        new(Name, Parameters, Matrix, InitialState, TimeStep, Generator, backend);
+
     /// <summary>Creates an independent simulation with owned reusable buffers.</summary>
+    /// <param name="backendOverride">Explicit execution override, or null to honour the saved configuration.</param>
     /// <returns>A simulation at the saved initial conditions; construction allocates outside the stepping loop.</returns>
-    public Simulation CreateSimulation() => new(InitialState, Parameters, Matrix, TimeStep);
+    /// <remarks>An override does not mutate this experiment. Hosts must report the override alongside
+    /// the source configuration, or save <see cref="WithBackend"/> when persisting the effective experiment.</remarks>
+    public Simulation CreateSimulation(ForceBackend? backendOverride = null) =>
+        new(InitialState, Parameters, Matrix, TimeStep, backendOverride ?? Backend);
 }
