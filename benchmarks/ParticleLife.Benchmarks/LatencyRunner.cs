@@ -67,7 +67,7 @@ internal static class LatencyRunner
     private static object Measure(ExperimentDefinition experiment, string inputPath, int samples)
     {
         ParticleSnapshot initial = experiment.InitialState;
-        Simulation simulation = new(initial, experiment.Parameters, experiment.Matrix, experiment.TimeStep);
+        using Simulation simulation = new(initial, experiment.Parameters, experiment.Matrix, experiment.TimeStep);
         DirectForceEvaluator evaluator = new(experiment.Parameters, experiment.Matrix);
         Vector2d[] forces = new Vector2d[initial.Count];
         Vector2d[] outputPositions = new Vector2d[initial.Count];
@@ -177,7 +177,7 @@ internal static class LatencyRunner
         };
     }
 
-    internal static object CaptureEnvironment(string backend = "direct-serial-double/semi-implicit-euler-v1")
+    internal static object CaptureEnvironment(string backend = "direct-serial-double/semi-implicit-euler-v1", int? simulationThreads = 1)
     {
         string status = ReadCommand("git", "status", "--porcelain");
         return new
@@ -192,7 +192,7 @@ internal static class LatencyRunner
             architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             cpu = CpuName(),
             logicalProcessorCount = Environment.ProcessorCount,
-            simulationThreads = 1,
+            simulationThreads,
 #if DEBUG
             configuration = "Debug",
 #else

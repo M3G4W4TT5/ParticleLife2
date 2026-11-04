@@ -45,7 +45,7 @@ public class DirectStepBenchmarks
             ExperimentFile.Save(inputPath, experiment);
         }
 
-        simulation = new Simulation(experiment.InitialState, experiment.Parameters, experiment.Matrix, experiment.TimeStep, Backend);
+        simulation = new Simulation(experiment.InitialState, experiment.Parameters, experiment.Matrix, experiment.TimeStep, Backend, workerCount: 1);
         // Establish all buffers and JIT paths before a measured iteration. Resets do not discard capacity.
         int warmupCount = 0;
         long warmupStarted = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -65,4 +65,8 @@ public class DirectStepBenchmarks
     /// <summary>Rebuilds any index, evaluates forces and completes one consistent integration step.</summary>
     [Benchmark]
     public void Step() => simulation.Step();
+
+    /// <summary>Releases evaluator resources outside measured iterations.</summary>
+    [GlobalCleanup]
+    public void Cleanup() => simulation.Dispose();
 }

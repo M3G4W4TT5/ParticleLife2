@@ -3,6 +3,43 @@ using ParticleLife.Benchmarks;
 
 try
 {
+    if (args.Length > 0 && args[0] == "profile-m41")
+    {
+        if (args.Length != 3)
+        {
+            throw new ArgumentException("Use profile-m41 input-experiment.json output-profile.json.");
+        }
+
+        TraversalProfile.Run(args[1], args[2]);
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "prepare-m41")
+    {
+        if (args.Length > 3)
+        {
+            throw new ArgumentException("Use prepare-m41 [input-directory] [retained-M4-directory].");
+        }
+
+        M41Inputs.Prepare(args.Length > 1 ? args[1] : "artifacts/benchmarks/m4-1/inputs",
+            args.Length > 2 ? args[2] : "artifacts/benchmarks/m4");
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "compare-m41")
+    {
+        if (args.Length is < 4 or > 7)
+        {
+            throw new ArgumentException("Use compare-m41 output-directory input-directory selection [samples] [repetitions] [evolving-steps].");
+        }
+
+        M41Runner.Run(args[1], args[2], args[3],
+            args.Length > 4 ? int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture) : 15,
+            args.Length > 5 ? int.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture) : 3,
+            args.Length > 6 ? int.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture) : 0);
+        return 0;
+    }
+
     if (args.Length > 0 && args[0] == "compare")
     {
         string outputDirectory = args.Length > 1 ? args[1] : "artifacts/benchmarks/m4";
@@ -48,7 +85,10 @@ try
         return 0;
     }
 
-    Console.WriteLine("Particle Life serial-backend benchmarks (run Release without a debugger)");
+    Console.WriteLine("Particle Life CPU benchmarks (run Release without a debugger)");
+    Console.WriteLine("  prepare-m41 [input-directory] [retained-M4-directory]");
+    Console.WriteLine("  profile-m41 input-experiment.json output-profile.json");
+    Console.WriteLine("  compare-m41 output-directory input-directory all|static|cutoff|evolved|representative|case|file [samples] [repetitions] [evolving-steps]");
     Console.WriteLine("  compare [output-directory] [samples >= 5] [quick|all|case-name|experiment.json] [repetitions >= 1]");
     Console.WriteLine("  latency [output-directory] [samples >= 5] [quick|all|case-name|experiment.json]");
     Console.WriteLine("  bdn --filter '*uniform-fixed-500*' --job short");

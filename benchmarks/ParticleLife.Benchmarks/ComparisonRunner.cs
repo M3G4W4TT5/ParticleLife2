@@ -109,8 +109,8 @@ internal static class ComparisonRunner
     private static object Measure(ExperimentDefinition experiment, string inputPath, int samples, int repetitions)
     {
         int stageSamples = Math.Min(samples, 15);
-        BackendRun direct = new(experiment, ForceBackend.Direct, repetitions, samples, stageSamples);
-        BackendRun grid = new(experiment, ForceBackend.UniformGrid, repetitions, samples, stageSamples);
+        using BackendRun direct = new(experiment, ForceBackend.Direct, repetitions, samples, stageSamples);
+        using BackendRun grid = new(experiment, ForceBackend.UniformGrid, repetitions, samples, stageSamples);
         int warmupCount = Warmup(experiment.InitialState, direct, grid);
         for (int repetition = 0; repetition < repetitions; repetition++)
         {
@@ -214,7 +214,7 @@ internal static class ComparisonRunner
     {
         long before = GC.GetAllocatedBytesForCurrentThread();
         long started = Stopwatch.GetTimestamp();
-        Simulation fresh = experiment.CreateSimulation(backend);
+        using Simulation fresh = experiment.CreateSimulation(backend, workerCountOverride: 1);
         long constructionTicks = Stopwatch.GetTimestamp() - started;
         long constructionBytes = GC.GetAllocatedBytesForCurrentThread() - before;
         before = GC.GetAllocatedBytesForCurrentThread();
@@ -227,7 +227,7 @@ internal static class ComparisonRunner
         int smallerCount = initial.Count / 4;
         ParticleSnapshot smaller = new(initial.Ids[..smallerCount], initial.Positions[..smallerCount],
             initial.Velocities[..smallerCount], initial.Species[..smallerCount]);
-        Simulation growing = new(smaller, experiment.Parameters, experiment.Matrix, experiment.TimeStep, backend);
+        using Simulation growing = new(smaller, experiment.Parameters, experiment.Matrix, experiment.TimeStep, backend, workerCount: 1);
         growing.Step();
         ForceExecution? smallerExecution = growing.LastExecution;
         before = GC.GetAllocatedBytesForCurrentThread();
@@ -254,8 +254,8 @@ internal static class ComparisonRunner
 
     private static object MeasureEvolving(ExperimentDefinition experiment, string inputPath, int repetitions)
     {
-        BackendRun direct = new(experiment, ForceBackend.Direct, repetitions, EvolvingSteps, 1);
-        BackendRun grid = new(experiment, ForceBackend.UniformGrid, repetitions, EvolvingSteps, 1);
+        using BackendRun direct = new(experiment, ForceBackend.Direct, repetitions, EvolvingSteps, 1);
+        using BackendRun grid = new(experiment, ForceBackend.UniformGrid, repetitions, EvolvingSteps, 1);
         int warmupCount = Warmup(experiment.InitialState, direct, grid);
         long[][] movedCells = Enumerable.Range(0, repetitions).Select(_ => new long[EvolvingSteps]).ToArray();
         long[][] candidates = Enumerable.Range(0, repetitions).Select(_ => new long[EvolvingSteps]).ToArray();
@@ -365,7 +365,7 @@ internal static class ComparisonRunner
     private readonly record struct StateDifference(Difference Positions, Difference Velocities);
 
     /// <summary>Owns work buffers and raw samples; timing records are written only after each measured boundary.</summary>
-    private sealed class BackendRun
+    private sealed class BackendRun : IDisposable
     {
         private readonly ForceBackend backend;
         private readonly Series index;
@@ -375,7 +375,7 @@ internal static class ComparisonRunner
         internal BackendRun(ExperimentDefinition experiment, ForceBackend backend, int repetitions, int samples, int stageSamples)
         {
             this.backend = backend;
-            Simulation = experiment.CreateSimulation(backend);
+            Simulation = experiment.CreateSimulation(backend, workerCountOverride: 1);
             Evaluator = backend == ForceBackend.Direct
                 ? new DirectForceEvaluator(experiment.Parameters, experiment.Matrix)
                 : new UniformGridForceEvaluator(experiment.Parameters, experiment.Matrix);
@@ -454,6 +454,12 @@ internal static class ComparisonRunner
             acceptedDirectedPairs = Statistics.AcceptedPairs,
             coincidentUnorderedPairs = Statistics.OverlapPairs
         };
+
+        public void Dispose()
+        {
+            Simulation.Dispose();
+            (Evaluator as IDisposable)?.Dispose();
+        }
     }
 
     private sealed class Series
