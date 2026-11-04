@@ -9,12 +9,12 @@ namespace ParticleLife.Core.Numerics;
 /// forces from complete input, then integrates into separate outputs, then swaps completed buffers.
 /// No particle observes an earlier particle's partially updated state.</para>
 /// <para>Steps and resets invalidate prior observations. Do not read or mutate a simulation concurrently.
-/// Successful steps and resets at established capacity allocate no managed memory. Construction,
-/// capacity growth and explicit snapshots allocate. There is no randomness in the stepping algorithm.</para>
+/// Warmed successful steps and resets at established capacity allocate no managed memory. Construction,
+/// index initialization, capacity growth and explicit snapshots allocate. There is no randomness in the stepping algorithm.</para>
 /// </remarks>
 public sealed class Simulation
 {
-    private readonly DirectForceEvaluator evaluator;
+    private readonly IForceEvaluator evaluator;
     private readonly double dampingFactor;
     private long[] ids = [];
     private int[] species = [];
@@ -27,18 +27,26 @@ public sealed class Simulation
     private double time;
     private long step;
 
-    /// <summary>Copies initial state and allocates reusable buffers for the direct reference solver.</summary>
+    /// <summary>Copies initial state and selects a serial force search with reusable state buffers.</summary>
     /// <param name="initial">Owned initial state or checkpoint; never mutated by the simulation.</param>
     /// <param name="parameters">Immutable model parameters in reduced units.</param>
     /// <param name="matrix">Immutable directed species coefficients.</param>
     /// <param name="timeStep">Positive finite fixed timestep in reduced time units.</param>
+    /// <param name="backend">Neighbour search; the API default retains the direct reference implementation.</param>
     /// <exception cref="ArgumentNullException">An argument object is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A parameter or timestep is invalid.</exception>
     /// <exception cref="ArgumentException">An initial species is outside the matrix.</exception>
-    public Simulation(ParticleSnapshot initial, ModelParameters parameters, InteractionMatrix matrix, double timeStep)
+    public Simulation(ParticleSnapshot initial, ModelParameters parameters, InteractionMatrix matrix, double timeStep,
+        ForceBackend backend = ForceBackend.Direct)
     {
         ArgumentNullException.ThrowIfNull(initial);
-        evaluator = new(parameters, matrix);
+        evaluator = backend switch
+        {
+            ForceBackend.Direct => new DirectForceEvaluator(parameters, matrix),
+            ForceBackend.UniformGrid => new UniformGridForceEvaluator(parameters, matrix),
+            _ => throw new ArgumentOutOfRangeException(nameof(backend), "Unsupported neighbour-search backend.")
+        };
+        Backend = backend;
         dampingFactor = SemiImplicitEuler.DampingFactor(timeStep, parameters.DampingHalfLife);
         Parameters = parameters;
         Matrix = matrix;
@@ -55,8 +63,19 @@ public sealed class Simulation
     /// <summary>Gets the immutable directed species matrix.</summary>
     public InteractionMatrix Matrix { get; }
 
+    /// <summary>Gets the requested neighbour search; model equations and integration are unchanged.</summary>
+    public ForceBackend Backend { get; }
+
     /// <summary>Gets counts from the last successful step's input, or zero counts after construction/reset.</summary>
     public ForceEvaluationStatistics LastStatistics { get; private set; }
+
+    /// <summary>Gets actual search execution from the last successful step, or null after construction/reset.</summary>
+    /// <remarks>Grid coordinate-range fallback applies to an entire evaluation. Failed steps never publish its metadata.</remarks>
+    public ForceExecution? LastExecution { get; private set; }
+
+    /// <summary>Gets the number of completed grid-requested steps that used direct fallback since construction/reset.</summary>
+    /// <remarks>This cumulative count reports fallback earlier in a run even when the latest step used the grid.</remarks>
+    public long DirectFallbackSteps { get; private set; }
 
     /// <summary>Obtains a read-only view of completed state without allocating.</summary>
     /// <returns>A view valid only until the next step or reset, including stable identities and simulation time.</returns>
@@ -97,12 +116,14 @@ public sealed class Simulation
         time = snapshot.Time;
         step = snapshot.Step;
         LastStatistics = default;
+        LastExecution = null;
+        DirectFallbackSteps = 0;
     }
 
-    /// <summary>Advances one complete fixed timestep without managed allocation on success.</summary>
+    /// <summary>Advances one complete fixed timestep without managed allocation after index and buffer warm-up.</summary>
     /// <remarks>
     /// Publishes output only after force evaluation, integration and time checks all succeed.
-    /// On a numerical failure the completed state, time, step count and last statistics remain unchanged.
+    /// On a numerical failure the completed state, time, step count, last statistics and execution metadata remain unchanged.
     /// Working buffers may contain rejected partial results but will be overwritten on a later successful step.
     /// </remarks>
     /// <exception cref="ArithmeticException">Forces, state or time overflow, time cannot advance in double precision, or the step count is exhausted.</exception>
@@ -123,5 +144,10 @@ public sealed class Simulation
         time = nextTime;
         step++;
         LastStatistics = statistics;
+        LastExecution = evaluator.LastExecution;
+        if (Backend == ForceBackend.UniformGrid && evaluator.LastExecution.ActualBackend == ForceBackend.Direct)
+        {
+            DirectFallbackSteps++;
+        }
     }
 }

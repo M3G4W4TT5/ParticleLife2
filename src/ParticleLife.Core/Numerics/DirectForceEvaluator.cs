@@ -10,12 +10,11 @@ namespace ParticleLife.Core.Numerics;
 /// The evaluator owns no work buffers and allocates no memory on successful evaluation.
 /// Separate callers may use it concurrently with independent stable input and output buffers.
 /// </remarks>
-public sealed class DirectForceEvaluator
+public sealed class DirectForceEvaluator : IForceEvaluator
 {
-    private const double SmallestNormal = 2.2250738585072014E-308;
     private readonly ModelParameters parameters;
     private readonly InteractionMatrix matrix;
-    private readonly double cutoffSquared;
+    private readonly PairForceKernel kernel;
 
     /// <summary>Validates and retains immutable model configuration.</summary>
     /// <param name="parameters">Model values in reduced units.</param>
@@ -29,8 +28,11 @@ public sealed class DirectForceEvaluator
         parameters.Validate();
         this.parameters = parameters;
         this.matrix = matrix;
-        cutoffSquared = parameters.Cutoff * parameters.Cutoff;
+        kernel = new(parameters, matrix);
     }
+
+    /// <summary>Gets the direct search configuration; this evaluator never falls back or owns an index.</summary>
+    public ForceExecution LastExecution => new(ForceBackend.Direct, ForceBackend.Direct, GridFallbackReason.None, default);
 
     /// <summary>Overwrites the supplied force buffer using one complete immutable input state.</summary>
     /// <param name="input">A valid observation whose lifetime covers the entire call.</param>
@@ -53,20 +55,10 @@ public sealed class DirectForceEvaluator
     /// <exception cref="ArithmeticException">An accumulated particle force becomes non-finite.</exception>
     public ForceEvaluationStatistics Evaluate(ParticleStateView input, Span<Vector2d> forces)
     {
-        if (forces.Length != input.Count)
-        {
-            throw new ArgumentException("The force buffer must contain exactly one entry per particle.", nameof(forces));
-        }
-
-        if (input.Positions.Overlaps(forces) || input.Velocities.Overlaps(forces))
-        {
-            throw new ArgumentException("The force buffer must not alias input state.", nameof(forces));
-        }
-
+        ValidateOutput(input, forces);
         ValidateState(input, matrix.SpeciesCount);
         ReadOnlySpan<Vector2d> positions = input.Positions;
         ReadOnlySpan<int> species = input.Species;
-        ReadOnlySpan<double> coefficients = matrix.Values;
         long acceptedPairs = 0;
         long overlapPairs = 0;
         for (int receiver = 0; receiver < input.Count; receiver++)
@@ -80,59 +72,16 @@ public sealed class DirectForceEvaluator
                     continue;
                 }
 
-                Vector2d displacement = positions[source] - positions[receiver];
-                if (displacement.X == 0 && displacement.Y == 0)
+                PairKind kind = kernel.Evaluate(positions[source] - positions[receiver], row + species[source], out Vector2d pairForce);
+                if (kind == PairKind.Accepted)
                 {
-                    if (source > receiver)
-                    {
-                        overlapPairs++;
-                    }
-
-                    continue;
+                    acceptedPairs++;
+                    totalForce += pairForce;
                 }
-
-                // An overflowing difference of finite coordinates is necessarily beyond a finite cutoff.
-                if (Math.Abs(displacement.X) >= parameters.Cutoff || Math.Abs(displacement.Y) >= parameters.Cutoff)
+                else if (kind == PairKind.Overlap && source > receiver)
                 {
-                    continue;
+                    overlapPairs++;
                 }
-
-                double distanceSquared = displacement.X * displacement.X + displacement.Y * displacement.Y;
-                if (cutoffSquared >= SmallestNormal && distanceSquared >= cutoffSquared)
-                {
-                    continue;
-                }
-
-                double distance;
-                Vector2d direction;
-                if (distanceSquared < SmallestNormal)
-                {
-                    // Normalize before rescaling: a rounded subnormal distance must not distort direction.
-                    double largestComponent = Math.Max(Math.Abs(displacement.X), Math.Abs(displacement.Y));
-                    Vector2d scaled = displacement / largestComponent;
-                    double scaledLength = Math.Sqrt(scaled.X * scaled.X + scaled.Y * scaled.Y);
-                    distance = largestComponent * scaledLength;
-                    direction = scaled / scaledLength;
-                }
-                else
-                {
-                    distance = Math.Sqrt(distanceSquared);
-                    direction = displacement / distance;
-                }
-
-                if (distance >= parameters.Cutoff)
-                {
-                    continue;
-                }
-
-                acceptedPairs++;
-                double distanceRatio = distance / parameters.Cutoff;
-                double attraction = coefficients[row + species[source]];
-                double coefficient = distance < SmallestNormal || distanceRatio < SmallestNormal
-                    ? EvaluateTinyDistanceCoefficient(displacement, attraction)
-                    : ParticleLifeForce.EvaluateValidated(distanceRatio, attraction, parameters.RepulsionFraction);
-                double magnitude = parameters.ForceScale * coefficient;
-                totalForce += direction * magnitude;
             }
 
             totalForce += SoftWall.EvaluateValidated(positions[receiver], parameters);
@@ -147,23 +96,18 @@ public sealed class DirectForceEvaluator
         return new((long)input.Count * (input.Count - 1), acceptedPairs, overlapPairs);
     }
 
-    /// <summary>Evaluates a tiny separation without first rounding its distance or normalized distance to a subnormal value.</summary>
-    /// <remarks>
-    /// <para>Compute r/(R beta) by dividing displacement components by beta before taking their
-    /// magnitude. This preserves a finite core fraction even when r/R rounds to zero or beta.
-    /// Normalizing an already rounded subnormal scalar distance would also lose diagonal geometry.</para>
-    /// <para>The caller uses this only for subnormal r or r/R. With 0 &lt; beta &lt; 1 and a positive
-    /// finite R squared, these scaled components and their final ratio remain finite. In either
-    /// case r/R is far below the outer triangle's peak, so its rising branch can be expressed as
-    /// 2 beta (r/(R beta) - 1)/(1 - beta). Multiplying by beta last avoids premature underflow.</para>
-    /// </remarks>
-    private double EvaluateTinyDistanceCoefficient(Vector2d displacement, double attraction)
+    /// <summary>Rejects wrong output lengths or aliasing before either evaluator writes force values.</summary>
+    internal static void ValidateOutput(ParticleStateView input, Span<Vector2d> forces)
     {
-        double beta = parameters.RepulsionFraction;
-        double coreRatio = double.Hypot(displacement.X / beta, displacement.Y / beta) / parameters.Cutoff;
-        return coreRatio < 1
-            ? coreRatio - 1
-            : attraction * (2 * (coreRatio - 1) * beta / (1 - beta));
+        if (forces.Length != input.Count)
+        {
+            throw new ArgumentException("The force buffer must contain exactly one entry per particle.", nameof(forces));
+        }
+
+        if (input.Positions.Overlaps(forces) || input.Velocities.Overlaps(forces))
+        {
+            throw new ArgumentException("The force buffer must not alias input state.", nameof(forces));
+        }
     }
 
     /// <summary>Checks model-dependent species bounds and numerical state before any stage writes output.</summary>
