@@ -125,13 +125,18 @@ internal sealed record GenerationData(int Seed, string Placement, string Velocit
 }
 
 internal sealed record AppearanceData(uint[] SpeciesColors, double ParticleRadius, bool ShowDiagnostics,
-    bool ShowHelp, bool ShowOverlay, bool ShowEditor, double UiScale)
+    bool ShowHelp, bool ShowOverlay, bool ShowEditor, double UiScale,
+    CameraSettings? Camera = null, string? ParticleSizeMode = null, double? WorldParticleRadius = null)
 {
     internal static AppearanceData From(AppearanceSettings settings) => new(settings.SpeciesColors.ToArray(), settings.ParticleRadius,
-        settings.ShowDiagnostics, settings.ShowHelp, settings.ShowOverlay, settings.ShowEditor, settings.UiScale);
+        settings.ShowDiagnostics, settings.ShowHelp, settings.ShowOverlay, settings.ShowEditor, settings.UiScale,
+        settings.Camera, settings.ParticleSizeMode.ToString(), settings.WorldParticleRadius);
 
     internal AppearanceSettings ToSettings()
     {
+        ParticleSizeMode mode = Viewer.ParticleSizeMode.ScreenPixels;
+        if (ParticleSizeMode is not null && (!Enum.TryParse(ParticleSizeMode, out mode) || !Enum.IsDefined(mode)
+            || mode.ToString() != ParticleSizeMode)) { throw new NotSupportedException("Unsupported particle display size mode."); }
         AppearanceSettings settings = new(SpeciesColors)
         {
             ParticleRadius = ParticleRadius,
@@ -139,7 +144,10 @@ internal sealed record AppearanceData(uint[] SpeciesColors, double ParticleRadiu
             ShowHelp = ShowHelp,
             ShowOverlay = ShowOverlay,
             ShowEditor = ShowEditor,
-            UiScale = UiScale
+            UiScale = UiScale,
+            Camera = Camera ?? new CameraSettings(),
+            ParticleSizeMode = mode,
+            WorldParticleRadius = WorldParticleRadius ?? 0.003
         };
         settings.Validate();
         return settings;

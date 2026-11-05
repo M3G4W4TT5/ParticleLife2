@@ -10,7 +10,19 @@ public enum PlacementKind
     /// <summary>Centres of a regular rectangular lattice filling the nominal rectangle.</summary>
     Grid,
     /// <summary>Uniform area samples within the largest centred inscribed disk.</summary>
-    Disk
+    Disk,
+    /// <summary>A centred circular ring.</summary>
+    Ring,
+    /// <summary>A horizontal line through the world centre.</summary>
+    Line,
+    /// <summary>A three-turn spiral from the centre outwards.</summary>
+    Spiral,
+    /// <summary>Five separated vertical stripes.</summary>
+    Stripe,
+    /// <summary>Compact clusters around separated centres.</summary>
+    Cluster,
+    /// <summary>A separate compact spatial group for each species.</summary>
+    SpeciesGroups
 }
 
 /// <summary>Selects the explicit initial velocity recipe used only when generating particles.</summary>
@@ -21,7 +33,13 @@ public enum VelocityKind
     /// <summary>All velocities have the supplied speed and common direction.</summary>
     UniformDirection,
     /// <summary>Each velocity has the supplied speed and an independently uniform direction.</summary>
-    RandomDirection
+    RandomDirection,
+    /// <summary>Velocity points radially away from the world centre.</summary>
+    RadialOutward,
+    /// <summary>Velocity points radially towards the world centre.</summary>
+    RadialInward,
+    /// <summary>Velocity is tangent to the world centre.</summary>
+    Tangential
 }
 
 /// <summary>Immutable generation recipe; changing it alone never changes a completed particle state.</summary>
@@ -78,6 +96,15 @@ public sealed record AppearanceSettings
     /// <summary>Gets a positive finite display radius in unscaled pixels.</summary>
     public double ParticleRadius { get; init; } = 2.5;
 
+    /// <summary>Gets the display radius convention, independent of simulation cutoffs.</summary>
+    public ParticleSizeMode ParticleSizeMode { get; init; }
+
+    /// <summary>Gets the positive display radius in reduced world units when world-relative sizing is selected.</summary>
+    public double WorldParticleRadius { get; init; } = 0.003;
+
+    /// <summary>Gets the saved camera target; smoothing is presentation-only.</summary>
+    public CameraSettings Camera { get; init; } = new();
+
     /// <summary>Gets whether sampled diagnostics are visible; visibility does not enable sampling.</summary>
     public bool ShowDiagnostics { get; init; } = true;
 
@@ -120,9 +147,19 @@ public sealed record AppearanceSettings
         }
 
         replacement[species] = rgb;
-        return new AppearanceSettings(replacement)
+        return WithPalette(replacement);
+    }
+
+    /// <summary>Creates a new palette while preserving every other appearance and camera setting.</summary>
+    /// <param name="palette">24-bit RGB colours, copied on construction.</param><returns>Independent presentation settings.</returns>
+    public AppearanceSettings WithPalette(IEnumerable<uint> palette)
+    {
+        return new AppearanceSettings(palette)
         {
             ParticleRadius = ParticleRadius,
+            ParticleSizeMode = ParticleSizeMode,
+            WorldParticleRadius = WorldParticleRadius,
+            Camera = Camera,
             ShowDiagnostics = ShowDiagnostics,
             ShowHelp = ShowHelp,
             ShowOverlay = ShowOverlay,
@@ -138,6 +175,12 @@ public sealed record AppearanceSettings
         {
             throw new ArgumentOutOfRangeException(nameof(ParticleRadius), "Display radius must be finite and positive.");
         }
+        if (!Enum.IsDefined(ParticleSizeMode) || !double.IsFinite(WorldParticleRadius) || WorldParticleRadius <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(WorldParticleRadius), "World display radius must be finite and positive.");
+        }
+        ArgumentNullException.ThrowIfNull(Camera);
+        Camera.Validate();
 
         if (!double.IsFinite(UiScale) || UiScale < 0.5 || UiScale > 3)
         {
