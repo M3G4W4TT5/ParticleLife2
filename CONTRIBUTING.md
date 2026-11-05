@@ -1,8 +1,16 @@
 # Contributing to Particle Life 2
 
-Particle Life 2 should be understandable enough to learn from and efficient enough to explore meaningful particle systems. Changes should make the model, numerical method and performance tradeoffs clear to the next contributor.
+Particle Life 2 should make it easy to create interesting emergent patterns and explore large particle systems. Keep the rules understandable, the controls responsive and discoveries easy to save and revisit. This is a creative sandbox rather than a scientific instrument; changes should make their behaviour and performance tradeoffs clear to the next contributor.
 
-The current scope and milestone order are in the [architecture and migration plan](docs/architecture-and-migration.md). M1–M4 provide the tested headless reference, exact uniform grid and interactive viewer. M5 release work remains separate.
+The current scope and phase order are in the [architecture and migration plan](docs/architecture-and-migration.md#phased-roadmap). M1–M4 provide the existing CPU foundation. The active roadmap adds a faster and more usable 2D application, selectable CPU/GPU simulation, periodic boundaries and per-pair ranges, with 3D reserved for a later phase. The old M5 release backlog is incorporated into P7.
+
+## Practical quality standard
+
+Prioritize useful exploration, clear controls, stable state and dependable save/load. Keep the existing reference solver and focused regression tests, but do not require physical validation, publication-grade studies, exhaustive extreme-number support on every new backend, or identical long trajectories across CPU and GPU. Single precision, SIMD, approximate arithmetic and artistic model variants are acceptable with a documented purpose, supported range and proportionate comparison. Never disguise a changed interaction rule or truncated neighbour set as an equivalent optimization.
+
+Reproducibility remains a product feature. Store actual initial or captured state, applied edits and relevant model/backend/precision versions. Retain fixed numerical steps independently of playback and rendering. Promise repeatable replay only within a tested configuration; GPU ordering and arithmetic can produce different trajectories. A captured state must still round-trip its stored values, and old files retain their original meaning.
+
+The build commands and contracts below describe the current implementation. A roadmap item does not implement a new backend or change an existing format. Update the relevant code, tests, documentation and format version together when that phase is implemented.
 
 ## Build and verification
 
@@ -27,7 +35,7 @@ The solution build includes the MonoGame editor. Host tests exercise its actual 
 
 The `--help` command and MonoGame compatibility check do not create a graphics device or window. The latter also exercises the actual retained numeric and matrix widgets against the shared editor. They can run on Linux CI alongside the numerical and host tests. Native graphics/input is verified separately on Windows; the Linux native window has not been verified.
 
-The core and graphics-free viewer library generate XML documentation in their build output directories. The XML gate temporarily adds malformed/missing documentation probes to the core, checks that CS1591, CS1570 and CS1574 are errors, removes them in a `finally` block, and rebuilds the unmodified core. Generated API website publishing remains M5 work.
+The core and graphics-free viewer library generate XML documentation in their build output directories. The XML gate temporarily adds malformed/missing documentation probes to the core, checks that CS1591, CS1570 and CS1574 are errors, removes them in a `finally` block, and rebuilds the unmodified core. An API website remains optional release tooling in P7, separate from keeping code documentation useful.
 
 For timing commands and their measurement boundaries, use the [live editor comparison](docs/performance-live-editor.md) and [M4.1 CPU comparison](docs/performance-m4-1.md); [M4](docs/performance-m4.md) and the [historical baseline](docs/performance-baseline.md) retain earlier provenance. Performance tests check zero allocations for warmed steps with moving particles, changing cell occupancy, successful fallbacks and settled reconfiguration. Parallel measurements include background workers. Setup, edits and growth are separate; diagnostics, serialization and snapshots remain outside the stepping contract. Dispose parallel simulations/controllers between completed steps to release their persistent workers.
 
@@ -118,9 +126,9 @@ Keep agent work logs, internal reasoning and detailed migration discussion out o
 
 ## Correctness and performance evidence
 
-Use deterministic small cases to test equations and state transitions. Compare optimized neighbour sets and force evaluations with the direct reference implementation. Express tolerances with their units or scales and the reason they are appropriate. Conservation tests must match the model's assumptions.
+Use small repeatable cases to test rules and state transitions. Compare exact neighbour searches with the direct reference; check reduced-precision or approximate modes within their documented ranges and tolerances. Existing mathematical tests remain useful regression coverage, but every artistic rule does not need a new conservation study or proof of physical realism.
 
-Use the benchmark protocol in the plan for numerical optimizations. Report the workload and environment, before/after timings, allocation behaviour and numerical error. Profile before introducing specialized complexity. A change that increases the simulation's density or alters a cutoff is a changed workload, not evidence of a regression in the same workload.
+Use the benchmark protocol in the plan for numerical optimizations. Report the workload and environment, before/after timings, allocation behaviour and meaningful differences from the reference. Profile before introducing specialized complexity. A change that increases the simulation's density or alters a cutoff is a changed workload, not evidence of a regression in the same workload. Keep checks proportionate: a focused comparison and representative evolving scenes are usually sufficient; broader numerical studies are optional.
 
 Run focused correctness tests and the normal build checks for each relevant change. Run affected benchmarks when changing performance-sensitive code. Shared CI timing is informational until a stable baseline exists. Documentation-only changes need link, formatting and content checks; they do not need invented simulation tests.
 

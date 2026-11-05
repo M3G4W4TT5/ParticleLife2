@@ -1,16 +1,133 @@
 # Particle Life 2 architecture and migration plan
 
-Particle Life 2 will modernize the original two-dimensional Particle Life simulation around an engine-independent C# core. The first release should make its behaviour reproducible, its equations explicit, and its performance measurable while retaining the attraction matrices and emergent patterns that motivated the project.
+Particle Life 2 is a creative sandbox for making and exploring emergent particle behaviour. The priorities are interesting patterns, many more particles, responsive controls and an enjoyable way to discover, save and revisit results. Reproducibility supports that experience; scientific validation is not the product's purpose.
 
-This is the implementation plan as of 4 November 2026. M1–M4 provide validated experiments, a tested simulation, headless CLI, interactive MonoGame viewer and exact uniform-grid acceleration. M4.1 adds measured packed CPU traversal, explicit workers and reusable exact diagnostics. The live experiment editor adds boundary reconfiguration, structural editing and shared scientific replay without changing those numerical conventions. M5 release work remains on hold.
+Direction updated **5 November 2026**. M1–M4, M4.1 and the live experiment editor provide the implemented CPU foundation. The active roadmap below adds improved CPU execution, selectable GPU simulation, richer 2D interactions and exploration tools, followed by a deliberately deferred 3D phase. P1–P8 are planned work, not implemented capabilities. The historical M5 release backlog is incorporated into P7.
 
 ## Scope and priorities
 
-The immediate scope is the existing 2D simulation: correct its numerical and neighbour-search problems, separate simulation from presentation, preserve the main Particle Life presets, and provide a usable MonoGame viewer and a runner without graphics. Performance and readable, documented code are requirements throughout this work.
+The immediate implementation scope remains 2D. Include the performance and UX improvements identified in the comparison with Tom Mohr's Particle Life App and SandboxScience, including periodic boundaries and directed per-species-pair interaction ranges. Keep CPU simulation as a supported user choice alongside GPU execution, with a CPU-only headless runner that does not require a GPU runtime.
 
-The original repositories remain historical references. The v0.2 prototype supplies research ideas rather than production infrastructure. Unity integration, 3D, gameplay, a general long-range solver, and new published active-matter models are later projects. The initial core will have specific 2D types and equations; a dimension-generic framework is unnecessary at this stage.
+3D is included as P8, after the expanded 2D application is usable. Do not build 3D state, a 3D renderer or a dimension-generic framework during the earlier phases. Unity integration, gameplay systems, long-range physical solvers and research-model validation are outside this roadmap. The original repositories and v0.2 prototype remain references rather than production dependencies.
 
 Development should favour a small number of clear responsibilities. Add an abstraction when it separates meaningful concerns or supports an actual alternative. Avoid a particle subclass for each species, a factory for every class, or a runtime plugin system before a concrete need exists.
+
+## Product and engineering commitments
+
+- **Creative exploration first.** Single precision, approximate arithmetic, experimental force curves and visual effects are welcome. Explain what a control does and show useful results; a physical interpretation, conservation study or publication-grade numerical analysis is not required for each feature.
+- **Keep ordinary correctness.** Complete a step from consistent inputs, retain particle membership unless an explicit edit changes it, avoid buffer races and invalid state, and protect saved work. Optimizations must not silently drop neighbours or change a saved rule. A deliberate approximation is a named, saved choice with a practical supported range.
+- **Keep CPU and GPU choices distinct from search and precision.** CPU/GPU selects execution hardware; direct/grid selects neighbour evaluation; precision describes arithmetic. Preserve the current double-precision CPU reference. Offer useful defaults without requiring users to understand every internal option, and show the resolved device and settings.
+- **Keep reproducibility useful and honest.** Save actual state, rules, generation provenance, applied edits and backend/precision/version metadata. Exact state restoration is distinct from replaying a trajectory. Test replay within supported configurations; do not promise identical long CPU/GPU trajectories or bitwise GPU replay across devices. Include checkpoints and a terminal capture for sessions where backend ordering prevents reliable trajectory reconstruction.
+- **Keep clocks separate.** Numerical timestep and playback speed remain separate. Slow work can reduce achieved simulation speed or presentation quality; it must not secretly change timestep, cutoff, density, precision or population. Quality adaptation may reduce glow, trails or rendering frequency without changing the simulation.
+- **Measure proportionately.** Use small reference cases and representative evolving scenes, including dense structures. Report the workload and observed differences alongside a speedup. Extreme numeric support can remain specific to the existing CPU backend; new paths may reject unsupported ranges clearly. Preserve existing tests and file meanings until a deliberate, versioned change replaces them.
+
+## Phased roadmap
+
+Each phase ends with a usable result and focused verification. The order is driven by dependencies rather than dates. P1 informs both the CPU improvements and GPU integration; P4 establishes the richer 2D model before P5 finalizes its GPU kernels. P3 and P6 UI work can proceed alongside model/backend work once their required command and capture interfaces exist. Saving and replay support accompany every state-changing feature, rather than waiting for the library phase.
+
+| Phase | Result | Main dependency |
+| --- | --- | --- |
+| P1 Performance baseline and execution design | Measured targets and a feasible GPU/rendering integration choice | Existing CPU app |
+| P2 Responsive CPU simulation and bulk rendering | A smoother app with improved CPU capacity | P1 |
+| P3 Exploration controls and direct manipulation | Faster editing, navigation and experimentation | P2 completed-state command boundary |
+| P4 Boundaries and per-pair ranges | Richer 2D rules, usable and saved on CPU | P2; extends P3 controls |
+| P5 Selectable GPU simulation | GPU-resident 2D simulation with CPU choice retained | P1 integration decision, P2, P4 |
+| P6 Discovery library and visual tools | Easy saving, replay, sharing and observation | P3; integrates P4/P5 captures |
+| P7 Large-population tuning and 2D release | Measured capacity, polished workflows and distribution | P2–P6 |
+| P8 3D exploration, later | An optional 3D mode with CPU and GPU support | Usable expanded 2D release; deferred |
+
+### P1 Performance baseline and execution design
+
+- Extend the saved workload set with 10,000, 50,000, 100,000 and 250,000 particles, then explore one million where feasible. These are measurement points, not promised interactive limits. Cover fixed density, fixed area, bands, dense clusters and evolved patterns; record cutoff/range distributions and world size.
+- Measure step p50/p95, achieved simulation time per wall second, rendering FPS/cost, input responsiveness, CPU allocations and memory. Add GPU timing, device memory and transfer costs when available. Begin with a 60 FPS presentation target and report whether the chosen fixed timestep/playback speed is sustained; measure dense cases separately and stop impractical stress runs at a stated budget.
+- Make a small GPU feasibility prototype: select a compute API/device adapter and demonstrate compute-to-render buffer sharing, synchronization, capture and CPU-only startup. Check the existing MonoGame integration before choosing any host change; do not assume a compute-only kernel can share its buffers with the current renderer. Keep this prototype bounded and separate from production code.
+- Record the chosen integration boundary, supported first platform, measured baseline and phase budgets here or in a linked maintained performance report. Prefer the current Windows desktop target first; do not make broad GPU platform support a prerequisite.
+
+Exit: comparable saved workloads, useful performance targets and a demonstrated route from GPU computation to display and capture. No numerical behaviour changes merely to improve the baseline score.
+
+### P2 Responsive CPU simulation and bulk rendering
+
+- Move simulation work off the input/render loop. Apply queued edits at completed boundaries and publish completed render data through reusable buffers with explicit ownership. Bound command/snapshot backlog; coalesce previews or unapplied drag requests while recording every value actually applied. Keep pause, single-step, reset and cancellation predictable.
+- Render particles through bulk buffers and point/instanced drawing, with camera transforms on the rendering side where useful. Preserve the CPU solver and avoid allocating a complete snapshot per numerical step. Measure submission, upload, overdraw and present separately.
+- Make parallel CPU execution discoverable. Measure suitable worker counts and scheduling on representative workloads, consider counts beyond the current eight-worker cap, retain manual control and save the resolved count. A suggested/default count is not a universal fastest setting.
+- Profile and compare SIMD, more suitable packed/component layouts, specialized ordinary-range arithmetic, optional single precision and approximate reciprocal/square-root arithmetic. Keep only worthwhile changes; retain the existing CPU reference and clear supported-range/fallback behaviour.
+- Compare tighter cell widths/subdivisions and selective neighbour stencils against the current power-of-two grid, especially at cutoff transitions. Consider buffered neighbour lists only if rebuild/traversal measurements justify their maintenance cost. Preserve unbounded cell occupancy and directed interactions in exact modes.
+- Show graphics FPS, simulation steps/s, achieved playback speed and useful density/interaction statistics separately. Provide sensible large-population controls and an explicit option to resize the world with population to preserve density, instead of relying on a 5,000-particle slider and hidden larger typed values.
+
+Exit: representative large CPU workloads retain usable input, and accepted optimizations have matched-workload evidence. Saves, replay, failed-step handling and existing CPU-only operation still work. A busy worker never exposes partly updated state to rendering or editing.
+
+### P3 Exploration controls and direct manipulation
+
+- Organize controls around particles, interactions, world, playback, appearance and saved discoveries. Keep common controls close to the canvas and advanced execution options expandable. Retain exact entry, useful logarithmic sliders, contextual help, shortcuts, undo/redo and clear Reset/Resample/New meanings.
+- Add pan, zoom, fit/reset and optional camera smoothing. Offer particle size in screen pixels or world-relative display units without changing interaction radii.
+- Extend matrix editing with multi-cell/row/column selection, bulk set/scale/randomize/reset operations, linked reverse pairs and clipboard import/export. Retain receiver/source labels, validation, exact values and the force graph; make drag and keyboard actions discoverable.
+- Add coloured population bars with counts/percentages, equalization and direct species adjustments. Keep surviving identities and motion during population changes.
+- Separate position, velocity, species-assignment, matrix and palette generation. Include uniform/disk/ring/line/spiral/stripe/grid/cluster layouts, separated species groups, partial species reassignment and rotate/flip species operations. Each action states whether it changes current particles, future generation or a new experiment; preserve actual generated results in saves/replay.
+- Add move, paint/add, erase, attract, repel and directional-force brushes, with size, shape, intensity and species selection. Record affected identities/structural payloads or boundary-indexed force-tool samples; replay uses applied simulation actions rather than wall-clock pointer movement. Group a gesture for undo without erasing its applied replay history.
+- Add palette presets and species-header colour pickers. Keep appearance changes independent of motion and boundary geometry.
+
+Exit: users can create, perturb and revise a pattern directly, then undo or replay the relevant edits. Editing remains usable while simulation is busy; changing palette or camera never changes the trajectory.
+
+### P4 Boundaries and per-pair ranges
+
+- Retain current soft walls and open space, and add periodic wrapping and reflecting boundaries as explicit world choices. Periodic mode wraps positions, uses minimum-image displacement and queries across seams consistently. Test seam/corner cases and deduplicate wrapped cell visits in small grids; particle size on screen must not set a physical wall margin.
+- Add directed pair tables for interaction coefficient, core radius and outer cutoff, with a simple global mode and bulk editing. Existing files map to `coreRadius = beta * R` and `cutoff = R` for every pair, preserving their meaning. Define supported ranges and the zero-core policy; show the selected pair's implemented curve and radius diagram.
+- Start the CPU grid with a conservative maximum active cutoff, then evaluate receiver-specific ranges/stencils if heterogeneous ranges waste substantial work. Keep a small direct reference for the new model. Start periodic support with the maximum cutoff no greater than half the shortest world extent, so each pair has one minimum-image interaction; reject unsupported settings clearly rather than accidentally counting repeated images.
+- Version model/configuration/save formats as required. Preserve old soft-wall experiments unchanged. Specify what live world/boundary changes do to coordinates and record any wrapping or remapping as an explicit edit. Add selective randomization of rules, radii or both, and migrate presets and replay with these controls.
+
+Exit: all boundary choices and directed ranges work on CPU, with focused reference/geometry checks, useful editor controls and reliable save/load/replay. The GPU model contract can now follow a working 2D implementation.
+
+### P5 Selectable GPU simulation
+
+- Implement the full normal step on the GPU: count spatial bins, build offsets, scatter/sort particles, evaluate forces from stable input, integrate into completed output and render from device buffers. Use scalable scan/sorting methods appropriate to measured grid sizes; do not copy a particular prefix-sum implementation without profiling it.
+- Make single precision the initial GPU candidate, with coefficient/radius storage that preserves their useful values, including exact zero. Compare short steps and representative evolving scenes against CPU within documented tolerances. Deterministic GPU reductions/sorts are optional work if their value justifies their cost.
+- Preserve stable particle identities through sorting and structural edits. Support P4 boundaries/ranges and P3 editing through the same logical commands. Keep buffers resident during normal stepping; read full state on explicit capture, transfer or structural operations when required, and use device reductions/scheduled summaries for inexpensive diagnostics.
+- Expose a clear **CPU / GPU** choice, device information and availability. Switch at a completed boundary with an explicit state transfer; retain identities, rules and clock, and record any precision conversion as part of the session. A failed switch retains the active valid backend. CPU operation, saves and the CLI must work without a usable GPU.
+- Add reliable capture/checkpoint support before claiming GPU save or replay parity. Offer distinct actions to restore a recorded capture or re-simulate recorded actions. Restoring captured values is exact within their stored precision; re-simulation may diverge even on the same GPU when ordering is not repeatable. Periodic/terminal captures recover recorded boundaries, not the original trajectory between them. A CPU-only CLI can restore such a capture or explicitly re-simulate on CPU; it must not silently present that run as equivalent GPU replay.
+- Handle allocation/device failures visibly. Pause and offer CPU continuation from the latest valid captured state when available; do not claim that uncaptured state survives device loss. Expensive CPU captures/diagnostics must not become hidden work on every GPU frame.
+
+Exit: users can run the same supported 2D model on CPU or GPU, switch deliberately, save and resume it, and understand observed speed/replay differences. Publish matched workload results including rendering, transfers and diagnostics rather than a particle-count limit alone.
+
+### P6 Discovery library and visual tools
+
+- Add a searchable thumbnail library with names, descriptions, tags and recent/favourite views. Distinguish reusable presets, captured patterns, initial states and recorded sessions while keeping common Save/Load actions simple.
+- Support selective preset components such as matrix, radii, palette and generation settings, with explicit species alignment/retention. Add validated clipboard/file import and export for sharing; sharing means creating an artifact, not automatically publishing it online.
+- Keep existing save protection and legacy loading. For large populations and long brush sessions, measure history/capture size and introduce chunked or compressed state storage and checkpoint-backed history where useful. Show recording status and storage limits; never silently truncate a session represented as complete.
+- Add trails, velocity-based colour/brightness, opacity, normal/additive blending and configurable glow. Include spatial-bin/population heatmaps and optional statistics as observation aids; expensive measurements remain optional and clearly show their sample time.
+- Add selected-region/pattern tracking with camera follow and an indicator. Treat this as a visual tracking heuristic rather than organism detection. Add screenshots and short GIF/video capture, with capture cost/quality controls and no changes to numerical timestep.
+
+Exit: a discovery can be found visually, restored, continued and shared with its intended rules/state. Visual effects and recording remain responsive on representative large scenes, and optional analysis does not dictate simulation speed.
+
+### P7 Large-population tuning and 2D release
+
+- Revisit the P1 population ladder on CPU and GPU after patterns have evolved. Report practical ranges for sparse worlds, heterogeneous ranges and dense structures, with hardware, precision, timestep, achieved simulation speed and presentation settings. Treat one million as a stretch measurement, not a requirement to cut corners on membership or saved rules.
+- Tune device memory, transfer/capture scheduling, neighbour search, render overdraw and visual quality presets. Optional automatic backend/quality suggestions must remain overridable and visible; never silently substitute another model or reduce particle count.
+- Finish keyboard/accessibility and small-window workflows, onboarding, errors, presets, portable packaging and supported-platform smoke checks. Review useful legacy visual kernels for clearly named experimental presets; scientific validation is not a prerequisite for restoring an intentional visual rule.
+- Incorporate the old M5 examples, clean-checkout instructions, legacy-mode dispositions and release documentation. Keep XML comments useful; a generated API website is optional tooling rather than a gate on a usable sandbox. Publishing remains a separate release action.
+
+Exit: a usable 2D release with selectable CPU/GPU simulation, dependable discoveries/replay, representative capacity evidence and clear platform limits. This is the foundation for the deferred 3D phase.
+
+### P8 3D exploration, later
+
+This phase is planned but deliberately deferred until the expanded 2D app is established. It does not authorize building 3D infrastructure during P1–P7.
+
+- Extend state and rules to three spatial dimensions, preserving directed species interactions, pair ranges and appropriate open/soft/reflecting/periodic boundaries. Retain both CPU and GPU execution; begin with a simple 3D reference and a measured 3D spatial grid before considering octrees or other structures.
+- Add orbit/pan/zoom and optional fly controls, depth cues, fit/recenter, clipping/slice inspection and deliberate brush placement on a selected plane or at a selected depth. Adapt tracking, population/matrix editing and generators to volumes.
+- Compare billboard and instanced particle rendering with depth handling, transparency and overdraw budgets. Avoid committing to costly sphere meshes or a game-engine migration before measuring what the view needs.
+- Version dimension explicitly in state, presets and sessions. Existing 2D files retain 2D meaning; any embedding of a 2D state into 3D is an explicit operation with new provenance. Reuse saving, library and editing concepts without assuming every implementation should be dimension-generic.
+- Establish separate 3D performance targets using volume density, cutoff and evolved clusters. Retain exact captured states and practical replay metadata, with the same cross-backend limits as 2D.
+
+Exit, when this phase is undertaken: an optional, usable 3D exploration mode with CPU/GPU choice and save/resume, while 2D remains a supported, efficient mode.
+
+## Target execution and reproducibility boundary
+
+The shared C# model/data contracts, CPU simulation, persistence and CPU CLI remain independent of graphics APIs. A GPU adapter owns kernels, device storage and synchronization; a compatible renderer may consume its completed buffers directly. Do not force a resident GPU implementation through the current CPU-span `IForceEvaluator` contract. Introduce only the execution/capture interfaces demonstrated necessary by P1/P2/P5.
+
+One owner advances a simulation and applies commands at completed boundaries. Rendering receives a completed buffer lease or reusable snapshot, never a view into a buffer being overwritten. File captures are explicit owned states. Device changes, precision conversion, structural editing, async diagnostics and cancellation have defined publication points. Small edits should not require a full state download; operations that do require one may be visibly asynchronous.
+
+Use versioned rules, actual values and stable identities as the common interchange. Keep friendly names and help in the UI; reserve algorithm versions, precision details and device metadata for advanced views and saved records. Preserve the existing deterministic CPU conventions where practical, but do not make matching them bit-for-bit a prerequisite for the fast backend. Replay plus checkpoints supports revisiting a discovery even when arithmetic changes its subsequent evolution.
+
+The sections below document the implemented 2D CPU baseline and its migration history. Their equations, file formats and sequential observation rules remain authoritative for current code until the relevant roadmap phase replaces them explicitly; they do not prohibit the planned adapters, approximations or asynchronous host.
 
 ## Architecture and dependency direction
 
@@ -68,9 +185,9 @@ The native interface uses a compact inspector with Model, World and View pages, 
 
 Keep separate contiguous arrays for positions, velocities and species identifiers. A particle is an identity and a set of state values, rather than an independently updating object. A species identifier selects model parameters; the viewer maps that identifier to a palette.
 
-The first numerical implementation uses double precision for coordinates, velocities and force accumulation, with a small, documented two-component value type. This gives one straightforward reference path. Single precision, SIMD or another representation can be evaluated later against measured cost and numerical error. Do not build a generic float/double framework in the first version.
+The current CPU implementation uses double precision for coordinates, velocities and force accumulation, with a small, documented two-component value type. This remains the reference path. P2 evaluates CPU arithmetic/layout alternatives and P5 adds the GPU representation; neither requires a generic float/double framework in advance.
 
-The simulation owns its arrays and preallocated working buffers. Observers receive read-only views valid until the next step, reset or successful reconfiguration. Persistent snapshots are explicit copies made outside the stepping loop. The viewer and solver run sequentially; reading a buffer concurrently while it is being written is outside the contract. A rejected edit, or a value-identical edit, does not invalidate the last completed observation.
+The simulation owns its arrays and preallocated working buffers. Observers receive read-only views valid until the next step, reset or successful reconfiguration. Persistent snapshots are explicit copies made outside the stepping loop. In the current host the viewer and solver run sequentially; P2 replaces host scheduling with completed render-buffer publication, not concurrent access to these borrowed views. A rejected edit, or a value-identical edit, does not invalidate the last completed observation.
 
 The first model uses unit mass. Introduce typed storage for mass, charge, orientation or other properties when a model requires it. Avoid both a universal particle containing every conceivable property and string-keyed property lookups in the numerical loop.
 
@@ -117,7 +234,7 @@ Use reduced units, with a reference length, time and unit particle mass stated i
 
 The wall mapping preserves the old velocity kick at its original reference timestep while making the new wall term a force integrated with `dt`. The resulting preset will still differ from the old program because order-dependent updates and duplicate neighbours are being corrected. Keep a record of those deliberate changes rather than requiring identical long-term trajectories.
 
-The initial soft wall uses the existing linear inward response within its boundary layer, added to the force buffer. It is a confining interaction, not an impenetrable wall. The spatial index must handle finite positions outside the nominal world; it must not drop escaped particles. Reflecting and periodic boundaries can be introduced as separate documented choices later. Periodic support would require consistent wrapping, pair displacement and neighbour lookup together.
+The initial soft wall uses the existing linear inward response within its boundary layer, added to the force buffer. It is a confining interaction, not an impenetrable wall. The spatial index must handle finite positions outside the nominal world; it must not drop escaped particles. P4 adds reflecting and periodic boundaries as separate choices with versioned persistence. Existing soft-wall files keep this behaviour.
 
 For each coordinate `x`, extent `L`, layer width `w` and strength `S`, the implemented wall force is `S * (1 - x/w)` below `w`, `-S * (1 - (L-x)/w)` when `L-x < w`, and zero elsewhere. It continues linearly off-world. Valid widths satisfy `0 < w <= min(width,height)/2`, keeping opposing layers separate. World dimensions, timestep and cutoff are finite and positive; the squared cutoff must also be finite and positive. Force scales are finite and nonnegative; zero disables the corresponding term. A null damping half-life disables damping; otherwise it must be finite and positive. Extreme state magnitudes that overflow intermediate arithmetic fail explicitly without publishing a partial step.
 
@@ -212,7 +329,7 @@ Performance is part of the data and execution design from the beginning. Keep a 
 - Store state and working data contiguously. Reuse force, output-state and index buffers.
 - Target zero managed allocations per core step after warm-up at an established capacity. Setup, resizing, exporting snapshots and optional reports are measured separately.
 - Keep file I/O, formatting, logging and rendering outside the numerical loop.
-- Reject out-of-range pairs using squared distance, then compute a square root once for an accepted radial interaction. Do not approximate the equation merely to make it faster.
+- The reference rejects out-of-range pairs using squared distance, then computes a square root for an accepted radial interaction. Fast paths may use measured arithmetic approximations under the product commitments above; preserve the reference and identify meaningful changes in saved execution metadata.
 - Start with a direct directed-pair implementation for small reference cases, then add an exact uniform-grid search.
 - Give grid cells full integer-coordinate identity. Hash collisions must not merge distinct cells or emit duplicate neighbours. Reusable cell-head and particle-link storage is a reasonable first implementation; a custom low-level hash table is not a prerequisite.
 - Enumerate each candidate once without a shared mutable query-result buffer. Handle empty cells, cluster occupancy, negative coordinates and off-world particles.
@@ -220,7 +337,7 @@ Performance is part of the data and execution design from the beginning. Keep a 
 
 Grid construction and storage should scale with particles and occupied cells. Exact local interaction work also depends on the number of candidate pairs. A cluster in which nearly every particle interacts can still require quadratic work. Benchmark density and interaction radius as well as particle count.
 
-Parallel work assigns disjoint output ranges while all workers read the same input state and index. Do not apply action-reaction symmetry to nonreciprocal matrices. SIMD, reduced precision, unsafe code, GPU execution and approximation each require a measured benefit and a numerical-error check before adoption.
+Parallel work assigns disjoint output ranges while all workers read the same input state and index. Do not apply action-reaction symmetry to nonreciprocal matrices. SIMD, reduced precision, unsafe code, GPU execution and approximation each require a measured benefit and a proportionate behaviour/reference check before adoption, rather than physical validation or identical long trajectories.
 
 ### Accepted M4 exact grid and backend selection
 
@@ -246,7 +363,7 @@ Schema 2 adds optional `workerCount`, defaulting to one when absent; schema 1 re
 
 `Diagnostics.Sample` remains the direct reference. `DiagnosticSampler` separately validates linear speed measurements, counts exact duplicate positions, and finds inclusive geometric connected components with reusable union/find and spatial storage. Connections use the reference `double.Hypot(dx,dy) <= radius` predicate, never force accepted-pair counts. Its binary cell width is strictly greater than the radius, covering inclusive rounded-boundary cases that the force index's width policy would miss. Positive finite radii whose square underflows or overflows remain valid; unrepresentable widths or coordinates use exact direct connectivity. Duplicate counting precedes connectivity early exit, and all scratch is instance-owned.
 
-The [M4.1 evidence](performance-m4-1.md) separates static density/population scaling, adjacent-double cutoff transitions, developed preset snapshots, subsequent evolving trajectories, worker counts, diagnostic latency, retained capacity and allocation boundaries. Buffered Verlet lists remain a later experiment; no SIMD, approximation, reduced precision, GPU, BVH or computational-geometry subsystem is introduced here.
+The [M4.1 evidence](performance-m4-1.md) separates static density/population scaling, adjacent-double cutoff transitions, developed preset snapshots, subsequent evolving trajectories, worker counts, diagnostic latency, retained capacity and allocation boundaries. M4.1 introduced no buffered Verlet lists, SIMD, approximation, reduced precision, GPU, BVH or computational-geometry subsystem. P2/P5 now evaluate the relevant candidates against that baseline.
 
 ### Benchmark protocol
 
@@ -261,11 +378,11 @@ Use [BenchmarkDotNet](https://benchmarkdotnet.org/articles/guides/good-practices
 
 Record commit, runtime/SDK, build configuration, OS, CPU, thread count, population, domain, cutoff, species count, seed and actual initial state. Report index-build time, interaction time, integration time, complete-step p50/p95 latency, allocations, candidate and accepted pair counts, and numerical error against the reference. Measure rendering and diagnostics overhead separately; FPS alone does not describe solver performance.
 
-The first numerical milestone records a reference machine and baseline. The optimization milestone sets achievable particle-count and step-time budgets using those results. For an optimization to be accepted, correctness and allocation gates must pass, and repeated comparable runs must demonstrate the claimed benefit. Treat timing on shared CI runners as advisory until a stable benchmark environment exists; do not block changes on an arbitrary noisy percentage.
+The existing reports retain the reference machine and baseline. P1 extends workloads and budgets to the new scale; later phases update them with observed results. An accepted optimization should pass relevant regression/allocation checks and demonstrate its claimed benefit on comparable runs. Reduced-precision paths also state practical error/behaviour differences. GPU reports include device/API, precision, synchronization, rendering and readback boundaries. Treat timing on shared CI runners as advisory; do not block changes on an arbitrary noisy percentage or require a research study for routine work.
 
 ## Validation and reproducible experiments
 
-Tests should establish the mathematical and state contracts rather than mirror private implementation details:
+The current CPU tests establish the following contracts rather than mirror private implementation details. Retain this coverage for existing behaviour. New creative/GPU features need focused safety, state, persistence and representative rule comparisons; the full historical extreme-number or conservation coverage is not automatically a prerequisite for every backend:
 
 | Contract | Verification |
 | --- | --- |
@@ -281,7 +398,7 @@ Tests should establish the mathematical and state contracts rather than mirror p
 | Live editing and replay | Preserve completed state/clock during scalar edits; reject invalid candidates atomically; test structural membership, gesture undo and actual saved payloads. Replay saved editor sessions with variable timesteps through the real CLI and shared viewer engine, including terminal edits and continuation. |
 | Performance | Verify steady-capacity allocations and maintain representative benchmark results. |
 
-Use combined absolute and relative tolerances with a documented scale and reason. Short deterministic cases establish implementation correctness; long emergent runs should also be compared through statistics over multiple seeds. Chaotic trajectories need not remain point-for-point identical after a numerical-method change.
+Use combined absolute and relative tolerances with a documented scale and reason where useful. Short repeatable cases catch implementation errors; representative evolving scenes catch practical instability and loss of intended behaviour. Use multi-seed statistics when they answer a concrete concern, not as a standing publication-grade gate. Chaotic trajectories need not remain point-for-point identical after a numerical-method or precision change.
 
 An experiment stores a schema/model version, parameters, matrix, initial positions/velocities/species, seed, generator identity, timestep, boundaries and solver settings. A checkpoint additionally stores current time/state and any evolving RNG state when randomness enters the dynamics. Record runtime and numerical backend. A seed alone does not promise identical results across runtimes or future parallel implementations.
 
@@ -301,7 +418,7 @@ Initial measurements include particle count, finite-state/overlap checks, speed 
 
 ## Migration milestones
 
-Each milestone should end in small verified commits and a useful result. The sequence stops at a reliable, documented 2D application.
+This table records the original migration sequence. M1–M4 and M4.1 are complete; P1–P8 above define the active direction. The original 2D-only stopping point no longer describes the full roadmap.
 
 | Milestone | Work | Exit criteria |
 | --- | --- | --- |
@@ -310,9 +427,9 @@ Each milestone should end in small verified commits and a useful result. The seq
 | M2 Correct serial simulation | Implement the stated Particle Life curve, direct pair evaluation, wall term, damping and consistent integration. Add random, chain and snake presets and a CLI runner. | Pair, update-order, timestep, overlap and finite-state checks pass; reference measurements and reproducible run metadata are recorded. |
 | M3 Interactive 2D application | Adapt MonoGame rendering and controls; add pause, single-step, explicit reset/resample and diagnostic display. | A saved experiment gives the same step results through CLI and viewer; geometry is not display-dependent; simulation and rendering clocks are separated. |
 | M4 Spatial acceleration | Add the exact uniform grid, reusable buffers and profiling. Evaluate parallel work only if profiling justifies it. | Neighbour and force parity pass; no steady-capacity step allocation; benchmark comparisons include density/cluster cases and recorded capacity targets. |
-| M5 Documented 2D release | Review the remaining legacy modes, provide examples, generate API docs, finish CI checks and record limitations. | Every legacy mode has a disposition; public API docs build; contributors can reproduce tests, examples and benchmark protocol from a clean checkout. |
+| M5 Release backlog, now P7 | Review legacy modes, provide examples, finish release checks and document supported behaviour. | Incorporated into P7; a separate API website is optional. |
 
-M1–M4 and the live experiment editor are implemented. Build, automated validation and native window checks are described in [CONTRIBUTING.md](../CONTRIBUTING.md). The [historical reference baseline](performance-baseline.md) retains M2/M3 provenance; the [M4 comparison](performance-m4.md) records controlled direct/grid measurements, capacity targets and limitations. The [editor comparison](performance-live-editor.md) separates solver timing, actual edits and native presentation costs. M5 remains on hold for a subsequent release review. No Unity adapter, octree, FMM, 3D state or gameplay system is needed to complete these milestones.
+M1–M4, M4.1 and the live experiment editor are implemented. Build, automated validation and native window checks are described in [CONTRIBUTING.md](../CONTRIBUTING.md). The [historical reference baseline](performance-baseline.md) retains M2/M3 provenance; the [M4 comparison](performance-m4.md) records controlled direct/grid measurements, capacity targets and limitations. The [editor comparison](performance-live-editor.md) separates solver timing, actual edits and native presentation costs. This evidence remains useful without imposing the original scientific ambitions on future features. 3D now belongs to the deferred P8; a Unity adapter, octree, FMM or gameplay system is not required by the active roadmap.
 
 ## Repository workflow and documentation
 
@@ -320,7 +437,7 @@ M1–M4 and the live experiment editor are implemented. Build, automated validat
 
 Use short-lived branches for cohesive implementation work and make frequent commits at verified boundaries. Introduce correctness fixes separately from optimizations where practical, so changes in results can be explained. Keep `main` usable, inspect staged changes before committing, and include source, relevant tests and XML updates together.
 
-CI is configured for locked restore, formatting, Release builds including the viewer, numerical and host tests with actual CLI parity, display-free viewer help, the managed MonoGame compatibility check, XML compiler-failure probes and CLI smoke checks. Native window checks are a separate manual gate. At M5, add rendered-documentation checks and broader core OS coverage. Tools and packages remain pinned; benchmark artifacts stay separate from normal source output. Generated XML is available locally, while full API-site publishing is deferred.
+CI is configured for locked restore, formatting, Release builds including the viewer, numerical and host tests with actual CLI parity, display-free viewer help, the managed MonoGame compatibility check, XML compiler-failure probes and CLI smoke checks. Native window checks are a separate manual gate. P7 reviews release/platform coverage; add rendered-documentation checks only if an API website is adopted. Tools and packages remain pinned; benchmark artifacts stay separate from normal source output. Generated XML remains available locally.
 
 The GitHub remote is [M3G4W4TT5/ParticleLife2](https://github.com/M3G4W4TT5/ParticleLife2), created as a private repository. The local repository uses `origin` for this remote. Project licensing remains to be selected before a public release. Old repositories do not need to be rewritten or repurposed.
 
@@ -332,4 +449,6 @@ Targeted review checks found duplicate neighbour IDs, a grid-query buffer overfl
 
 The v0.2 review found an unfinished updater, high-bit loss in the Morton encoder and rejection of excess particles in finest-level octree cells. None of those implementations is a dependency of this plan.
 
-Later research candidates include [nonreciprocal effective interactions](https://journals.aps.org/prx/abstract/10.1103/PhysRevX.5.011035) and [asymmetric clustering in active mixtures](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.133.258303). They can inform separately specified models after the existing 2D foundation is established.
+The November 2026 expansion draws on [Tom Mohr's Particle Life App at 3ba0c4e](https://github.com/tom-mohr/particle-life-app/tree/3ba0c4e0055971301e6a9c36073ebbe6b8c3eda4) and [SandboxScience at ba43fde](https://github.com/DicSo92/SandboxScience/tree/ba43fde7ed3fc2224302c2682a3ecd3030717ba5). Mohr's [background loop](https://github.com/tom-mohr/particle-life-app/blob/3ba0c4e0055971301e6a9c36073ebbe6b8c3eda4/src/main/java/com/particle_life/backend/Loop.java), [bulk renderer](https://github.com/tom-mohr/particle-life-app/blob/3ba0c4e0055971301e6a9c36073ebbe6b8c3eda4/src/main/java/com/particle_life/app/ParticleRenderer.java) and exploration UI inform P2/P3/P6. SandboxScience's [2D GPU pipeline](https://github.com/DicSo92/SandboxScience/blob/ba43fde7ed3fc2224302c2682a3ecd3030717ba5/components/particle-life/ParticleLifeGpu.vue#L1305-L1387), [matrix editor](https://github.com/DicSo92/SandboxScience/blob/ba43fde7ed3fc2224302c2682a3ecd3030717ba5/components/particle-life/RulesMatrix.vue) and [force kernel](https://github.com/DicSo92/SandboxScience/blob/ba43fde7ed3fc2224302c2682a3ecd3030717ba5/assets/particle-life-gpu/shaders/compute/particleComputeForces.wgsl) inform P3–P5. These are implementation precedents, not matched benchmarks or proof of particle capacity. The plan does not inherit their frame-derived timesteps, coefficient quantization or missing stable particle identities.
+
+Earlier research references such as [nonreciprocal effective interactions](https://journals.aps.org/prx/abstract/10.1103/PhysRevX.5.011035) and [asymmetric clustering in active mixtures](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.133.258303) remain optional background, not prerequisites for creative model features.

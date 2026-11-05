@@ -4,9 +4,9 @@
 
 _Exploring emergent behaviour from simple interactions._
 
-Particle Life 2 is a continuation of [Particle Life](https://github.com/M3G4W4TT5/ParticleLife). The goal is to create a lightweight, modifiable particle simulation for exploring how local interactions produce collective behaviour: particles forming patterns, clustering, separating and moving together.
+Particle Life 2 is a continuation of [Particle Life](https://github.com/M3G4W4TT5/ParticleLife). The goal is to make it easy to create and explore emergent particle behaviour: patterns forming, clustering, separating and moving together. It is a creative sandbox, with saving and replay to help revisit interesting discoveries.
 
-The initial focus is on two-dimensional simulations, with an engine-independent C# core and MonoGame for rendering. Models and numerical methods should be explicit and testable, with attention to performance, readable code and scientific explanations in C# XML documentation.
+The current app is two-dimensional, with an engine-independent C# core and MonoGame for rendering. The focus is on large populations, responsive exploration and understandable rules. GPU simulation alongside the CPU option, richer interaction tools and a later 3D mode are planned.
 
 The interactive editor and headless runner share the same simulation. Change directed species interactions, forces and populations while particles move, inspect their force curves, and save complete experiments or replayable editing sessions. The solver uses double precision and advances independently of rendering. An exact uniform grid accelerates neighbour discovery, with the direct all-pairs solver available for comparison.
 
