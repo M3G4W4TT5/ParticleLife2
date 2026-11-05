@@ -11,6 +11,73 @@ namespace ParticleLife.Viewer.Tests;
 public sealed class BoundaryRangeEditorTests
 {
     [Fact]
+    public void SelectedRangeEditAndUndoKeepDirectionAndOtherPairs()
+    {
+        using PlaybackController controller = new(PresetGenerator.Create(PresetKind.Random, 10, 3, 1));
+        ExperimentEditor editor = new(controller);
+        editor.SetSelectedPairRanges([1, 5], 0, 0.2);
+        PairInteractionRanges ranges = editor.Configuration.Matrix.Ranges!;
+        Assert.Equal(0.2, ranges.CutoffRadii[1]);
+        Assert.Equal(0.2, ranges.CutoffRadii[5]);
+        Assert.Equal(0.1, ranges.CutoffRadii[3]);
+        Assert.Equal(0, ranges.CoreRadii[1]);
+        Assert.Single(editor.CaptureSession("selection").Events);
+        editor.Undo();
+        Assert.Null(editor.Configuration.Matrix.Ranges);
+        editor.Redo();
+        Assert.True(ranges.EquivalentTo(editor.Configuration.Matrix.Ranges));
+        editor.SetPairRange(0, 2, 0.04, 0.3, linkReverse: true);
+        Assert.Equal(0.3, editor.Configuration.Matrix.Ranges!.CutoffRadii[6]);
+        Assert.Equal(0.04, editor.Configuration.Matrix.Ranges.CoreRadii[2]);
+    }
+
+    [Fact]
+    public void SelectiveRandomizationRetainsUnselectedQuantitiesAndReplaysActualValues()
+    {
+        using PlaybackController controller = new(PresetGenerator.Create(PresetKind.Random, 10, 2, 1));
+        ExperimentEditor editor = new(controller);
+        editor.EnablePairRanges(true);
+        PairInteractionRanges original = editor.Configuration.Matrix.Ranges!;
+        editor.RandomizeInteractionSelection([1], InteractionRandomization.Rules, 7, double.NaN, double.NaN);
+        Assert.True(original.EquivalentTo(editor.Configuration.Matrix.Ranges));
+        double[] rules = editor.Configuration.Matrix.Values.ToArray();
+        editor.RandomizeInteractionSelection([1], InteractionRandomization.Radii, 11, 0.15, 0.2, 0, linkReverse: true);
+        Assert.Equal(rules, editor.Configuration.Matrix.Values.ToArray());
+        PairInteractionRanges ranges = editor.Configuration.Matrix.Ranges!;
+        Assert.Equal(ranges.CutoffRadii[1], ranges.CutoffRadii[2]);
+        Assert.InRange(ranges.CutoffRadii[1], 0.15, 0.2);
+        Assert.Equal(0, ranges.CoreRadii[1]);
+        Assert.Equal(original.CutoffRadii[0], ranges.CutoffRadii[0]);
+        SessionDefinition recorded = SessionFile.Deserialize(SessionFile.Serialize(editor.CaptureSession("actual radii")));
+        using Simulation replay = SessionReplay.Replay(recorded);
+        Assert.True(editor.Configuration.EquivalentTo(replay.Configuration));
+        editor.EnablePairRanges(false);
+        Assert.Null(editor.Configuration.Matrix.Ranges);
+        editor.Undo();
+        Assert.True(ranges.EquivalentTo(editor.Configuration.Matrix.Ranges));
+    }
+
+    [Fact]
+    public void InvalidSelectedRadiiRejectAtomicallyIncludingPeriodicLimit()
+    {
+        ExperimentDefinition source = PresetGenerator.Create(PresetKind.Random, 10, 2, 1);
+        using PlaybackController controller = new(source);
+        ExperimentEditor editor = new(controller);
+        editor.ApplyConfiguration(new(source.Parameters with { Boundary = BoundaryKind.Periodic }, source.Matrix, source.TimeStep));
+        SimulationConfiguration valid = editor.Configuration;
+        long revision = editor.Revision;
+        int events = editor.SessionEventCount;
+        Assert.Throws<ArgumentOutOfRangeException>(() => editor.SetSelectedPairRanges([1, 4], 0.01, 0.2));
+        Assert.Throws<ArgumentOutOfRangeException>(() => editor.SetPairRange(0, 1, 0.1, 0.6));
+        Assert.Throws<ArgumentOutOfRangeException>(() => editor.RandomizeInteractionSelection([1],
+            InteractionRandomization.Radii, 1, 0.1, 0.6));
+        Assert.Same(valid, editor.Configuration);
+        Assert.Equal(revision, editor.Revision);
+        Assert.Equal(events, editor.SessionEventCount);
+        Assert.Equal(source.InitialState.Positions.ToArray(), controller.Observe().Positions.ToArray());
+    }
+
+    [Fact]
     public void LivePeriodicWorldChangeRecordsActualRemappingAndUndoRetainsClock()
     {
         ExperimentDefinition source = new("off-world", new ModelParameters { Boundary = BoundaryKind.Open, ForceScale = 0 },
@@ -53,6 +120,8 @@ public sealed class BoundaryRangeEditorTests
         editor.ApplyMatrixTemplate(PresetKind.Chains, 2);
         editor.ResetMatrix();
         Assert.True(ranges.EquivalentTo(editor.Configuration.Matrix.Ranges));
+        ExperimentDefinition captured = editor.CaptureCurrentExperiment("ranges");
+        Assert.True(ranges.EquivalentTo(ExperimentEditing.RandomizeMatrix(captured, 19).Matrix.Ranges));
         editor.ApplyPopulation(3, [5, 5, 0]);
         PairInteractionRanges expanded = editor.Configuration.Matrix.Ranges!;
         Assert.Equal(0.12, expanded.CutoffRadii[1]);

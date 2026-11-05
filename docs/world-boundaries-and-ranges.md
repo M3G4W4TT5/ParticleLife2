@@ -15,6 +15,8 @@ Choosing a periodic or reflecting world live, or resizing such a world, maps act
 
 ## Global and directed ranges
 
+Range edits support selected directed cells and linked reverse pairs. Switching to pair mode copies the current global values; switching back restores the global controls and is undoable. Selective randomization changes rules, radii or both. Rules-only edits retain all radii, radius-only edits retain all coefficients, and replay stores generated values rather than regenerating them from a seed. Native controls and their visual acceptance are being integrated with the exploration editor.
+
 Global mode retains the original cutoff `R` and core fraction `beta`. Its effective core is `beta * R`, and its original arithmetic path remains the default for old files. Per-pair mode stores an independent core radius and cutoff for every receiver-row/source-column pair, alongside the directed coefficient. Reversing a pair can change all three values.
 
 Each cutoff must be finite and positive with a representable positive square. Each core must satisfy `0 <= core < cutoff`; a positive core must remain representable relative to its cutoff. Zero core removes short-range core repulsion. A zero coefficient still retains its nonzero core repulsion. Exactly overlapping particles have no defined direction and contribute zero without deleting either particle.
