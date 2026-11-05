@@ -442,14 +442,28 @@ internal sealed unsafe partial class GlGpuSimulation : IResidentSimulation, IRes
         return result;
     }
 
+    /// <summary>Rejects unpublished results with a supported-range explanation while retaining completed input.</summary>
+    /// <remarks>Status 1 means an invalid input cell coordinate; 2 means non-finite integration values;
+    /// 4 means a finite candidate outside the grid range. Different particles can report both 2 and 4.
+    /// Slot and flag diagnostics stay in the console. Host recovery uses an already stored capture,
+    /// because a faulted owner may be unable to produce a new capture of the retained device state.</remarks>
     private void RejectFailedCandidate(GpuStatus status)
     {
         if (status.Flags != 0)
         {
             stage = StepStage.Idle;
             measurements?.Complete(wasPublished: false, RetainedDeviceBufferBytes);
-            throw new InvalidOperationException($"GPU candidate rejected at logical slot {status.FailedSlot} (status {status.Flags}). "
-                + "The previous completed state is retained; change the model or capture it for CPU continuation.");
+            Console.Error.WriteLine($"GPU candidate rejected at logical slot {status.FailedSlot} (status {status.Flags}).");
+            string reason = status.Flags switch
+            {
+                1 => "A current particle position is invalid or outside the GPU grid range (±1,048,576 cells per axis).",
+                2 => "A force, velocity or position became non-finite.",
+                4 => "A particle moved outside the GPU grid range (±1,048,576 cells per axis).",
+                6 => "The step produced non-finite values and positions outside the GPU grid range (±1,048,576 cells per axis).",
+                _ => "The step produced an unsupported GPU result."
+            };
+            throw new InvalidOperationException($"GPU step rejected. {reason} The previous completed state is retained. "
+                + "Adjust settings and resume, or use Playback > Recover CPU from latest capture (discards uncaptured progress).");
         }
     }
 
