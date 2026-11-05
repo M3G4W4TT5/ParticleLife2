@@ -19,6 +19,12 @@ if (args.Length > 0 && args[0] == "--save-worker")
     return;
 }
 
+if (args.Length > 0 && args[0] == "--replay-completion-checks")
+{
+    ReplayCompletionChecks.Run();
+    return;
+}
+
 // Compile and managed-assembly smoke check only: no window or native graphics device.
 Vector2d position = new(0.25, 0.75);
 Vector2 displayPosition = new((float)position.X, (float)position.Y);
@@ -448,6 +454,7 @@ Require(editor.Configuration.Matrix.SpeciesCount == 2 && recipePanel.Graph is no
     "Native recipe switch failed to refresh the smaller matrix.");
 Console.WriteLine("Native widget integration: compact exact input, dropdown routing, validation, live slider/replay/undo, matrix navigation and built-in recipes passed without graphics.");
 StartupChecks.Run();
+ReplayCompletionChecks.Run();
 await StorageChecks.RunAsync();
 
 static MouseState MouseAt(Point point, bool pressed = false, int wheel = 0) => new(point.X, point.Y, wheel,

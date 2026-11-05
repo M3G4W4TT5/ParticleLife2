@@ -25,6 +25,7 @@ internal sealed class LiveExperimentEditor : IDisposable
     private readonly ExperimentFileBrowser browser;
     private readonly ExplorationControls exploration;
     private long observedRevision = -1;
+    private long observedBaseline = -1;
     private bool symmetry;
     private bool populationDraft;
     private bool preserveDensity;
@@ -43,8 +44,6 @@ internal sealed class LiveExperimentEditor : IDisposable
     private string recipePopulationSummary = string.Empty;
     private int selectedTab;
     private ButtonState currentMouseButton;
-    private bool observedReplay;
-    private bool replayCancelPending;
     private readonly UiSection recipes;
     private readonly UiSection interactions;
     private readonly UiSection forces;
@@ -76,7 +75,8 @@ internal sealed class LiveExperimentEditor : IDisposable
     {
     }
 
-    internal LiveExperimentEditor(EditorSession editor, string saveDirectory, Action<string> report, Action printTimings)
+    internal LiveExperimentEditor(EditorSession editor, string saveDirectory, Action<string> report, Action printTimings,
+        Func<string, string?>? updateRecent = null)
     {
         this.editor = editor;
         this.report = report;
@@ -86,7 +86,7 @@ internal sealed class LiveExperimentEditor : IDisposable
         exploration = new ExplorationControls(editor, matrix, () => symmetry, report);
         matrix.ColourRequested = SelectColour;
         Graph = new ForceGraph(editor, matrix);
-        browser = new ExperimentFileBrowser(editor, saveDirectory, report, () => SuppressPlayback = true, ClearDrafts);
+        browser = new ExperimentFileBrowser(editor, saveDirectory, report, () => SuppressPlayback = true, ClearDrafts, updateRecent);
         panel.Toolbar.Add(new UiRow(
             new UiButton(() => "Undo", () => editor.Undo(), "Undo at the current clock. Membership undo preserves surviving motion and restores removed particles from saved state; resampling undo restores captured positions/velocities.", () => editor.CanUndo),
             new UiButton(() => "Redo", () => editor.Redo(), "Reapply an undone editor operation at the current boundary. A new edit clears redo.", () => editor.CanRedo),
@@ -626,6 +626,14 @@ internal sealed class LiveExperimentEditor : IDisposable
 
     private void Synchronize()
     {
+        long baseline = editor.Publication.BaselineVersion;
+        if (observedBaseline != baseline)
+        {
+            // Successful reset/load/replay publishes a new baseline even if no UI frame saw it running.
+            // Ordinary edits, rejected actions and cancelled/failed replay retain their original epoch.
+            observedBaseline = baseline;
+            ClearDrafts();
+        }
         if (observedRevision == editor.Revision)
         {
             return;
@@ -653,22 +661,6 @@ internal sealed class LiveExperimentEditor : IDisposable
     {
         editor.Pump();
         browser.Pump();
-        if (editor.IsBackground)
-        {
-            bool replaying = editor.IsReplaying;
-            if (observedReplay && !replaying)
-            {
-                string status = editor.Publication.Error is not null
-                    ? "Replay failed: " + editor.Publication.Error + ". Previous completed experiment retained."
-                    : replayCancelPending ? "Replay cancelled. Previous completed experiment retained, paused."
-                    : "Replay completed at the recorded terminal boundary, paused.";
-                browser.SetStatus(status);
-                report(status);
-                if (!replayCancelPending && editor.Publication.Error is null) { ClearDrafts(); }
-                replayCancelPending = false;
-            }
-            observedReplay = replaying;
-        }
         currentMouseButton = mouse.LeftButton;
         SuppressPlayback = false;
         ConsumedKeyboard = false;
@@ -681,12 +673,7 @@ internal sealed class LiveExperimentEditor : IDisposable
             SuppressPlayback = true;
             if (input.Any(entry => !entry.IsText && entry.Key == Keys.Escape))
             {
-                editor.CancelSessionReplay();
-                replayCancelPending = editor.IsBackground;
-                string status = editor.IsBackground ? "Replay cancellation queued; waiting for the current step to finish."
-                    : "Replay cancelled. Previous completed experiment retained, paused.";
-                browser.SetStatus(status);
-                report(status);
+                browser.CancelReplay();
             }
             else
             {
@@ -695,16 +682,14 @@ internal sealed class LiveExperimentEditor : IDisposable
                     bool complete = editor.AdvanceSessionReplay(8);
                     if (complete)
                     {
-                        browser.SetStatus("Replay complete at the recorded terminal boundary, paused. Close the library to inspect or continue experimenting.");
-                        report("Session replay completed at the recorded terminal boundary; paused. Continue experimenting or reset to its starting baseline.");
-                        ClearDrafts();
+                        browser.RefreshReplayStatus();
                         Synchronize();
                     }
                 }
                 catch (Exception exception) when (ViewerErrors.IsExpected(exception))
                 {
                     editor.CancelSessionReplay();
-                    browser.SetStatus("Replay failed: " + exception.Message + ". Previous completed experiment retained.");
+                    browser.ReportReplayFailure(exception.Message);
                     throw;
                 }
             }

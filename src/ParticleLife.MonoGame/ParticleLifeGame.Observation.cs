@@ -1,6 +1,7 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using ParticleLife.Core.Models;
+using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 using ParticleLife.MonoGame.Editor;
 using ParticleLife.Viewer;
@@ -12,6 +13,9 @@ internal sealed partial class ParticleLifeGame
     private readonly SpatialSampler spatialSampler = new();
     private readonly RegionTracker tracker = new();
     private SpatialObservation? observation;
+    private IResidentSpatialObservation? observationOwner;
+    private SpatialObservation? lastResidentObservation;
+    private ModelParameters? residentObservationParameters;
     private double observationReceived, nextObservation;
     private long visualBaseline = -1;
 
@@ -53,6 +57,7 @@ internal sealed partial class ParticleLifeGame
     /// <summary>Samples a leased complete CPU buffer only at the visible optional cadence.</summary>
     private void ObserveWorld(RenderFrameLease state)
     {
+        ChangeObservationOwner(null);
         InvalidatePreviousDiscovery(state.BaselineVersion);
         VisualSettings settings = editor.Appearance.Visuals;
         bool enabled = settings.Heatmap != HeatmapKind.Off || settings.ShowStatistics || tracker.Active;
@@ -75,11 +80,81 @@ internal sealed partial class ParticleLifeGame
         UpdateObservationStatus(now);
     }
 
+    /// <summary>Polls a bounded device sample without capturing or waiting for particle state.</summary>
+    /// <remarks>The request retains its source world parameters while the numerical owner continues.
+    /// Optional sampling failures affect observation feedback only, never the simulation's valid state.</remarks>
+    private void ObserveResidentWorld(IResidentSpatialObservation? source)
+    {
+        ChangeObservationOwner(source);
+        InvalidatePreviousDiscovery(editor.Publication.BaselineVersion);
+        VisualSettings settings = editor.Appearance.Visuals;
+        bool enabled = settings.Heatmap != HeatmapKind.Off || settings.ShowStatistics || tracker.Active;
+        if (source is null)
+        {
+            observation = null;
+            surface.VisualTools.ObservationStatus = enabled
+                ? "Spatial observations are unavailable on this device."
+                : "Observations off; no spatial sampling work.";
+            return;
+        }
+        double now = TimestampSeconds;
+        try
+        {
+            if (!enabled)
+            {
+                if (source.IsSpatialObservationPending) { source.CancelSpatialObservation(); }
+                observation = null;
+                surface.VisualTools.ObservationStatus = "Observations off; no spatial sampling work.";
+                return;
+            }
+            source.PollSpatialObservation();
+            if (source.LatestSpatialObservation is { } sample && !ReferenceEquals(sample, lastResidentObservation))
+            {
+                lastResidentObservation = observation = sample;
+                observationReceived = now;
+                if (residentObservationParameters is { } parameters) { tracker.Update(sample, parameters); }
+            }
+            if (!source.IsSpatialObservationPending && now >= nextObservation)
+            {
+                SimulationConfiguration configuration = editor.Publication.Configuration;
+                SpatialObservationRequest request = ObservationRequest(configuration.Parameters,
+                    configuration.Matrix.MaximumCutoff(configuration.Parameters), settings);
+                if (source.TryRequestSpatialObservation(request)) { residentObservationParameters = configuration.Parameters; }
+                nextObservation = now + settings.ObservationSeconds;
+            }
+            UpdateObservationStatus(now);
+            if (source.SpatialObservationError is { } error)
+            { surface.VisualTools.ObservationStatus = "Observation unavailable: " + error; }
+            else if (observation is null)
+            { surface.VisualTools.ObservationStatus = "Waiting for the first completed GPU observation."; }
+        }
+        catch (Exception failure) when (ViewerErrors.IsExpected(failure))
+        {
+            nextObservation = now + settings.ObservationSeconds;
+            surface.VisualTools.ObservationStatus = "Observation unavailable: " + failure.Message;
+        }
+    }
+
+    /// <summary>Invalidates presentation data when CPU/GPU storage ownership changes.</summary>
+    private void ChangeObservationOwner(IResidentSpatialObservation? source)
+    {
+        if (ReferenceEquals(source, observationOwner)) { return; }
+        // The previous owner may already have been disposed by an explicit backend transfer.
+        // Its resource lifetime is managed there; never call back into the retired device here.
+        observationOwner = source;
+        observation = lastResidentObservation = null;
+        residentObservationParameters = null;
+        nextObservation = 0;
+        worldVisuals?.Clear();
+    }
+
     private void InvalidatePreviousDiscovery(long baselineVersion)
     {
         if (visualBaseline == baselineVersion) { return; }
         visualBaseline = baselineVersion;
         observation = null; nextObservation = 0;
+        lastResidentObservation = observationOwner?.LatestSpatialObservation;
+        residentObservationParameters = null;
         tracker.Stop();
         worldVisuals?.Clear();
         surface.VisualTools.TrackingStatus = "New/reset discovery: tracking cleared. Pick a region to start again.";
