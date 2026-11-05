@@ -203,17 +203,40 @@ public sealed partial class ExperimentEditor
     /// <summary>Atomically edits matrix dimensions, particle membership and species assignments.</summary>
     /// <param name="speciesCount">Positive new species count.</param>
     /// <param name="counts">Desired nonnegative count for each new species.</param>
+    /// <param name="preserveDensity">When true, scale both world extents by sqrt(new population / old population).
+    /// Both populations must be nonzero. Surviving absolute positions and velocities remain unchanged.</param>
     /// <remarks>Removed species map by oldSpecies modulo newSpeciesCount. In storage order, the first
     /// requested particles of each remapped species survive with exact identity, position and velocity.
     /// Shortfalls are appended in species order using the current generation recipe and never-reused
-    /// increasing identities. Retained top-left matrix entries survive; new rows/columns start at zero.</remarks>
-    public void ApplyPopulation(int speciesCount, int[] counts)
+    /// increasing identities. Retained top-left matrix entries survive; new rows/columns start at zero.
+    /// Density-preserving world changes and membership form one saved, undoable operation. The wall
+    /// layer is clamped to half the new shorter extent when necessary; cutoff is unchanged. Additions
+    /// use the resized world. This preserves nominal count/area, not the local density of survivors.</remarks>
+    public void ApplyPopulation(int speciesCount, int[] counts, bool preserveDensity = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(speciesCount);
         ArgumentNullException.ThrowIfNull(counts);
         PresetDefinition.ValidatePopulations(counts, speciesCount);
         ParticleSnapshot before = Snapshot();
         int total = counts.Sum();
+        ModelParameters populationParameters = Configuration.Parameters;
+        if (preserveDensity)
+        {
+            if (before.Count == 0 || total == 0)
+            {
+                throw new ArgumentException("Preserve density requires nonzero old and new populations.", nameof(counts));
+            }
+            double worldScale = Math.Sqrt((double)total / before.Count);
+            double worldWidth = populationParameters.WorldWidth * worldScale;
+            double worldHeight = populationParameters.WorldHeight * worldScale;
+            populationParameters = populationParameters with
+            {
+                WorldWidth = worldWidth,
+                WorldHeight = worldHeight,
+                WallWidth = Math.Min(populationParameters.WallWidth, Math.Min(worldWidth, worldHeight) / 2)
+            };
+            populationParameters.Validate();
+        }
         int[] retainedCounts = new int[speciesCount];
         List<int> retained = new(Math.Min(before.Count, total));
         for (int i = 0; i < before.Count; i++)
@@ -248,14 +271,16 @@ public sealed partial class ExperimentEditor
             for (int count = retainedCounts[species]; count < counts[species]; count++)
             {
                 ids[output] = nextIdentity + generated;
-                (positions[output], velocities[output]) = GenerateParticle(random, generated++, additions, Configuration.Parameters, Generation);
+                (positions[output], velocities[output]) = GenerateParticle(random, generated++, additions, populationParameters, Generation);
                 speciesValues[output++] = species;
             }
         }
 
         InteractionMatrix matrix = ResizeMatrix(Configuration.Matrix, speciesCount);
         ParticleSnapshot after = new(ids, positions, velocities, speciesValues, before.Time, before.Step);
-        Apply(CaptureValues() with { Configuration = WithMatrix(matrix), Populations = (int[])counts.Clone() },
+        SimulationConfiguration populationConfiguration = new(populationParameters, matrix,
+            Configuration.TimeStep, Configuration.Backend, Configuration.WorkerCount);
+        Apply(CaptureValues() with { Configuration = populationConfiguration, Populations = (int[])counts.Clone() },
             after, false, "Apply population", before, additions > 0 ? Metadata($"viewer-{Generation.Placement}-{Generation.Velocity}", Generation.Seed) : null);
     }
 

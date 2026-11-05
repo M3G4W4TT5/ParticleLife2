@@ -145,7 +145,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         Loaded startup experiments take precedence over generation options. Invalid files retain
         a valid paused fallback. Reports are not inputs. Saved solver choices are honoured unless
         an explicit startup/reload --backend or --workers override is supplied. Direct needs one
-        worker; grid accepts 1..8 and falls back to direct when required by numerical range.
+        worker; grid accepts 1..64 and falls back to direct when required by numerical range.
         Matching .viewer.json companions restore appearance, generation and playback choices at
         startup and on F5 reload. Only an explicit --sample-every overrides their saved cadence.
         World display uses one isotropic scale. Appearance does not affect trajectories.

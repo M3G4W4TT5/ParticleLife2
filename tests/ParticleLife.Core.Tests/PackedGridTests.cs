@@ -32,7 +32,7 @@ public sealed class PackedGridTests
             NumericalAssert.Close(reference[i], expected[i]);
         }
 
-        foreach (int workerCount in new[] { 1, 2, 4, 8 })
+        foreach (int workerCount in new[] { 1, 2, 4, 8, 12, 24 })
         {
             using UniformGridForceEvaluator evaluator = new(parameters, Directed, workerCount);
             Vector2d[] actual = new Vector2d[input.Count];
@@ -332,7 +332,7 @@ public sealed class PackedGridTests
     public void WorkerConfigurationAndDisposedLifetimeAreExplicit()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new UniformGridForceEvaluator(new(), Directed, 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new UniformGridForceEvaluator(new(), Directed, 9));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new UniformGridForceEvaluator(new(), Directed, 65));
         UniformGridForceEvaluator evaluator = new(new(), Directed, 4);
         evaluator.Dispose();
         evaluator.Dispose();
