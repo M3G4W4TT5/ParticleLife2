@@ -8,7 +8,9 @@ namespace ParticleLife.MonoGame.Editor;
 internal sealed class DiscoveryItemWidget(DiscoveryEntry entry, Action selected, Func<bool> current) : UiWidget(entry.Metadata.PreviewLabel + ". " + entry.Path + (entry.Notice is null ? "" : ". " + entry.Notice))
 {
     private readonly string title = (entry.Metadata.Favourite ? "* " : "") + entry.Metadata.Name;
-    private readonly string purpose = (entry.Metadata.Kind switch { DiscoveryKind.Pattern => "Captured pattern", DiscoveryKind.Initial => "Initial baseline", DiscoveryKind.Preset => "Reusable preset", _ => "Recorded session" }) + $" / {entry.Metadata.Population:N0} particles";
+    private readonly string purpose = (entry.Metadata.Kind switch { DiscoveryKind.Pattern => "Captured pattern", DiscoveryKind.Initial => "Initial baseline", DiscoveryKind.Preset => "Reusable preset", _ => "Recorded session" })
+        + (entry.Metadata.Population == 0 && entry.Metadata.Points.Length == 0 && (entry.Metadata.PreviewLabel.StartsWith("No preview", StringComparison.Ordinal)
+            || entry.Metadata.PreviewLabel.StartsWith("Preview stale", StringComparison.Ordinal)) ? " / population not indexed" : $" / {entry.Metadata.Population:N0} particles");
     private readonly string description = entry.Metadata.Description.Length == 0 ? string.Join(", ", entry.Metadata.Tags) : entry.Metadata.Description;
     internal override int Height => 104;
     internal override void Press(Point point) => selected();

@@ -49,8 +49,10 @@ public static class ExperimentFile
     /// <summary>Identifies the current implementation layout without changing the saved search convention.</summary>
     /// <param name="backend">The actual or requested backend.</param>
     /// <returns>A versioned implementation identifier for runtime provenance.</returns>
-    /// <remarks>The grid retains its nine-cell and ascending in-cell enumeration contract; packing changes
-    /// storage, not the meaning of schema-2 uniform-grid/1. Worker scheduling owns disjoint receivers.</remarks>
+    /// <remarks>Nonperiodic global and equal-row configurations retain nine-cell enumeration; periodic tiling is unchanged. Pair tables
+    /// with differing receiver reaches can use conservative row rectangles, retaining accepted
+    /// contribution order and neighbours while skipping rejected work. The version records that implementation;
+    /// uniform-grid/1 still denotes exact grid search, and worker scheduling owns disjoint receivers.</remarks>
     public static string GetForceAlgorithmVersion(ForceBackend backend) => backend switch
     {
         ForceBackend.Direct => "direct/1",

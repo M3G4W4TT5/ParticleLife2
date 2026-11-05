@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using ParticleLife.Core.Execution;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
@@ -263,7 +264,8 @@ internal static class P7Runner
             simulation.Matrix, new ParticleSnapshot(state.Ids, state.Positions, state.Velocities, state.Species), simulation.TimeStep,
             new GeneratorMetadata("benchmark/p7/cpu-global-evolution", "1", source.Generator.Seed, RuntimeInformation.FrameworkDescription),
             ForceBackend.UniformGrid, simulation.WorkerCount,
-            new ExperimentProvenance(state.Time, state.Step, "Actual full-population CPU evolution before measurement, rebased to zero. Warmup steps were discarded before evolution.", source.Generator, source.Name));
+            new ExperimentProvenance(state.Time, state.Step, "Actual full-population CPU evolution before measurement, rebased to zero. Warmup steps were discarded before evolution.",
+                source.Generator, source.Name, ExecutionProvenance.Cpu(simulation.Configuration)));
         P7Inputs.SaveExperimentNew(path, snapshot);
         return new
         {

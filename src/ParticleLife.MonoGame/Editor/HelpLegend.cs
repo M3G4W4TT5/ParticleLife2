@@ -25,6 +25,7 @@ internal sealed class HelpLegend
             ("E", "Show or hide the inspector"), ("S / O", "Open the file library"),
             ("F5", "Reload startup file or open library"), ("D", "Toggle diagnostic sampling"),
             ("H / F1", "Open or close Help"), ("F9", "Print viewer timing measurements"),
+            ("F10", "Reset the native timing window"),
             ("Ctrl+Z / Y", "Undo / redo at the current step"), ("Escape", "Close dialog; exit with world focus")]);
         Add("Inspector", [
             ("Drag label", "Scrub a value; one gesture, one undo"),

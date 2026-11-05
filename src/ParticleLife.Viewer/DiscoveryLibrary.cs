@@ -56,45 +56,51 @@ public static class DiscoveryLibrary
     public static DiscoveryMetadata Capture(ExperimentEditor editor, DiscoveryKind kind, string name, string description = "", string[]? tags = null)
     {
         ArgumentNullException.ThrowIfNull(editor);
-        int population;
-        double width, height;
-        DiscoveryPoint[] points;
-        string label;
-        if (kind == DiscoveryKind.Preset)
+        if (kind == DiscoveryKind.Preset) { return PreviewPreset(editor.CapturePreset(name), description, tags); }
+        var source = kind == DiscoveryKind.Pattern ? editor.CaptureCurrentExperiment(name) : editor.Playback.Experiment;
+        var named = new ParticleLife.Core.Experiments.ExperimentDefinition(name, source.Parameters, source.Matrix, source.InitialState,
+            source.TimeStep, source.Generator, source.Backend, source.WorkerCount, source.Provenance);
+        return PreviewExperiment(named, editor.Appearance, kind, description, tags);
+    }
+
+    internal static DiscoveryMetadata PreviewPreset(PresetDefinition preset, string description, string[]? tags)
+    {
+        int population = preset.Populations.ToArray().Sum(), samples = Math.Min(population, MaximumPreviewPoints);
+        double width = preset.Configuration.Parameters.WorldWidth, height = preset.Configuration.Parameters.WorldHeight;
+        DiscoveryPoint[] points = new DiscoveryPoint[samples];
+        Random random = new(preset.Generation.Seed);
+        int species = 0, end = preset.Populations[0];
+        for (int i = 0; i < samples; i++)
         {
-            PresetDefinition preset = editor.CapturePreset(name);
-            population = preset.Populations.ToArray().Sum();
-            width = preset.Configuration.Parameters.WorldWidth; height = preset.Configuration.Parameters.WorldHeight;
-            int samples = Math.Min(population, MaximumPreviewPoints);
-            points = new DiscoveryPoint[samples];
-            Random random = new(preset.Generation.Seed);
-            int species = 0, end = preset.Populations.Length == 0 ? 0 : preset.Populations[0];
-            for (int i = 0; i < samples; i++)
-            {
-                long sourceIndex = (long)i * population / samples;
-                while (sourceIndex >= end && species < preset.Populations.Length - 1) { end += preset.Populations[++species]; }
-                Vector2d position = ParticleGeneration.Position(random, i, samples, species, preset.Configuration.Matrix.SpeciesCount,
-                    preset.Configuration.Parameters, preset.Generation);
-                points[i] = Point(position, width, height, preset.Appearance.ColorForSpecies(species));
-            }
-            label = "Generated recipe sample; not an evolved pattern";
+            long sourceIndex = (long)i * population / samples;
+            while (sourceIndex >= end && species < preset.Populations.Length - 1) { end += preset.Populations[++species]; }
+            Vector2d position = ParticleGeneration.Position(random, i, samples, species, preset.Configuration.Matrix.SpeciesCount,
+                preset.Configuration.Parameters, preset.Generation);
+            points[i] = Point(position, width, height, preset.Appearance.ColorForSpecies(species));
         }
-        else
+        return Preview(preset.Name, description, tags, DiscoveryKind.Preset, population, width, height, points, "Generated recipe sample; not an evolved pattern");
+    }
+
+    internal static DiscoveryMetadata PreviewExperiment(ParticleLife.Core.Experiments.ExperimentDefinition experiment, AppearanceSettings appearance,
+        DiscoveryKind kind, string description, string[]? tags)
+    {
+        ParticleStateView state = experiment.InitialState.Observe();
+        int samples = Math.Min(state.Count, MaximumPreviewPoints);
+        double width = experiment.Parameters.WorldWidth, height = experiment.Parameters.WorldHeight;
+        DiscoveryPoint[] points = new DiscoveryPoint[samples];
+        for (int i = 0; i < samples; i++)
         {
-            bool initial = kind is DiscoveryKind.Initial or DiscoveryKind.Session;
-            ParticleStateView state = initial ? editor.Playback.Experiment.InitialState.Observe() : editor.Playback.Observe();
-            var parameters = initial ? editor.Playback.Experiment.Parameters : editor.Configuration.Parameters;
-            population = state.Count; width = parameters.WorldWidth; height = parameters.WorldHeight;
-            int samples = Math.Min(population, MaximumPreviewPoints);
-            points = new DiscoveryPoint[samples];
-            for (int i = 0; i < samples; i++)
-            {
-                int source = (int)((long)i * population / samples);
-                points[i] = Point(state.Positions[source], width, height, editor.Appearance.ColorForSpecies(state.Species[source]));
-            }
-            label = kind == DiscoveryKind.Session ? "Session INITIAL state; terminal pattern may differ"
-                : initial ? "Original reset baseline" : $"Captured completed state, step {state.Step}";
+            int source = (int)((long)i * state.Count / samples);
+            points[i] = Point(state.Positions[source], width, height, appearance.ColorForSpecies(state.Species[source]));
         }
+        string label = kind == DiscoveryKind.Session ? "Session INITIAL state; terminal pattern may differ"
+            : kind == DiscoveryKind.Initial ? "Original reset baseline" : $"Captured completed state, step {experiment.Provenance?.SourceStep ?? state.Step}";
+        return Preview(experiment.Name, description, tags, kind, state.Count, width, height, points, label);
+    }
+
+    private static DiscoveryMetadata Preview(string name, string description, string[]? tags, DiscoveryKind kind, int population,
+        double width, double height, DiscoveryPoint[] points, string label)
+    {
         double aspect = width / height;
         if (!double.IsFinite(aspect) || aspect <= 0) { aspect = 1; label += "; aspect outside preview range"; }
         DiscoveryMetadata metadata = new(1, name, description, tags ?? [], false, kind, DateTimeOffset.UtcNow, null,
@@ -106,21 +112,39 @@ public static class DiscoveryLibrary
     /// <summary>Refreshes a bounded local index; search spans name, description, tags and filename.</summary>
     /// <param name="directory">Existing or new local library folder.</param><param name="query">Optional case-insensitive search.</param>
     /// <param name="favouritesOnly">Restricts to favourites.</param><param name="recentFirst">Orders successful load timestamps before creation time.</param>
+    /// <param name="cancellationToken">Cancels between files; one in-progress operating-system read may finish first.</param>
     /// <returns>At most <see cref="MaximumEntries"/> entries, with previews already loaded.</returns>
-    public static IReadOnlyList<DiscoveryEntry> Read(string directory, string query = "", bool favouritesOnly = false, bool recentFirst = true)
+    public static IReadOnlyList<DiscoveryEntry> Read(string directory, string query = "", bool favouritesOnly = false, bool recentFirst = true,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(directory);
-        List<DiscoveryEntry> entries = [];
+        IComparer<DiscoveryEntry> bestFirst = Comparer<DiscoveryEntry>.Create((left, right) =>
+        {
+            int order = recentFirst ? (right.Metadata.LastOpenedAtUtc ?? right.Metadata.CreatedAtUtc).CompareTo(left.Metadata.LastOpenedAtUtc ?? left.Metadata.CreatedAtUtc)
+                : StringComparer.OrdinalIgnoreCase.Compare(left.Metadata.Name, right.Metadata.Name);
+            return order == 0 ? StringComparer.Ordinal.Compare(left.Path, right.Path) : order;
+        });
+        // Worst retained entry is the heap root; a complete search retains only the best 300
+        // previews instead of collecting every matching thumbnail before truncation.
+        PriorityQueue<DiscoveryEntry, DiscoveryEntry> entries = new(Comparer<DiscoveryEntry>.Create((left, right) => bestFirst.Compare(right, left)));
         foreach (string path in Directory.EnumerateFiles(directory, "*.json").Where(path => !path.EndsWith(".viewer.json", StringComparison.OrdinalIgnoreCase)
             && !path.EndsWith(MetadataSuffix, StringComparison.OrdinalIgnoreCase)))
         {
-            DiscoveryEntry? entry = Inspect(path);
+            cancellationToken.ThrowIfCancellationRequested();
+            DiscoveryEntry? entry;
+            try { entry = Inspect(path); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { continue; }
             if (entry is null || favouritesOnly && !entry.Metadata.Favourite) { continue; }
             string text = entry.Metadata.Name + " " + entry.Metadata.Description + " " + string.Join(' ', entry.Metadata.Tags) + " " + System.IO.Path.GetFileName(path);
-            if (text.Contains(query, StringComparison.OrdinalIgnoreCase)) { entries.Add(entry); }
+            if (text.Contains(query, StringComparison.OrdinalIgnoreCase))
+            {
+                entries.Enqueue(entry, entry);
+                if (entries.Count > MaximumEntries) { _ = entries.Dequeue(); }
+            }
         }
-        return (recentFirst ? entries.OrderByDescending(entry => entry.Metadata.LastOpenedAtUtc ?? entry.Metadata.CreatedAtUtc)
-            : entries.OrderBy(entry => entry.Metadata.Name, StringComparer.OrdinalIgnoreCase)).Take(MaximumEntries).ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
+        return entries.UnorderedItems.Select(item => item.Element).Order(bestFirst).ToArray();
     }
 
     /// <summary>Reads one metadata sidecar or a bounded header classification, without loading a particle array.</summary>
@@ -141,7 +165,7 @@ public static class DiscoveryLibrary
                 Validate(metadata);
                 if (metadata.FileBytes != file.Length || metadata.FileModifiedUtcTicks != file.LastWriteTimeUtc.Ticks)
                 {
-                    metadata = metadata with { Points = [], PreviewLabel = "Preview stale: scientific file changed" };
+                    metadata = metadata with { Points = [], Population = 0, PreviewLabel = "Preview stale: scientific file changed" };
                     notice = "Refresh the preview by saving a new discovery.";
                 }
                 return new(path, metadata, notice);
@@ -186,13 +210,30 @@ public static class DiscoveryLibrary
 
     /// <summary>Atomically creates or updates local metadata after validating the complete description.</summary>
     /// <param name="path">Existing scientific file; it is never changed.</param><param name="metadata">Desired display values and bounded preview.</param>
-    public static void Write(string path, DiscoveryMetadata metadata)
+    public static void Write(string path, DiscoveryMetadata metadata) => _ = WriteBound(path, metadata);
+
+    private static DiscoveryMetadata WriteBound(string path, DiscoveryMetadata metadata)
     {
         Validate(metadata);
         FileInfo file = new(path);
         if (!file.Exists) { throw new FileNotFoundException("Save the scientific file before library metadata.", path); }
+        if (metadata.FileBytes > 0 && (metadata.FileBytes != file.Length || metadata.FileModifiedUtcTicks != file.LastWriteTimeUtc.Ticks))
+        { metadata = metadata with { Points = [], Population = 0, PreviewLabel = "Preview stale: scientific file changed" }; }
         DiscoveryMetadata bound = metadata with { FileBytes = file.Length, FileModifiedUtcTicks = file.LastWriteTimeUtc.Ticks };
         DiscoveryLibraryStorage.Publish(path + MetadataSuffix, stream => JsonSerializer.Serialize(stream, bound, EditorJson.Options), replace: true);
+        return bound;
+    }
+
+    /// <summary>Records optional library metadata after a scientific artifact has already been saved.</summary>
+    /// <param name="path">Successfully published scientific file.</param><param name="metadata">Desired local description.</param>
+    /// <returns>A successful save outcome even if optional metadata cannot be written.</returns>
+    public static DiscoveryFileOutcome RecordSaved(string path, DiscoveryMetadata metadata)
+    {
+        string? warning = null;
+        try { metadata = WriteBound(path, metadata); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or JsonException or NotSupportedException)
+        { warning = "Library metadata was not saved: " + error.Message; }
+        return new(Path.GetFullPath(path), metadata.Kind, warning, new DiscoveryEntry(Path.GetFullPath(path), metadata, warning));
     }
 
     /// <summary>Validates local metadata and bounded previews before persistence or import.</summary>

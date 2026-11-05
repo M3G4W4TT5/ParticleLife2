@@ -46,6 +46,8 @@ Give each case an exact setup and repeatable actions before execution. Use Pendi
 
 ## Findings and follow-up checks
 
+For V02/V14 native measurements, settle the selected CPU/GPU scene at the recorded window size, press F10, interact for at least ten seconds, then press F9. Retain the printed p50/p95/counts for frame intervals, drawing, Present CPU wait and observed-input update-to-present latency. Record idle and dragging windows separately. This input metric is an application proxy that excludes OS delivery/display scanout and later numerical command application; do not call it a measured physical input-to-photon latency or infer the 50 ms target from solver timings. Compare Economy and Luminous display settings without changing the saved population, rules or precision.
+
 ### P7 guidance, accessibility and packaged preview (pending)
 
 These cases remain **Pending** until the consolidated native review, repeated on CPU and the available GPU backend after integration.
@@ -65,6 +67,17 @@ Repeat these cases on CPU and GPU after integration, with a two-species asymmetr
 - V16: compare opacity 0/0.4/1, both blends and all four velocity shading modes. Enable trails, pause for ten seconds, then resume; the pause must not erase trails through elapsed wall time. Pan/zoom/recolour to clear stale trails, vary glow strength/spread and disable both effects. Numerical timestep and count must remain unchanged.
 - V17: pick a moving region, follow it across a periodic seam, pan/zoom away, recenter, stop, and select an empty or too-small region. The indicator and lost-contact message must agree with the sampled bins; the camera never changes particle values.
 - V21: save PNG and a four-second 720px/10fps GIF, resize during recording, and finish a second recording early. Inspect both files with an independent image viewer/decoder for orientation, colour, framing, animation duration and letterboxing. Compare displayed skipped-frame/readback-cost counters. Close during a recording and confirm either a complete published GIF or a clear failure, with no partial file presented as successful. Reject an over-budget quality request without starting it.
+
+### P4 concrete pending cases
+
+All cases remain **Pending** until the consolidated review, on CPU and GPU after integration.
+
+Automated CPU model/editor/replay checks and the matched range-traversal screen are complete; [P4 performance evidence](performance-p4-ranges.md) records the retained coarse path and rejected quarter-cell alternative. These results do not mark any native case below passed.
+
+- V10: load the two-species fixture paused; select Open, move a group outside, then switch Reflecting and Periodic. Inspect edge/corner position and velocity mapping, undo after several steps and replay. Resize a periodic/reflecting world and repeat with density-preserving population shrink/growth; verify unsupported cutoff/shrink combinations retain configuration, count, identities and clock atomically.
+- V11: enable pair radii, choose asymmetric directions with different core/cutoff values and a zero core. Compare cyan/yellow physical-distance curves and both radius bars. Apply coupled drafts to a rectangle, two receiver rows and linked reverse pairs. Randomize Rules, Radii and Both independently; verify exact values, other components, undo and saved replay. Keep oversized global defaults in pair mode, then attempt global mode/species growth and inspect the rejection explanation.
+- V08–V09/P4: use move/add/attract/repel tools at periodic edges and corners. Footprint copies must agree with the single minimum-image edit; identities must not be edited twice. Reflect an added/moved group, undo after stepping, and confirm pre-map affected motion and unrelated current motion. Verify generation and explicit tool edits map actual payloads while loading a capture retains its stored values.
+- V14/P4: load the generated uniform/clustered heterogeneous and sparse mild-range fixtures from the P4 comparison, with CPU grid workers 1 and 4. Change a short receiver row, undo and switch to equal/global/periodic controls while playing. Record candidate counts, graphics FPS, steps/s and achieved speed separately; verify no count/radius reduction and responsive queued editing. Headless five-sample timings are not a native presentation or tail-latency pass.
 
 ### P3 concrete pending cases
 

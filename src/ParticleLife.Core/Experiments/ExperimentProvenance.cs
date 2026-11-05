@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ParticleLife.Core.Execution;
 
 namespace ParticleLife.Core.Experiments;
 
@@ -11,9 +12,10 @@ public sealed record ExperimentProvenance
     /// <param name="operation">Nonempty description of the capture or transformation.</param>
     /// <param name="sourceGenerator">Optional original generation provenance, distinct from the capture operation.</param>
     /// <param name="sourceName">Optional nonempty name of the source experiment.</param>
+    /// <param name="sourceExecution">Actual source hardware, precision and implementation when a completed state was captured.</param>
     /// <exception cref="ArgumentException">The source clock or operation is invalid.</exception>
     public ExperimentProvenance(double sourceTime, long sourceStep, string operation,
-        GeneratorMetadata? sourceGenerator = null, string? sourceName = null)
+        GeneratorMetadata? sourceGenerator = null, string? sourceName = null, ExecutionProvenance? sourceExecution = null)
     {
         if (!double.IsFinite(sourceTime) || sourceTime < 0)
         {
@@ -39,6 +41,7 @@ public sealed record ExperimentProvenance
         Operation = operation;
         SourceGenerator = sourceGenerator;
         SourceName = sourceName;
+        SourceExecution = sourceExecution;
     }
 
     /// <summary>Gets the actual source time in reduced units before rebasing.</summary>
@@ -57,4 +60,10 @@ public sealed record ExperimentProvenance
     /// <summary>Gets the name of the source experiment, when retained.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SourceName { get; }
+
+    /// <summary>Gets actual source execution provenance, independently of the CPU settings for future continuation.</summary>
+    /// <remarks>Absent in older files. This describes the source capture; it never promises an identical
+    /// trajectory after loading it on another backend or changing arithmetic precision.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExecutionProvenance? SourceExecution { get; }
 }

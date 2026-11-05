@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Numerics;
+using ParticleLife.Core.Execution;
 
 namespace ParticleLife.Viewer;
 
@@ -52,7 +53,8 @@ public sealed partial class ExperimentEditor
     /// <param name="path">New scientific-session path; presentation is stored in a separate bound companion.</param>
     /// <param name="name">Nonempty session label applied to the stored initial experiment.</param>
     public void SaveSession(string path, string name) =>
-        SaveScientific(path, SessionFile.Serialize(CaptureSession(name)), CaptureViewerSettings(populations));
+        SaveScientific(path, HasCapturedExecution ? ExecutionCaptureFile.Serialize(CaptureRecordedSession(name))
+            : SessionFile.Serialize(CaptureSession(name)), CaptureViewerSettings(populations));
 
     /// <summary>Creates an editor from a complete experiment and its optional validated viewer companion.</summary>
     /// <param name="path">Existing legacy/current experiment file.</param>
@@ -212,20 +214,7 @@ public sealed partial class ExperimentEditor
             ClearTimeline();
             events.AddRange(session.Events);
             recordedBytes = session.Events.Sum(EstimateActionBytes);
-            AdvanceIdentityHighWater(session.InitialExperiment.InitialState.Ids);
-            foreach (SessionEvent change in session.Events)
-            {
-                if (change.ReplacementState is not null)
-                {
-                    AdvanceIdentityHighWater(change.ReplacementState.Ids);
-                }
-                if (change.StateDelta is not null)
-                {
-                    AdvanceIdentityHighWater(change.StateDelta.Updates.Ids);
-                    AdvanceIdentityHighWater(change.StateDelta.Additions.Ids);
-                    AdvanceIdentityHighWater(change.StateDelta.RemovedIds);
-                }
-            }
+            AdvanceRecordedIdentities(session);
 
             if (pendingReplaySettings is ViewerSettings settings)
             {

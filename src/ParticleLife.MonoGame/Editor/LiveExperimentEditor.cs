@@ -2,9 +2,11 @@ using System.Globalization;
 using System.Security.Cryptography;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
+using ParticleLife.Core.Execution;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Models;
 using ParticleLife.Core.Numerics;
+using ParticleLife.Core.State;
 using ParticleLife.Viewer;
 
 namespace ParticleLife.MonoGame.Editor;
@@ -12,12 +14,13 @@ namespace ParticleLife.MonoGame.Editor;
 /// <summary>Connects retained native controls to the shared, graphics-free experiment editor.</summary>
 /// <remarks>Owns only UI drafts and selection. The controller validates and owns numerical changes,
 /// undo payloads and replay events. Draw never edits a model or retains a state observation.</remarks>
-internal sealed class LiveExperimentEditor
+internal sealed class LiveExperimentEditor : IDisposable
 {
     private readonly EditorSession editor;
     private readonly UiPanel panel;
     private readonly Action<string> report;
     private readonly Action printTimings;
+    private Func<SimulationConfiguration, ParticleSnapshot, IResidentSimulation>? residentFactory;
     private readonly InteractionMatrixWidget matrix;
     private readonly ExperimentFileBrowser browser;
     private readonly ExplorationControls exploration;
@@ -34,7 +37,6 @@ internal sealed class LiveExperimentEditor
     private double height;
     private double wallWidth;
     private double rememberedDamping = 0.025;
-    private double rememberedWall = 1.44;
     private int rememberedCadence = 144;
     private string populationSummary = string.Empty;
     private PresetKind selectedRecipe = PresetKind.CoreHalo;
@@ -65,6 +67,9 @@ internal sealed class LiveExperimentEditor
     internal BrushSettings Brush => exploration.Brush;
     internal VisualToolsControls VisualTools { get; }
     internal void FitCamera() => exploration.Fit();
+
+    /// <summary>Installs optional native creation only after the graphics context exists.</summary>
+    internal void ConfigureResidentFactory(Func<SimulationConfiguration, ParticleSnapshot, IResidentSimulation> factory) => residentFactory = factory;
 
     internal LiveExperimentEditor(ExperimentEditor editor, string saveDirectory, Action<string> report, Action printTimings)
         : this(new EditorSession(editor), saveDirectory, report, printTimings)
@@ -107,15 +112,26 @@ internal sealed class LiveExperimentEditor
         BuildSimulation();
         BuildAppearance();
         VisualTools = new VisualToolsControls(editor, appearance, discoveries);
-        world.Children.AddRange(population.Children.Take(4));
-        population.Children.RemoveRange(0, 4);
+        world.Children.AddRange(population.Children.Take(5));
+        population.Children.RemoveRange(0, 5);
+        world.Children.Insert(0, new UiDropdown("World boundary", ["Soft walls", "Open", "Reflecting", "Periodic"],
+            () => (int)Parameters.Boundary, index => ParametersChange(Parameters with { Boundary = (BoundaryKind)index }),
+            "Soft walls extend outside; Open has no wall force. Reflecting folds positions and reflects velocity. Periodic wraps and uses minimum-image forces, with every cutoff <= half the shorter extent."));
+        world.Children.Insert(1, new UiLabel(() => Parameters.Boundary switch
+        {
+            BoundaryKind.Periodic => $"Periodic live changes wrap actual positions; velocity and clock stay. Maximum cutoff {editor.Configuration.Matrix.MaximumCutoff(Parameters):G6} must be <= {Math.Min(Parameters.WorldWidth, Parameters.WorldHeight) / 2:G6}. Undo restores recorded pre-map values.",
+            BoundaryKind.Reflecting => "Reflecting live changes fold actual positions and reflect crossed normal velocities. Undo restores recorded pre-map motion; the clock stays.",
+            BoundaryKind.Open => "Open has no wall force. Resizing retains absolute positions, velocities and clock, including off-world particles.",
+            _ => "Soft walls extend the linear inward layer outside the rectangle. Resizing retains absolute positions, velocities and clock."
+        }, 90));
+        interactions.Children.Insert(interactions.Children.Count - 1, new DirectedRangeControls(editor, matrix, () => symmetry, report).Section);
         exploration.AddMatrixTools(interactions);
         exploration.AddPopulationTools(population, species => populationIndex = Math.Min(species, populationSpecies - 1), SelectColour);
         exploration.AddIndependentGeneration(generation);
         exploration.AddPaletteTools(appearance);
-        UiSection advanced = new("Advanced CPU and measurements", false);
-        advanced.Children.AddRange(simulation.Children.Skip(2));
-        simulation.Children.RemoveRange(2, simulation.Children.Count - 2);
+        UiSection advanced = new("CPU search and measurements", false);
+        advanced.Children.AddRange(simulation.Children.Skip(7));
+        simulation.Children.RemoveRange(7, simulation.Children.Count - 7);
         simulation.Children.Add(advanced);
         discoveries.Children.Add(new UiLabel(() => "Preset: future recipe. From here: exact state. Initial: reset baseline. Session: every applied edit.", 50));
         discoveries.Children.Add(Button(() => "Browse saved discoveries", OpenFiles, "Open named save/load workflows. Existing destinations are never overwritten."));
@@ -229,8 +245,8 @@ internal sealed class LiveExperimentEditor
     private void BuildInteractions()
     {
         interactions.Children.Add(matrix);
-        interactions.Children.Add(new UiLabel(() => $"Selected {matrix.Receiver} <- {matrix.Source}   A={editor.Configuration.Matrix[matrix.Receiver, matrix.Source]:G17}", 25, UiCanvas.Accent));
-        interactions.Children.Add(Number("Coefficient A", () => editor.Configuration.Matrix[matrix.Receiver, matrix.Source],
+        interactions.Children.Add(new UiLabel(() => $"Selected {matrix.Receiver} <- {matrix.Source}   A={SelectedCoefficient():G17}", 25, UiCanvas.Accent));
+        interactions.Children.Add(Number("Coefficient A", SelectedCoefficient,
             value => editor.SetMatrixCoefficient(matrix.Receiver, matrix.Source, value, symmetry), 0, -1, 1,
             "A[receiver,source] is dimensionless, in [-1,1]. Positive outer values attract; negative repel. Core repulsion is independent of A."));
         interactions.Children.Add(new UiToggle("Link reverse direction", () => symmetry, value => symmetry = value,
@@ -260,11 +276,13 @@ internal sealed class LiveExperimentEditor
 
     private void BuildForces()
     {
-        forces.Children.Add(Number("Cutoff R [L]", () => Parameters.Cutoff, value => ParametersChange(Parameters with { Cutoff = value }),
+        forces.Children.Add(new UiLabel(() => editor.Configuration.Matrix.Ranges is null ? "Global radii active: core = beta * R for every pair."
+            : "Directed radii active. Global R/beta below stay as defaults; use directed controls under Interactions.", 48));
+        forces.Children.Add(Number("Global cutoff R [L]", () => Parameters.Cutoff, value => ParametersChange(Parameters with { Cutoff = value }),
             0.1, 0.005, 1, "Finite positive reduced length; R squared must be finite and positive. Slider is logarithmic; typed valid values are unrestricted.", log: true));
         forces.Children.Add(Number("Force F0 [F]", () => Parameters.ForceScale, value => ParametersChange(Parameters with { ForceScale = value }),
             1, 0, 10, "Finite nonnegative pair-force scale in reduced force units. Zero disables pair forces. Unit particle mass is assumed."));
-        forces.Children.Add(Number("Core beta [1]", () => Parameters.RepulsionFraction, value => ParametersChange(Parameters with { RepulsionFraction = value }),
+        forces.Children.Add(Number("Global core beta [1]", () => Parameters.RepulsionFraction, value => ParametersChange(Parameters with { RepulsionFraction = value }),
             0.3, 0.01, 0.99, "Dimensionless core fraction, strictly 0 < beta < 1. The core ends at distance beta*R."));
         forces.Children.Add(new UiToggle("Damping enabled", () => Parameters.DampingHalfLife is not null, value =>
         {
@@ -279,23 +297,15 @@ internal sealed class LiveExperimentEditor
             ParametersChange(Parameters with { DampingHalfLife = value });
             rememberedDamping = value;
         }, 0.025, 0.001, 10, "Finite positive reduced time. Entering a half-life enables damping. Velocity factor per step is 2^(-dt/halfLife).", log: true));
-        forces.Children.Add(new UiToggle("Soft walls", () => Parameters.WallStrength > 0, value =>
-        {
-            if (Parameters.WallStrength > 0)
-            {
-                rememberedWall = Parameters.WallStrength;
-            }
-            ParametersChange(Parameters with { WallStrength = value ? rememberedWall : 0 });
-        }, "Off sets wall strength to zero. No reflecting or periodic boundary is introduced; finite off-world particles remain valid."));
         forces.Children.Add(Number("Wall width [L]", () => Parameters.WallWidth, value => ParametersChange(Parameters with { WallWidth = value }),
             0.05, 0.001, 0.5, "Positive layer width, at most half the smaller world dimension. Coupled world-size/width changes can be applied together under World.", log: true));
         forces.Children.Add(Number("Wall strength [F]", () => Parameters.WallStrength, value => ParametersChange(Parameters with { WallStrength = value }),
-            1.44, 0, 10, "Finite nonnegative reduced force. The linear soft wall extends outside the nominal rectangle. Zero disables this force."));
+            1.44, 0, 10, "Saved nonnegative strength, active only for Soft walls. Open, Reflecting and Periodic ignore this force."));
     }
 
     private void BuildPopulation()
     {
-        population.Children.Add(new UiLabel(() => "World draft: apply together. Positions and velocities stay.", 32));
+        population.Children.Add(new UiLabel(() => "World draft: apply together. Periodic/reflecting worlds map motion; soft/open retain it. The clock stays.", 48));
         population.Children.Add(Number("World width [L]", () => width, value => { width = value; worldDraft = true; }, 1, 0.1, 10,
             "Draft finite positive width. Apply world validates width, height and wall layer together; particles are not rescaled.", log: true, gesture: false));
         population.Children.Add(Number("World height [L]", () => height, value => { height = value; worldDraft = true; }, 1, 0.1, 10,
@@ -315,7 +325,7 @@ internal sealed class LiveExperimentEditor
                     WorldHeight = requestedHeight,
                     WallWidth = requestedWallWidth
                 }, current.Matrix, current.TimeStep, current.Backend, current.WorkerCount), "Edit world");
-            }, "World rectangle changed; absolute positions, velocities and clock retained.", () =>
+            }, "World applied. Periodic/reflecting motion is mapped; soft/open motion retained. Clock unchanged.", () =>
             {
                 if (width == requestedWidth && height == requestedHeight && wallWidth == requestedWallWidth) { worldDraft = false; }
             });
@@ -331,7 +341,7 @@ internal sealed class LiveExperimentEditor
             500, 0, 1_000_000, "Exact total entry and a slider up to one million. Changing this draft distributes the target total evenly. No particle changes until Apply live.", integer: true, gesture: false));
         population.Children.Add(new UiToggle("Preserve density: resize world", () => preserveDensity,
             value => preserveDensity = value,
-            "Apply population also scales both world extents by sqrt(new/old count), retaining nominal count per area. Survivors keep absolute positions and motion; additions use the new world. Both totals must be nonzero. Wall layer clamps to half the shorter extent if needed; cutoff stays fixed."));
+            "Scales extents by sqrt(new/old count). Periodic/reflecting survivor motion maps into the new world, with actual pre-map undo. Soft/open retain absolute motion. Unsupported smaller periodic worlds reject atomically; cutoffs stay fixed."));
         population.Children.Add(Number("Species count", () => populationSpecies, value => Distribute(populations.Sum(), Integer(value)),
             7, 1, 32, "Changing this draft redistributes targets evenly. Apply live retains unaffected matrix entries; new entries are zero. Removed species remap modulo the new count.", integer: true, gesture: false));
         population.Children.Add(new UiLabel(() => populationSummary, 50, UiCanvas.Accent));
@@ -360,7 +370,7 @@ internal sealed class LiveExperimentEditor
             int[] requested = (int[])populations.Clone();
             bool requestedPreserveDensity = preserveDensity;
             ReportCommand("Apply population", owner => owner.ApplyPopulation(speciesCount, requested, requestedPreserveDensity),
-                requestedPreserveDensity ? "Population and world resized to preserve nominal density; surviving motion retained."
+                requestedPreserveDensity ? "Population/world resized to preserve nominal density; boundary mapping recorded for undo."
                     : "Population applied: surviving identities/state retained; actual additions recorded in the session.", () =>
                 {
                     if (populationSpecies == speciesCount && populations.AsSpan().SequenceEqual(requested)) { populationDraft = false; }
@@ -422,11 +432,30 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(Number("Playback speed [x]", () => editor.Playback.PlaybackSpeed,
             value => { editor.SetPlayback(editor.Playback.Settings with { Speed = value }); SuppressPlayback = true; }, 1, 0.05, 8,
             "Wall-clock speed only; does not alter dt or equations. Changing speed clears pending playback time.", log: true));
-        simulation.Children.Add(new UiLabel(() => $"Execution: CPU. {Environment.ProcessorCount} logical processors. Worker count is saved explicitly.", 44, UiCanvas.Accent));
-        simulation.Children.Add(new UiDropdown("Neighbour search", ["Direct reference", "Uniform grid"],
+        simulation.Children.Add(new UiLabel(() => $"Execution: {editor.Publication.Execution.Hardware} / {editor.Publication.Execution.Precision}. "
+            + (editor.Publication.Execution.Device ?? $"{Environment.ProcessorCount} logical CPU processors."), 64, UiCanvas.Accent));
+        simulation.Children.Add(new UiRow(
+            new UiButton(() => "CPU double", () => editor.SwitchToCpu(),
+                "Pause, explicitly capture actual GPU values, then continue on CPU. Float values widen exactly; future trajectories may differ.",
+                () => editor.Resident is not null && !editor.IsSwitchingExecution && !editor.Publication.DeviceFaulted),
+            new UiButton(() => "GPU float", () =>
+            {
+                editor.SwitchToGpu(residentFactory!, allowPrecisionConversion: true);
+                report("Switching at a completed boundary. GPU float32 rounds particle values; captures preserve actual values, while action replay may diverge.");
+            }, "Explicitly convert state to float32 and use native GPU execution. Failed creation retains the paused CPU editor and history.",
+                () => residentFactory is not null && editor.Resident is null && !editor.IsSwitchingExecution)));
+        simulation.Children.Add(new UiButton(() => "Recover CPU from latest capture", () => editor.SwitchToCpu(recoverLatestCapture: true),
+            "Discard uncaptured continuation and restore the latest owned checkpoint on CPU. This is an explicit rollback after device failure.",
+            () => editor.Publication.DeviceFaulted && editor.Publication.CaptureRecording?.LatestStep is not null && !editor.IsSwitchingExecution));
+        simulation.Children.Add(Number("GPU capture cadence", () => editor.Publication.CaptureRecording?.EverySteps ?? 600,
+            value => editor.Run("Capture cadence", owner => owner.SetCaptureCadence(Integer(value)), requiresCapture: false), 600, 0, 3600,
+            "Explicit periodic full-state capture cadence in completed steps; zero disables periodic copies. Saving a GPU session always captures its terminal state.", integer: true));
+        simulation.Children.Add(new UiLabel(() => editor.Publication.CaptureRecording is { } status
+            ? $"Capture: step {status.LatestStep?.ToString() ?? "none"}; {status.Count} retained, {status.StorageBytes / 1048576.0:F1} MiB. Full GPU reads {editor.Publication.FullStateReadbacks}. {status.Notice}" : "No captured state yet.", 68));
+        simulation.Children.Add(new UiDropdown("CPU neighbour search", ["Direct reference", "Uniform grid"],
             () => editor.Configuration.Backend == ForceBackend.Direct ? 0 : 1,
             index => ConfigurationChange(backend: index == 0 ? ForceBackend.Direct : ForceBackend.UniformGrid, workers: 1),
-            "A backend switch selects one worker. Choose grid workers separately. Rules and completed state are retained."));
+            "Selects CPU search and one CPU worker. GPU execution uses its resident grid; this CPU choice is retained for a later CPU transfer. Rules and completed state are unchanged."));
         simulation.Children.Add(Number("Workers", () => editor.Configuration.WorkerCount,
             value => ConfigurationChange(workers: Integer(value)), 1, 1, ForceWorkerConfiguration.MaximumWorkers,
             "Explicit CPU workers including caller, 1..64. Direct requires exactly one. More workers can increase overhead; compare your scene. The resolved count is saved and shown below.", integer: true));
@@ -444,10 +473,12 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(Number("Connectivity R [L]", () => editor.Playback.DiagnosticRadius ?? Parameters.Cutoff,
             value => editor.SetPlayback(editor.Playback.Settings with { DiagnosticRadius = value }), 0.1, 0.001, 2,
             "Finite positive diagnostic connection length. Entering a value selects an independent radius and clears previous samples.", log: true));
-        simulation.Children.Add(new UiLabel(() => $"Requested {editor.Configuration.Backend}/{editor.Configuration.WorkerCount}; applied {editor.Publication.Configuration.Backend}/{editor.Publication.Configuration.WorkerCount}; actual {editor.Playback.LastExecution?.ActualBackend.ToString() ?? "UNSTEPPED"}/{editor.Playback.LastExecution?.ActualWorkerCount.ToString() ?? "-"}. Fallback {editor.Playback.LastExecution?.FallbackReason.ToString() ?? "NONE"}.", 78));
+        simulation.Children.Add(new UiLabel(() => editor.Resident is not null
+            ? $"GPU resident grid / float32. Saved CPU choice: {editor.Configuration.Backend}/{editor.Configuration.WorkerCount}. GPU summaries report speed; CPU connectivity analysis is inactive."
+            : $"CPU requested {editor.Configuration.Backend}/{editor.Configuration.WorkerCount}; applied {editor.Publication.Configuration.Backend}/{editor.Publication.Configuration.WorkerCount}; actual {editor.Playback.LastExecution?.ActualBackend.ToString() ?? "UNSTEPPED"}/{editor.Playback.LastExecution?.ActualWorkerCount.ToString() ?? "-"}. Fallback {editor.Playback.LastExecution?.FallbackReason.ToString() ?? "NONE"}.", 78));
         simulation.Children.Add(new UiLabel(() => editor.HasPendingCommands
             ? $"Queued: {editor.PendingCommands} commands. Apply after the current completed boundary."
-            : editor.IsBusy ? "CPU step in progress; controls remain available." : "Completed boundary ready.", 42, UiCanvas.Accent));
+            : editor.IsBusy ? "Simulation work in progress; controls remain available." : "Completed boundary ready.", 42, UiCanvas.Accent));
         simulation.Children.Add(Button(() => "Print viewer timings", printTimings,
             "Print the latest approximately one-second FPS, controller update, editor input/update and render submission timings to the launch console. Present is excluded."));
     }
@@ -512,6 +543,12 @@ internal sealed class LiveExperimentEditor
     }
 
     private ModelParameters Parameters => editor.Configuration.Parameters;
+
+    private double SelectedCoefficient()
+    {
+        InteractionMatrix current = editor.Configuration.Matrix;
+        return current[Math.Min(matrix.Receiver, current.SpeciesCount - 1), Math.Min(matrix.Source, current.SpeciesCount - 1)];
+    }
 
     private int RecipeTotal()
     {
@@ -617,6 +654,7 @@ internal sealed class LiveExperimentEditor
         IReadOnlyList<UiInputEvent> input, bool pointerControl = false, bool pointerShift = false)
     {
         editor.Pump();
+        browser.Pump();
         if (editor.IsBackground)
         {
             bool replaying = editor.IsReplaying;
@@ -696,6 +734,9 @@ internal sealed class LiveExperimentEditor
         panel.ClearFocus();
         editor.EndGesture();
     }
+
+    /// <summary>Finishes dispatched file writes and cancels library scanning before graphics/owner shutdown.</summary>
+    public void Dispose() => browser.Dispose();
 
     internal void OpenFiles()
     {

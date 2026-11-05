@@ -199,7 +199,7 @@ internal sealed unsafe class GlPointRenderer : IDisposable
 
     private void ReleaseResources()
     {
-        gl.EnsureOwner();
+        if (!gl.CanUseOwner) { return; }
         if (vertexArray != 0)
         {
             gl.DeleteVertexArrays(1, ref vertexArray);

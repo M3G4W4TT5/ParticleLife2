@@ -1,16 +1,19 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using ParticleLife.Core.Execution;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 
 internal static partial class CommandLine
 {
-    /// <summary>Runs the shared boundary replay engine, then optionally continues from its terminal state.</summary>
+    /// <summary>Restores an explicitly selected actual capture or runs shared action replay, then optionally continues on CPU.</summary>
     /// <remarks>Reports retain the original bytes' digest, complete session, explicit overrides and
-    /// actual execution segments. Sampling observes a boundary after all events at that boundary;
-    /// its radius is fixed for this invocation, independent of subsequent force-cutoff edits.</remarks>
+    /// actual execution segments. Capture restoration preserves the exact recorded clock without
+    /// applying actions; action re-simulation uses the shared runner, including identity deltas and
+    /// terminal edits. Sampling observes the selected completed boundary; its radius is fixed for
+    /// this invocation, independent of subsequent force-cutoff edits. No GPU adapter is loaded.</remarks>
     private static void ReplaySession(string path, Dictionary<string, string> options)
     {
         int continueSteps = Integer(options, "continue-steps", 0);
@@ -19,11 +22,35 @@ internal static partial class CommandLine
         ArgumentOutOfRangeException.ThrowIfNegative(sampleEvery);
         byte[] inputBytes = File.ReadAllBytes(path);
         string inputText = ReadExperimentText(inputBytes);
-        SessionDefinition session = SessionFile.Deserialize(inputText);
+        bool restoreCapture = options.ContainsKey("restore-capture");
+        bool resimulateOnCpu = options.ContainsKey("resimulate-on-cpu");
+        CapturedSessionDefinition? captured = null;
+        SessionDefinition session;
+        if (IsCapturedSessionText(inputText))
+        {
+            if (restoreCapture == resimulateOnCpu)
+            {
+                throw new ArgumentException("Captured sessions require exactly one explicit mode: --restore-capture or --resimulate-on-cpu. Restoring saved values and repeating actions are different operations.");
+            }
+
+            captured = ExecutionCaptureFile.Deserialize(inputText);
+            session = captured.Actions;
+        }
+        else
+        {
+            if (restoreCapture || resimulateOnCpu)
+            {
+                throw new ArgumentException("--restore-capture and --resimulate-on-cpu require a particle-life-captured-session file. Ordinary action sessions use replay without a capture mode.");
+            }
+
+            session = SessionFile.Deserialize(inputText);
+        }
+
         ForceBackend? backendOverride = options.TryGetValue("backend", out string? backendText) ? ParseBackend(backendText) : null;
         int? workerOverride = options.ContainsKey("workers") ? Integer(options, "workers", 1) : null;
         ReplayOverrides overrides = new(backendOverride, workerOverride);
-        double clusterDistance = Number(options, "cluster-distance", session.InitialExperiment.Parameters.Cutoff);
+        double clusterDistance = Number(options, "cluster-distance", restoreCapture
+            ? captured!.TerminalCapture.Configuration.Parameters.Cutoff : session.InitialExperiment.Parameters.Cutoff);
         if (!double.IsFinite(clusterDistance) || clusterDistance <= 0)
         {
             throw new ArgumentException("Cluster distance must be finite and positive.");
@@ -34,8 +61,9 @@ internal static partial class CommandLine
             PrepareOutput(output);
         }
 
-        using SessionReplayRunner replay = new(session, overrides);
-        Simulation simulation = replay.Simulation;
+        using SessionReplayRunner? replay = restoreCapture ? null : new(session, overrides);
+        using Simulation? restored = restoreCapture ? RestoreOnCpu(captured!.TerminalCapture, overrides) : null;
+        Simulation simulation = restored ?? replay!.Simulation;
         DiagnosticSampler diagnostics = new();
         List<DiagnosticSample> samples = [];
         List<object> diagnosticFailures = [];
@@ -48,7 +76,7 @@ internal static partial class CommandLine
         }
 
         Stopwatch elapsed = Stopwatch.StartNew();
-        while (!replay.IsComplete)
+        while (replay is not null && !replay.IsComplete)
         {
             replay.AdvanceOneStep();
             RecordExecution(replay.LastCompletedConfiguration!, replay.LastCompletedExecution!.Value);
@@ -56,6 +84,7 @@ internal static partial class CommandLine
         }
 
         ParticleSnapshot replayTerminal = simulation.CaptureSnapshot();
+        JsonElement terminalConfiguration = ConfigurationFile.Encode(simulation.Configuration);
         for (int i = 0; i < continueSteps; i++)
         {
             SimulationConfiguration configuration = simulation.Configuration;
@@ -77,17 +106,39 @@ internal static partial class CommandLine
             startedAtUtc = started,
             completedAtUtc = DateTimeOffset.UtcNow,
             sourceSessionSha256 = Convert.ToHexString(SHA256.HashData(inputBytes)),
-            session = JsonSerializer.Deserialize<JsonElement>(inputText),
+            session = captured is null ? JsonSerializer.Deserialize<JsonElement>(inputText)
+                : JsonSerializer.Deserialize<JsonElement>(SessionFile.Serialize(session)),
+            capturedSession = captured is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(inputText),
+            captureReplay = captured is null ? null : new
+            {
+                mode = restoreCapture ? "restore-capture" : "resimulate-on-cpu",
+                sourceFormat = ExecutionCaptureFile.Format,
+                sourceSchemaVersion = ExecutionCaptureFile.SchemaVersion,
+                sourceTerminalStep = captured.TerminalCapture.State.Step,
+                sourceTerminalTime = captured.TerminalCapture.State.Time,
+                sourceAppliedEventCount = captured.TerminalCapture.AppliedEventCount,
+                sourceCaptureReason = captured.TerminalCapture.Reason,
+                sourceExecution = DescribeExecution(captured.TerminalCapture.Execution),
+                selectedExecution = DescribeExecution(ExecutionProvenance.Cpu(simulation.Configuration)),
+                sourceTerminalConfiguration = ConfigurationFile.Encode(captured.TerminalCapture.Configuration),
+                effectiveTerminalConfiguration = terminalConfiguration,
+                restoredValuesExactly = restoreCapture,
+                actionsResimulated = resimulateOnCpu,
+                policy = restoreCapture
+                    ? "Restores authoritative terminal state, IDs, species and exact host clock; widened binary32 values retain their exact stored values. Optional continuation uses CPU binary64 arithmetic and does not reproduce the recorded GPU trajectory."
+                    : "Explicit CPU binary64 re-simulation of embedded actions with the shared session replay engine. Full structural payloads and identity deltas retain their recorded meaning. Captures do not replace the resimulated trajectory; equality with the recorded GPU trajectory is not promised."
+            },
             replay = new
             {
                 recordedTerminalStep = session.TerminalStep,
-                appliedEventCount = replay.AppliedEventCount,
+                appliedEventCount = replay?.AppliedEventCount ?? 0,
+                continuedFromStep = replayTerminal.Step,
                 terminalTime = replayTerminal.Time,
                 continueSteps,
                 backendOverride = backendOverride is ForceBackend backend ? ExperimentFile.GetNeighbourSearchVersion(backend) : null,
                 workerCountOverride = workerOverride,
-                overridePolicy = "Explicit choices override every recorded configuration. A changed backend without a worker override selects one worker; a retained backend keeps its recorded workers. No override honours all recorded choices.",
-                structuralPayloadPolicy = "Structural events restore their full recorded actual state, including surviving particles. Execution overrides do not reinterpret these payloads as an uninterrupted alternate trajectory."
+                overridePolicy = "Explicit choices override restored terminal settings or every resimulated configuration. A changed backend without a worker override selects one worker; a retained backend keeps its recorded workers. No override honours recorded CPU search/worker choices.",
+                structuralPayloadPolicy = "Action replay applies recorded full structural replacements or identity deltas through the shared engine. Execution overrides do not reinterpret full payloads as uninterrupted alternate trajectories. Capture restore applies no actions."
             },
             execution = new
             {
@@ -96,6 +147,7 @@ internal static partial class CommandLine
                 currentNeighbourSearchVersion = ExperimentFile.GetNeighbourSearchVersion(simulation.Backend),
                 currentWorkerCount = simulation.WorkerCount,
                 currentTimeStep = simulation.TimeStep,
+                currentConfiguration = ConfigurationFile.Encode(simulation.Configuration),
                 directFallbackSteps = simulation.DirectFallbackSteps,
                 coordinateRangeFallbackSteps = simulation.DirectFallbackSteps - simulation.AccumulationFallbackSteps,
                 accumulationRangeFallbackSteps = simulation.AccumulationFallbackSteps,
@@ -128,7 +180,13 @@ internal static partial class CommandLine
             WriteNewOutput(output, JsonSerializer.Serialize(report, ReportOptions));
         }
 
-        Console.WriteLine(FormattableString.Invariant($"Replayed {replay.AppliedEventCount} events through boundary {session.TerminalStep}; continued {continueSteps} steps; final step={final.Step}, t={final.Time:G17}, particles={final.Count}."));
+        Console.WriteLine(restoreCapture
+            ? FormattableString.Invariant($"Restored actual terminal capture on CPU through boundary {session.TerminalStep}; continued {continueSteps} steps; final step={final.Step}, t={final.Time:G17}, particles={final.Count}.")
+            : FormattableString.Invariant($"Replayed {replay!.AppliedEventCount} events through boundary {session.TerminalStep}; continued {continueSteps} steps; final step={final.Step}, t={final.Time:G17}, particles={final.Count}."));
+        if (captured is not null)
+        {
+            Console.WriteLine($"Capture mode: {(restoreCapture ? "restore-capture" : "resimulate-on-cpu")}; source {captured.TerminalCapture.Execution.Hardware}/{captured.TerminalCapture.Execution.Precision}; selected CPU/Float64. Recorded GPU trajectories are not promised by CPU continuation or re-simulation.");
+        }
         Console.WriteLine($"Execution segments: {segments.Count}; direct fallback steps: {simulation.DirectFallbackSteps}; explicit backend override: {backendOverride?.ToString() ?? "none"}; worker override: {workerOverride?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}.");
         if (output is not null)
         {
@@ -171,6 +229,36 @@ internal static partial class CommandLine
             }
         }
     }
+
+    /// <summary>Distinguishes the canonical capture container without executing actions or loading graphics.</summary>
+    private static bool IsCapturedSessionText(string text)
+    {
+        using JsonDocument document = JsonDocument.Parse(text);
+        return document.RootElement.ValueKind == JsonValueKind.Object
+            && document.RootElement.TryGetProperty("format", out JsonElement format)
+            && format.ValueKind == JsonValueKind.String && format.GetString() == ExecutionCaptureFile.Format;
+    }
+
+    /// <summary>Starts CPU ownership at the actual captured boundary without rebasing its clock or values.</summary>
+    private static Simulation RestoreOnCpu(SimulationCapture capture, ReplayOverrides overrides)
+    {
+        SimulationConfiguration configuration = overrides.Apply(capture.Configuration);
+        ParticleSnapshot state = CaptureTransfer.Convert(capture.State, StatePrecision.Float64);
+        return new(state, configuration.Parameters, configuration.Matrix, configuration.TimeStep,
+            configuration.Backend, configuration.WorkerCount);
+    }
+
+    private static object DescribeExecution(ExecutionProvenance execution) => new
+    {
+        hardware = execution.Hardware.ToString().ToLowerInvariant(),
+        precision = execution.Precision.ToString().ToLowerInvariant(),
+        execution.Implementation,
+        execution.Runtime,
+        execution.Device,
+        execution.Api,
+        execution.Driver,
+        execution.RepeatableActions
+    };
 
     /// <summary>Compacts adjacent successful steps with identical requested and actual execution.</summary>
     private sealed class ReplayExecutionSegment(long afterStepExclusive, long throughStepInclusive,

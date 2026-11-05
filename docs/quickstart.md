@@ -47,6 +47,8 @@ Use **Appearance > Display quality** to choose Economy, Balanced or Luminous man
 
 Quality presets never choose a solver, change precision or reduce population. CPU worker counts, hardware selection, numerical timestep and achieved simulation speed are separate choices. Begin with a small scene, change one setting and compare graphics FPS with simulation steps/s and achieved playback. Large dense clusters can be substantially more expensive than sparse worlds with the same population; no preset guarantees 60 FPS or a particle-count capacity.
 
+For a native timing comparison, press **F10** after the scene settles, use the controls for a few seconds, then **F9**. The launch console separates frame intervals, drawing, Present/vsync wait and update-to-present time for observed input. These bounded samples describe application responsiveness; they do not measure physical key delivery, display scanout or how long a queued numerical edit takes to apply.
+
 With canvas focus, **Ctrl+plus/minus** adjusts UI scale and **Ctrl+0** restores 1x. Appearance also accepts exact UI scale. The app fits controls to small windows; its minimum requested size is **420 × 340**. On short panels the toolbar scrolls with the content. **Page Up / Page Down** scrolls Help, or an inspector with keyboard focus/pointer over it. Enlarge the window or hide the inspector for a larger canvas.
 
 Validation, loading and execution errors appear in the notification and launch console; the most recent message remains under **Help > Latest feedback** after the toast fades. A failed operation retains the last valid completed state. Losing window focus pauses playback; resume explicitly when ready.

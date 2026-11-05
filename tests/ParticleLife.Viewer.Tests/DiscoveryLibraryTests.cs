@@ -40,9 +40,9 @@ public sealed class DiscoveryLibraryTests : IDisposable
             with
         { Favourite = true, LastOpenedAtUtc = DateTimeOffset.UtcNow };
         DiscoveryLibrary.Write(path, metadata);
-        Assert.Single(DiscoveryLibrary.Read(directory, "ribbon", favouritesOnly: true));
-        Assert.Single(DiscoveryLibrary.Read(directory, "BLUE"));
-        Assert.Empty(DiscoveryLibrary.Read(directory, "missing"));
+        Assert.Single(DiscoveryLibrary.Read(directory, "ribbon", favouritesOnly: true, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Single(DiscoveryLibrary.Read(directory, "BLUE", cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Empty(DiscoveryLibrary.Read(directory, "missing", cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(scientific, File.ReadAllBytes(path));
         Assert.Equal(companion, File.ReadAllBytes(path + ".viewer.json"));
         byte[] saved = File.ReadAllBytes(path + DiscoveryLibrary.MetadataSuffix);

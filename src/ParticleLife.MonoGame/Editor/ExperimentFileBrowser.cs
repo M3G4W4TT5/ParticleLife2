@@ -5,12 +5,21 @@ using ParticleLife.Viewer;
 namespace ParticleLife.MonoGame.Editor;
 
 /// <summary>Searchable local discovery library and explicit validated file/clipboard sharing.</summary>
-internal sealed class ExperimentFileBrowser
+internal sealed class ExperimentFileBrowser : IDisposable
 {
     private readonly EditorSession editor;
     private readonly Action<string> report;
     private readonly Action suppressPlayback, baselineChanged;
     private readonly UiPanel panel;
+    private readonly DiscoveryLibraryScanner scanner = new();
+    private readonly List<UiWidget> libraryWidgets = [];
+    private DiscoveryLibraryScan scan = new("", "", [], [], []);
+    private Task<Action>? fileTask;
+    private Task? fileOwnerTask;
+    private bool fileOperationActive;
+    private bool rebuildPending;
+    private volatile bool disposed;
+    private bool finishWorkerDuringShutdown;
     private string directory, name = "experiment", description = "", tags = "", query = "", mapping = "";
     private string? selected;
     private DiscoveryEntry? selectedEntry;
@@ -40,7 +49,30 @@ internal sealed class ExperimentFileBrowser
         panel.PrepareForOpen(pointerHeld); IsOpen = true;
         name = $"experiment-{DateTime.Now:yyyyMMdd-HHmmss}"; Refresh();
     }
-    internal void Close() { panel.ClearFocus(); IsOpen = false; }
+    internal void Close() { panel.ClearFocus(); IsOpen = false; scanner.Cancel(); }
+    /// <summary>Delivers file completion even while the modal is closed; called on the UI thread.</summary>
+    internal void Pump()
+    {
+        if (disposed) { return; }
+        if (scanner.Poll(out DiscoveryLibraryScan? ready, out Exception? scanError))
+        {
+            if (ready is not null) { scan = ready; ReplaceLibraryWidgets(); }
+            else if (scanError is not OperationCanceledException && scanError is not null) { Error(scanError.Message); }
+        }
+        if (fileOwnerTask?.IsFaulted == true)
+        {
+            FileFailed(fileOwnerTask.Exception!.GetBaseException()); fileOwnerTask = null;
+        }
+        else if (fileOwnerTask?.IsCanceled == true) { fileOwnerTask = null; FinishFile("File operation cancelled before owner publication.", refresh: false); }
+        else if (fileOwnerTask?.IsCompleted == true) { fileOwnerTask = null; }
+        if (fileTask?.IsCompleted == true)
+        {
+            Task<Action> completed = fileTask; fileTask = null;
+            try { completed.GetAwaiter().GetResult()(); }
+            catch (Exception error) when (ViewerErrors.IsExpected(error)) { FileFailed(error); }
+        }
+        if (rebuildPending && !panel.EditingText) { Rebuild(); }
+    }
     internal void Update(Rectangle bounds, float scale, MouseState mouse, IReadOnlyList<UiInputEvent> input)
     {
         panel.Bounds = bounds; panel.Update(mouse, scale, input);
@@ -48,8 +80,8 @@ internal sealed class ExperimentFileBrowser
     }
     private void Navigate(string path)
     {
+        if (fileOperationActive) { throw new InvalidOperationException("Finish the current file operation before changing folders."); }
         string next = Path.GetFullPath(path);
-        if (!Directory.Exists(next)) { throw new DirectoryNotFoundException("Folder does not exist."); }
         directory = next; selected = null; selectedEntry = null; selectedPreset = null;
         panel.ScrollToTop(); Refresh();
     }
@@ -57,39 +89,69 @@ internal sealed class ExperimentFileBrowser
 
     private void Refresh()
     {
+        scan = new("", "", [], [], []);
+        scanner.Request(directory, query, favouritesOnly, recentFirst);
+        ReplaceLibraryWidgets();
+        Rebuild();
+    }
+
+    private void Rebuild()
+    {
+        // A completed background scan/save must not discard an unrelated in-progress draft.
+        // Thumbnail rows update independently; rebuilding the forms waits for validated blur.
+        if (panel.EditingText) { rebuildPending = true; return; }
+        rebuildPending = false;
         try
         {
-            IReadOnlyList<DiscoveryEntry> entries = DiscoveryLibrary.Read(directory, query, favouritesOnly, recentFirst);
-            if (selected is not null && selectedEntry is not null) { selectedEntry = entries.FirstOrDefault(entry => entry.Path == selected) ?? DiscoveryLibrary.Inspect(selected); }
+            bool current = scan.Directory == directory && scan.Query == query;
+            IReadOnlyList<DiscoveryEntry> entries = current ? scan.Entries : [];
+            if (selected is not null && selectedEntry is not null) { selectedEntry = entries.FirstOrDefault(entry => entry.Path == selected) ?? selectedEntry; }
             panel.Content.Clear();
+            libraryWidgets.Clear();
             panel.Content.Add(new UiTextField("Search", () => query, value => { query = value; Refresh(); }, "Search names, descriptions, tags and filenames; Enter applies."));
             panel.Content.Add(new UiRow(new UiToggle("Favourites", () => favouritesOnly, value => { favouritesOnly = value; Refresh(); }),
                 new UiToggle("Recent first", () => recentFirst, value => { recentFirst = value; Refresh(); })));
-            panel.Content.Add(new UiLabel(() => result, 52, UiCanvas.Accent));
+            panel.Content.Add(new UiLabel(() => result + (scanner.IsScanning ? " Scanning locally..." : "")
+                + (fileOperationActive ? " File operation in progress; further file actions wait." : ""), 70, UiCanvas.Accent));
             BuildSave(); BuildSelected();
-            foreach (string folder in Directory.EnumerateDirectories(directory).Order(StringComparer.OrdinalIgnoreCase).Take(50))
+            AppendLibraryWidgets(current, entries);
+        }
+        catch (Exception error) when (ViewerErrors.IsExpected(error)) { Error(error.Message); }
+    }
+
+    private void ReplaceLibraryWidgets()
+    {
+        foreach (UiWidget widget in libraryWidgets) { panel.Content.Remove(widget); }
+        libraryWidgets.Clear();
+        bool current = scan.Directory == directory && scan.Query == query;
+        AppendLibraryWidgets(current, current ? scan.Entries : []);
+    }
+
+    private void AppendLibraryWidgets(bool current, IReadOnlyList<DiscoveryEntry> entries)
+    {
+            foreach (string folder in current ? scan.Folders : [])
             {
                 string path = folder;
-                panel.Content.Add(new UiButton(() => "Folder / " + Path.GetFileName(path), () => Navigate(path)));
+                Add(new UiButton(() => "Folder / " + Path.GetFileName(path), () => Navigate(path), enabled: () => !fileOperationActive));
             }
             foreach (DiscoveryEntry entry in entries)
             {
                 DiscoveryEntry item = entry;
-                panel.Content.Add(new DiscoveryItemWidget(item, () => Select(item), () => selected == item.Path));
+                Add(new DiscoveryItemWidget(item, () => { if (!fileOperationActive) { Select(item); } }, () => selected == item.Path));
             }
-            foreach (string file in Directory.EnumerateFiles(directory, "*.plshare").Order(StringComparer.OrdinalIgnoreCase).Take(50))
+            foreach (string file in current ? scan.Archives : [])
             {
                 string path = file;
-                panel.Content.Add(new UiButton(() => "Compressed share / " + Path.GetFileName(path), () =>
+                Add(new UiButton(() => "Compressed share / " + Path.GetFileName(path), () =>
                 {
+                    if (fileOperationActive) { return; }
                     selected = path; selectedEntry = null; selectedPreset = null;
                     result = "Selected compressed share. Import validates it into a new file; loading is separate.";
-                    Refresh(); panel.ScrollToTop();
+                    Rebuild(); panel.ScrollToTop();
                 }, "Portable compressed artifact; never extracted to an archive-provided path."));
             }
-            panel.Content.Add(new UiLabel(() => $"Up to {DiscoveryLibrary.MaximumEntries} matching items shown; refine search for a larger folder. Previews sample at most 256 particles.", 50));
-        }
-        catch (Exception error) when (ViewerErrors.IsExpected(error)) { Error(error.Message); }
+            Add(new UiLabel(() => $"Up to {DiscoveryLibrary.MaximumEntries} matching items shown; refine search for a larger folder. Previews sample at most 256 particles.", 50));
+        void Add(UiWidget widget) { libraryWidgets.Add(widget); panel.Content.Add(widget); }
     }
 
     private void BuildSave()
@@ -98,22 +160,26 @@ internal sealed class ExperimentFileBrowser
         save.Children.Add(new UiTextField("New file name", () => name, value => { ValidateName(value); name = value; }));
         save.Children.Add(new UiTextField("Description", () => description, value => description = value));
         save.Children.Add(new UiTextField("Tags (comma separated)", () => tags, value => tags = value));
-        save.Children.Add(new UiRow(SaveButton("Save preset", "preset", DiscoveryKind.Preset, (owner, path, title) => owner.SavePreset(path, title)),
-            SaveButton("Save pattern", "experiment", DiscoveryKind.Pattern, (owner, path, title) => owner.SaveCurrent(path, title))));
-        save.Children.Add(new UiRow(SaveButton("Save initial", "initial", DiscoveryKind.Initial, (owner, path, title) => owner.SaveInitial(path, title)),
-            SaveButton("Save session", "session", DiscoveryKind.Session, (owner, path, title) => owner.SaveSession(path, title))));
+        save.Children.Add(new UiRow(SaveButton("Save preset", "preset", DiscoveryKind.Preset), SaveButton("Save pattern", "experiment", DiscoveryKind.Pattern)));
+        save.Children.Add(new UiRow(SaveButton("Save initial", "initial", DiscoveryKind.Initial), SaveButton("Save session", "session", DiscoveryKind.Session)));
         save.Children.Add(new UiButton(() => "Copy current preset", () =>
         {
-            string? text = null;
-            Run("Copy current preset", owner => text = DiscoveryShare.ClipboardText(owner.CapturePreset(name)),
-                () => { NativeClipboard.Write(text!); result = "Copied validated preset JSON. Current particles are not copied."; });
-        }, "Validated small preset text; large scientific states use compressed file sharing."));
+            string title = name;
+            BeginOwnerFile("Copy current preset", owner => owner.CapturePreset(title), preset =>
+                StartWorker(() => DiscoveryShare.ClipboardText(preset), text =>
+                {
+                    NativeClipboard.Write(text); FinishFile("Copied validated preset JSON. Current particles are not copied.", refresh: false);
+                }));
+        }, "Validated small preset text; large scientific states use compressed file sharing.", () => !fileOperationActive));
         save.Children.Add(new UiButton(() => "Paste preset for review", () =>
         {
-            selectedPreset = DiscoveryShare.ParseClipboard(NativeClipboard.Read()); selected = null; selectedEntry = null;
-            PrepareMapping(); result = "Clipboard preset validated. Choose components and alignment before applying.";
-            Refresh(); panel.ScrollToTop();
-        }, "Validate strict preset JSON first; pasting never applies rules or creates particles."));
+            string text = NativeClipboard.Read();
+            BeginFile("Validate clipboard preset", () => DiscoveryShare.ParseClipboard(text), preset =>
+            {
+                selectedPreset = preset; selected = null; selectedEntry = null; PrepareMapping();
+                FinishFile("Clipboard preset validated. Choose components and alignment before applying.", refresh: false); panel.ScrollToTop();
+            });
+        }, "Validate strict preset JSON first; pasting never applies rules or creates particles.", () => !fileOperationActive));
         save.Children.Add(new UiLabel(() => "Preset = recipe; Pattern = exact completed state; Initial = reset baseline; Session = recorded actions. Session thumbnails show INITIAL geometry.", 70));
         panel.Content.Add(save);
     }
@@ -122,10 +188,10 @@ internal sealed class ExperimentFileBrowser
     {
         UiSection detail = new(selectedPreset is not null && selected is null ? "Clipboard preset / explicit components" : "Selected item / load and details", selected is not null || selectedPreset is not null);
         detail.Children.Add(new UiLabel(() => selected is null ? selectedPreset?.Name ?? "Select a discovery below." : Path.GetFileName(selected), 28));
-        detail.Children.Add(new UiRow(LoadButton("Load state", (owner, path) => owner.LoadExperiment(path), kind => kind is DiscoveryKind.Pattern or DiscoveryKind.Initial),
-            LoadButton("Replay actions", (owner, path) => owner.BeginSessionReplay(path), kind => kind == DiscoveryKind.Session, replay: true)));
-        detail.Children.Add(new UiRow(LoadButton("Preset live", (owner, path) => owner.ApplyPreset(path, false), kind => kind == DiscoveryKind.Preset, live: true),
-            LoadButton("Preset new", (owner, path) => owner.ApplyPreset(path, true), kind => kind == DiscoveryKind.Preset)));
+        detail.Children.Add(new UiRow(LoadButton("Load state", DiscoveryLoadAction.LoadState, kind => kind is DiscoveryKind.Pattern or DiscoveryKind.Initial),
+            LoadButton("Replay actions", DiscoveryLoadAction.ReplayActions, kind => kind == DiscoveryKind.Session, replay: true)));
+        detail.Children.Add(new UiRow(LoadButton("Preset live", DiscoveryLoadAction.PresetLive, kind => kind == DiscoveryKind.Preset, live: true),
+            LoadButton("Preset new", DiscoveryLoadAction.PresetNew, kind => kind == DiscoveryKind.Preset)));
         if (selectedEntry is DiscoveryEntry entry)
         {
             string displayName = entry.Metadata.Name, displayDescription = entry.Metadata.Description, displayTags = string.Join(", ", entry.Metadata.Tags);
@@ -134,16 +200,23 @@ internal sealed class ExperimentFileBrowser
             detail.Children.Add(new UiTextField("Tags", () => displayTags, value => displayTags = value));
             detail.Children.Add(new UiRow(new UiButton(() => "Update details / rename", () =>
             {
-                DiscoveryLibrary.Write(entry.Path, entry.Metadata with { Name = displayName, Description = displayDescription, Tags = ParseTags(displayTags) });
-                result = "Library details updated. Scientific filename and contents are unchanged."; Refresh();
-            }, "Atomic local metadata update. Display rename keeps file paths and bound companions intact."),
+                DiscoveryMetadata metadata = entry.Metadata with { Name = displayName, Description = displayDescription, Tags = ParseTags(displayTags) };
+                BeginFile("Update library details", () => { DiscoveryLibrary.Write(entry.Path, metadata); return DiscoveryLibrary.Inspect(entry.Path); }, updated =>
+                {
+                    selectedEntry = updated; FinishFile("Library details updated. Scientific filename and contents are unchanged.");
+                }, finishDuringShutdown: true);
+            }, "Atomic local metadata update. Display rename keeps file paths and bound companions intact.", () => !fileOperationActive && selected == entry.Path),
                 new UiButton(() => entry.Metadata.Favourite ? "Unfavourite" : "Favourite", () =>
                 {
-                    DiscoveryLibrary.Write(entry.Path, entry.Metadata with { Favourite = !entry.Metadata.Favourite }); Refresh();
-                })));
+                    DiscoveryMetadata metadata = entry.Metadata with { Favourite = !entry.Metadata.Favourite };
+                    BeginFile("Update favourite", () => { DiscoveryLibrary.Write(entry.Path, metadata); return DiscoveryLibrary.Inspect(entry.Path); }, updated =>
+                    {
+                        selectedEntry = updated; FinishFile("Favourite updated.");
+                    }, finishDuringShutdown: true);
+                }, enabled: () => !fileOperationActive && selected == entry.Path)));
         }
-        detail.Children.Add(new UiRow(new UiButton(() => "Export .plshare", ExportShare, "Compress exact scientific/companion bytes into a protected local artifact; never publish online.", () => selectedEntry is not null),
-            new UiButton(() => "Import share", ImportShare, "Validate fixed archive entries, strict document, bound companion and limits before publishing a new local file.", () => selected?.EndsWith(".plshare", StringComparison.OrdinalIgnoreCase) == true)));
+        detail.Children.Add(new UiRow(new UiButton(() => "Export .plshare", ExportShare, "Compress exact scientific/companion bytes into a protected local artifact; never publish online.", () => !fileOperationActive && selectedEntry is not null),
+            new UiButton(() => "Import share", ImportShare, "Validate fixed archive entries, strict document, bound companion and limits before publishing a new local file.", () => !fileOperationActive && selected?.EndsWith(".plshare", StringComparison.OrdinalIgnoreCase) == true)));
         if (selectedPreset is not null)
         {
             detail.Children.Add(new UiLabel(() => $"Selective preset: {selectedPreset.Configuration.Matrix.SpeciesCount} source -> {editor.Configuration.Matrix.SpeciesCount} current target species.", 42));
@@ -158,10 +231,11 @@ internal sealed class ExperimentFileBrowser
             {
                 PresetDefinition preset = selectedPreset!; PresetComponents requested = components;
                 int[] alignment = ParseMapping(mapping);
-                Run("Apply selected preset components", owner => owner.ApplySelectivePreset(preset, requested, alignment),
-                    () => { result = "Selected components applied; particles, clock, execution and unrelated settings retained."; report(result); });
+                if (!BeginOperation("Apply selected preset components")) { return; }
+                QueueOwner("Apply selected preset components", owner => owner.ApplySelectivePreset(preset, requested, alignment),
+                    () => FinishFile("Selected components applied; particles, clock, execution and unrelated settings retained.", refresh: false));
                 suppressPlayback();
-            }, "Validate before one undoable application. No particles are generated. Radii retain unmapped pair values."));
+            }, "Validate before one undoable application. No particles are generated. Radii retain unmapped pair values.", () => !fileOperationActive && !rebuildPending && selectedPreset is not null));
         }
         panel.Content.Add(detail);
     }
@@ -171,72 +245,150 @@ internal sealed class ExperimentFileBrowser
         selected = entry.Path; selectedEntry = entry; selectedPreset = null;
         if (entry.Metadata.Kind == DiscoveryKind.Preset)
         {
-            if (new FileInfo(entry.Path).Length > 4 * 1024 * 1024) { throw new ArgumentException("Selective review is limited to 4 MiB; larger files can still use explicit full preset loading."); }
-            selectedPreset = PresetFile.Load(entry.Path); PrepareMapping();
+            BeginFile("Review preset", () =>
+            {
+                if (new FileInfo(entry.Path).Length > 4 * 1024 * 1024) { throw new ArgumentException("Selective review is limited to 4 MiB; larger files can still use explicit full preset loading."); }
+                return ExperimentEditor.PrepareDiscoveryLoad(entry.Path, DiscoveryLoadAction.ReviewPreset);
+            }, prepared =>
+            {
+                selectedPreset = prepared.Preset; PrepareMapping(); FinishFile("Preset validated for explicit component review.", refresh: false); panel.ScrollToTop();
+            });
         }
-        Refresh(); panel.ScrollToTop();
+        Rebuild(); panel.ScrollToTop();
     }
     private void PrepareMapping() => mapping = string.Join(',', Enumerable.Range(0, editor.Configuration.Matrix.SpeciesCount)
         .Select(index => index < selectedPreset!.Configuration.Matrix.SpeciesCount ? index : -1));
 
-    private UiButton SaveButton(string caption, string suffix, DiscoveryKind kind, Action<ExperimentEditor, string, string> save) => new(() => caption, () =>
+    private UiButton SaveButton(string caption, string suffix, DiscoveryKind kind) => new(() => caption, () =>
     {
         ValidateName(name); string path = Path.Combine(directory, $"{name}.{suffix}.json"), title = name, about = description;
         string[] labels = ParseTags(tags);
-        Run(caption, owner =>
-        {
-            DiscoveryMetadata metadata = DiscoveryLibrary.Capture(owner, kind, title, about, labels);
-            save(owner, path, title); DiscoveryLibrary.Write(path, metadata);
-        }, () => { selected = path; selectedEntry = DiscoveryLibrary.Inspect(path); selectedPreset = null; result = $"Saved {Path.GetFileName(path)}; active state and clock unchanged."; report(result); Refresh(); });
+        BeginOwnerFile(caption, owner => owner.PrepareDiscoverySave(kind, title, about, labels), prepared =>
+            StartWorker(() => prepared.Write(path), outcome =>
+            {
+                selected = outcome.Path; selectedEntry = outcome.Entry; selectedPreset = null;
+                FinishFile($"Saved {Path.GetFileName(outcome.Path)}; active state and clock unchanged." + Warning(outcome.MetadataWarning));
+            }, finishDuringShutdown: true));
         suppressPlayback(); panel.ClearFocus();
-    }, "Exclusive save with a correctly sourced bounded thumbnail. Existing scientific or companion files are protected.");
+    }, "Capture completed state once, then serialize/write off the UI thread. Existing scientific or companion files are protected.", () => !fileOperationActive);
 
-    private UiButton LoadButton(string label, Action<ExperimentEditor, string> load, Func<DiscoveryKind, bool> accepts, bool replay = false, bool live = false) => new(() => label, () =>
+    private UiButton LoadButton(string label, DiscoveryLoadAction action, Func<DiscoveryKind, bool> accepts, bool replay = false, bool live = false) => new(() => label, () =>
     {
         string path = selected!;
-        Run(label, owner => load(owner, path), () =>
-        {
-            if (!live && !replay) { baselineChanged(); }
-            DiscoveryEntry? item = DiscoveryLibrary.Inspect(path);
-            if (item is not null) { DiscoveryLibrary.Write(path, item.Metadata with { LastOpenedAtUtc = DateTimeOffset.UtcNow }); }
-            result = replay ? "Replay started from recorded initial state; Esc cancels. Thumbnail shows INITIAL geometry."
+        BeginFile(label, () => ExperimentEditor.PrepareDiscoveryLoad(path, action), prepared =>
+            QueueOwner(label, owner => prepared.Apply(owner), () =>
+            {
+                if (!live && !replay) { baselineChanged(); }
+                string message = replay ? "Replay started from recorded initial state; Esc cancels. Thumbnail shows INITIAL geometry."
                 : live ? "Preset applied live; particles and clock retained." : "Loaded paused. Close the library to explore.";
-            report(result); Refresh();
-        });
+                StartWorker(() => TouchRecent(path), warning => FinishFile(message + Warning(warning)), finishDuringShutdown: true);
+            }));
         suppressPlayback();
-    }, label, () => selectedEntry is not null && accepts(selectedEntry.Metadata.Kind));
+    }, label, () => !fileOperationActive && selectedEntry is not null && accepts(selectedEntry.Metadata.Kind));
 
     private void ExportShare()
     {
         ValidateName(name); string source = selected!, output = Path.Combine(directory, name + ".plshare");
-        Run("Export compressed share", _ => DiscoveryShare.Export(source, output),
-            () => { result = $"Created {Path.GetFileName(output)}. Share this file explicitly; nothing was uploaded."; Refresh(); });
+        BeginFile("Export compressed share", () => { DiscoveryShare.Export(source, output); return output; }, path =>
+            FinishFile($"Created {Path.GetFileName(path)}. Share this file explicitly; nothing was uploaded."), finishDuringShutdown: true);
         suppressPlayback();
     }
     private void ImportShare()
     {
         ValidateName(name); string source = selected!, output = Path.Combine(directory, name + ".imported.json");
-        Run("Import compressed share", _ => DiscoveryShare.Import(source, output), () =>
+        BeginFile("Import compressed share", () => DiscoveryShare.ImportDetailed(source, output), outcome =>
         {
-            selected = output; selectedEntry = DiscoveryLibrary.Inspect(output); selectedPreset = null;
-            result = "Imported a validated local artifact. Choose its explicit Load / Replay / Preset action."; Refresh();
-        });
+            selected = outcome.Path; selectedEntry = outcome.Entry; selectedPreset = null;
+            FinishFile($"Imported {Path.GetFileName(outcome.Path)}. Choose its explicit Load / Replay / Preset action." + Warning(outcome.MetadataWarning));
+        }, finishDuringShutdown: true);
         suppressPlayback();
     }
     private static string[] ParseTags(string value) => value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     private static int[] ParseMapping(string text) => text.Split(',').Select(value =>
         int.TryParse(value.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int index)
             ? index : throw new ArgumentException("Species alignment needs comma-separated whole source indices; use -1 to retain.")).ToArray();
-    private void Run(string label, Action<ExperimentEditor> action, Action completed) => editor.Run(label, action, () =>
+    private bool BeginOperation(string label)
     {
-        try { completed(); } catch (Exception error) when (ViewerErrors.IsExpected(error)) { Error(error.Message); }
-    });
+        if (fileOperationActive) { return false; }
+        fileOperationActive = true; result = label + ": preparing..."; Rebuild(); return true;
+    }
+    private void BeginFile<T>(string label, Func<T> work, Action<T> completed, bool finishDuringShutdown = false)
+    {
+        if (BeginOperation(label)) { StartWorker(work, completed, finishDuringShutdown); }
+    }
+    private void BeginOwnerFile<T>(string label, Func<ExperimentEditor, T> capture, Action<T> completed) where T : class
+    {
+        if (!BeginOperation(label)) { return; }
+        T? prepared = null;
+        QueueOwner(label, owner => prepared = capture(owner), () => completed(prepared!));
+    }
+    private void StartWorker<T>(Func<T> work, Action<T> completed, bool finishDuringShutdown = false)
+    {
+        finishWorkerDuringShutdown = finishDuringShutdown;
+        fileTask = Task.Run(() =>
+        {
+            T prepared = work();
+            return (Action)(() => completed(prepared));
+        });
+    }
+    private void QueueOwner(string label, Action<ExperimentEditor> action, Action completed)
+    {
+        try
+        {
+            fileOwnerTask = editor.Run(label, owner => { if (!disposed) { action(owner); } }, () =>
+            {
+                fileOwnerTask = null;
+                if (disposed) { return; }
+                try { completed(); } catch (Exception error) when (ViewerErrors.IsExpected(error)) { FileFailed(error); }
+            });
+        }
+        catch { fileOperationActive = false; throw; }
+    }
+    private static string? TouchRecent(string path)
+    {
+        try
+        {
+            DiscoveryEntry? entry = DiscoveryLibrary.Inspect(path);
+            return entry is null ? "Recent metadata unavailable." : DiscoveryLibrary.RecordSaved(path,
+                entry.Metadata with { LastOpenedAtUtc = DateTimeOffset.UtcNow }).MetadataWarning;
+        }
+        catch (Exception error) when (ViewerErrors.IsExpected(error)) { return "Recent metadata not updated: " + error.Message; }
+    }
+    private static string Warning(string? text) => text is null ? "" : " Warning: " + text;
+    private void FinishFile(string message, bool refresh = true)
+    {
+        fileOperationActive = false; result = message; report(message);
+        if (!disposed && IsOpen) { if (refresh) { Refresh(); } else { Rebuild(); } }
+    }
+    private void FileFailed(Exception error)
+    {
+        fileOperationActive = false; Error(error.Message); Rebuild();
+    }
     private static void ValidateName(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value is "." or ".." || value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || value.Contains(Path.DirectorySeparatorChar) || value.Contains(Path.AltDirectorySeparatorChar))
         { throw new ArgumentException("Use a file name without folder separators or reserved characters."); }
     }
     private void Error(string text) { result = "Error: " + text; report(result); }
+    /// <summary>Cancels scanning and finishes already dispatched artifact writes before native shutdown.</summary>
+    public void Dispose()
+    {
+        if (disposed) { return; }
+        disposed = true; scanner.Dispose(); editor.Failed -= Error;
+        if (fileTask is Task<Action> work)
+        {
+            fileTask = null;
+            try
+            {
+                Action completed = work.GetAwaiter().GetResult();
+                if (finishWorkerDuringShutdown) { completed(); }
+                else { report("Prepared file operation cancelled during shutdown; no pending load was applied."); }
+            }
+            catch (Exception error) when (ViewerErrors.IsExpected(error)) { report("File operation failed during shutdown: " + error.Message); }
+        }
+        else if (fileOperationActive) { report("Queued file continuation cancelled during shutdown; completed owner actions remain applied."); }
+        fileOperationActive = false;
+    }
     internal void DrawChrome(UiCanvas canvas) => panel.DrawChrome(canvas, "Discovery library");
     internal void DrawBody(UiCanvas canvas) => panel.DrawBody(canvas);
 }

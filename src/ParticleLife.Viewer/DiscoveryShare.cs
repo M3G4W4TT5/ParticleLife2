@@ -51,7 +51,12 @@ public static class DiscoveryShare
     /// <summary>Validates and imports a share into a new explicit local scientific path without applying it.</summary>
     /// <param name="archivePath">Existing .plshare ZIP.</param><param name="destinationPath">New explicit scientific filename; all existing destinations are protected.</param>
     /// <returns>The imported document purpose; load/replay remains a separate user action.</returns>
-    public static DiscoveryKind Import(string archivePath, string destinationPath)
+    public static DiscoveryKind Import(string archivePath, string destinationPath) => ImportDetailed(archivePath, destinationPath).Kind;
+
+    /// <summary>Imports a validated artifact and reports optional metadata failure separately from scientific success.</summary>
+    /// <param name="archivePath">Existing .plshare ZIP.</param><param name="destinationPath">New explicit scientific filename.</param>
+    /// <returns>Successful scientific publication with an optional metadata warning.</returns>
+    public static DiscoveryFileOutcome ImportDetailed(string archivePath, string destinationPath)
     {
         if (new FileInfo(archivePath).Length > MaximumArchiveBytes) { throw new ArgumentException("Share exceeds the 256 MiB compressed import limit."); }
         using ZipArchive archive = ZipFile.OpenRead(archivePath);
@@ -76,8 +81,11 @@ public static class DiscoveryShare
         if (manifest.Metadata is not null && manifest.Metadata.Kind != kind && !(kind == DiscoveryKind.Pattern && manifest.Metadata.Kind == DiscoveryKind.Initial))
         { throw new ArgumentException("Share metadata kind does not match its scientific document."); }
         DiscoveryLibraryStorage.PublishScientific(destinationPath, scientific, companion);
-        if (manifest.Metadata is not null) { DiscoveryLibrary.Write(destinationPath, manifest.Metadata); }
-        return manifest.Metadata?.Kind ?? kind;
+        DiscoveryMetadata metadata = manifest.Metadata ?? new DiscoveryMetadata(1, Path.GetFileNameWithoutExtension(destinationPath), "", [], false,
+            kind, DateTimeOffset.UtcNow, null, "No preview supplied by shared artifact", 0, 1, [], 0, 0);
+        // Exact validated bytes were deliberately published at a new path/time, so the incoming
+        // thumbnail is rebound rather than mistaken for an externally changed local artifact.
+        return DiscoveryLibrary.RecordSaved(destinationPath, metadata with { FileBytes = 0, FileModifiedUtcTicks = 0 });
     }
 
     /// <summary>Produces validated uncompressed preset text for an explicit clipboard gesture.</summary>

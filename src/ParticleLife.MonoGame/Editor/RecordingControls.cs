@@ -13,10 +13,10 @@ internal static class RecordingControls
         UiSection storage = new("Recording and undo storage", false);
         storage.Children.Add(new UiLabel(() => $"Recording: {editor.SessionEventCount} applied edits, {editor.Recording.ActionBytes / MiB:F2} MiB estimated payload / {editor.Recording.ActionLimitBytes / MiB:G4} MiB limit. Complete history retained.", 58));
         storage.Children.Add(new UiNumber("Recording limit [MiB]", () => editor.Recording.ActionLimitBytes / MiB,
-            value => editor.Run("Recording limit", owner => owner.SetRecordingBudgets(Bytes(value), owner.Recording.UndoBudgetBytes)),
+            value => editor.Run("Recording limit", owner => owner.SetRecordingBudgets(Bytes(value), owner.Recording.UndoBudgetBytes), requiresCapture: false),
             256, 1, 8192, "Numerical action-payload estimate, excluding initial state and object overhead. Reaching this limit rejects later edits before applying them. Existing actions are never truncated.", logarithmic: true));
         storage.Children.Add(new UiNumber("Undo budget [MiB]", () => editor.Recording.UndoBudgetBytes / MiB,
-            value => editor.Run("Undo budget", owner => owner.SetRecordingBudgets(owner.Recording.ActionLimitBytes, Bytes(value))),
+            value => editor.Run("Undo budget", owner => owner.SetRecordingBudgets(owner.Recording.ActionLimitBytes, Bytes(value)), requiresCapture: false),
             128, 1, 8192, "Older compressed undo checkpoints may be evicted. The newest action and pending redo remain available even if they exceed this soft budget. The session recording remains complete.", logarithmic: true));
         storage.Children.Add(new UiLabel(() => $"Undo payload: {editor.Recording.UndoBytes / MiB:F2} MiB; {editor.Recording.EvictedUndoActions} older undo actions evicted. File size depends on compression.", 42));
         storage.Children.Add(new UiToggle("I saved the previous recording", () => newRecordingConfirmed,
