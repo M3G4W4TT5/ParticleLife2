@@ -20,6 +20,7 @@ internal sealed class LiveExperimentEditor
     private readonly Action printTimings;
     private readonly InteractionMatrixWidget matrix;
     private readonly ExperimentFileBrowser browser;
+    private readonly ExplorationControls exploration;
     private long observedRevision = -1;
     private bool symmetry;
     private bool populationDraft;
@@ -49,6 +50,8 @@ internal sealed class LiveExperimentEditor
     private readonly UiSection generation;
     private readonly UiSection simulation;
     private readonly UiSection appearance;
+    private readonly UiSection world;
+    private readonly UiSection discoveries;
     internal ForceGraph Graph { get; }
     internal bool SuppressPlayback { get; private set; }
     internal bool IsModal => browser.IsOpen;
@@ -58,6 +61,9 @@ internal sealed class LiveExperimentEditor
     internal Rectangle PanelBody => panel.Body;
     internal Rectangle BrowserBounds => browser.Bounds;
     internal Rectangle BrowserBody => browser.Body;
+    internal bool BrushEnabled => exploration.BrushEnabled;
+    internal BrushSettings Brush => exploration.Brush;
+    internal void FitCamera() => exploration.Fit();
 
     internal LiveExperimentEditor(ExperimentEditor editor, string saveDirectory, Action<string> report, Action printTimings)
         : this(new EditorSession(editor), saveDirectory, report, printTimings)
@@ -71,6 +77,8 @@ internal sealed class LiveExperimentEditor
         this.printTimings = printTimings;
         panel = new UiPanel(Error);
         matrix = new InteractionMatrixWidget(editor);
+        exploration = new ExplorationControls(editor, matrix, () => symmetry, report);
+        matrix.ColourRequested = SelectColour;
         Graph = new ForceGraph(editor, matrix);
         browser = new ExperimentFileBrowser(editor, saveDirectory, report, () => SuppressPlayback = true, ClearDrafts);
         panel.Toolbar.Add(new UiRow(
@@ -81,10 +89,12 @@ internal sealed class LiveExperimentEditor
         recipes = Section("Starting recipe", true);
         interactions = Section("Interactions");
         forces = Section("Forces and motion", true);
-        population = Section("World and population", true);
-        generation = Section("Generation");
-        simulation = Section("Simulation and execution", true);
+        population = Section("Particles and populations", true);
+        world = Section("World geometry", true);
+        generation = Section("Future recipe and live generators");
+        simulation = Section("Playback", true);
         appearance = Section("Appearance", true);
+        discoveries = Section("Saved discoveries", true);
         SelectRecipe(selectedRecipe);
         BuildRecipes();
         BuildInteractions();
@@ -93,10 +103,26 @@ internal sealed class LiveExperimentEditor
         BuildGeneration();
         BuildSimulation();
         BuildAppearance();
+        world.Children.AddRange(population.Children.Take(4));
+        population.Children.RemoveRange(0, 4);
+        exploration.AddMatrixTools(interactions);
+        exploration.AddPopulationTools(population, species => populationIndex = Math.Min(species, populationSpecies - 1), SelectColour);
+        exploration.AddIndependentGeneration(generation);
+        exploration.AddPaletteTools(appearance);
+        UiSection advanced = new("Advanced CPU and measurements", false);
+        advanced.Children.AddRange(simulation.Children.Skip(2));
+        simulation.Children.RemoveRange(2, simulation.Children.Count - 2);
+        simulation.Children.Add(advanced);
+        discoveries.Children.Add(new UiLabel(() => "Preset: future recipe. From here: exact state. Initial: reset baseline. Session: every applied edit.", 50));
+        discoveries.Children.Add(Button(() => "Browse saved discoveries", OpenFiles, "Open named save/load workflows. Existing destinations are never overwritten."));
         panel.Toolbar.Add(new UiRow(
-            new UiButton(() => "Model", () => SelectTab(0), "Recipes, forces and the directed interaction matrix.", selected: () => selectedTab == 0),
-            new UiButton(() => "World", () => SelectTab(1), "World size, species populations and generation.", selected: () => selectedTab == 1),
-            new UiButton(() => "CPU / View", () => SelectTab(2), "CPU workers, neighbour search, measurements and presentation.", selected: () => selectedTab == 2)));
+            new UiButton(() => "Particles", () => SelectTab(0), "Live populations, independent generators and direct brushes.", selected: () => selectedTab == 0),
+            new UiButton(() => "Interactions", () => SelectTab(1), "Forces and directed matrix editing.", selected: () => selectedTab == 1),
+            new UiButton(() => "World", () => SelectTab(2), "World geometry, camera and display size.", selected: () => selectedTab == 2)));
+        panel.Toolbar.Add(new UiRow(
+            new UiButton(() => "Playback", () => SelectTab(3), "Time controls with expandable execution and measurements.", selected: () => selectedTab == 3),
+            new UiButton(() => "Appearance", () => SelectTab(4), "Palettes, exact species colour pickers and presentation.", selected: () => selectedTab == 4),
+            new UiButton(() => "Discoveries", () => SelectTab(5), "Starting recipes and saved file workflows.", selected: () => selectedTab == 5)));
         SelectTab(0);
         Synchronize();
     }
@@ -108,11 +134,21 @@ internal sealed class LiveExperimentEditor
         panel.Content.Clear();
         panel.Content.AddRange(index switch
         {
-            0 => [recipes, forces, interactions],
-            1 => [population, generation],
-            _ => [simulation, appearance]
+            0 => [population, generation, exploration.Tools],
+            1 => [forces, interactions],
+            2 => [world, exploration.Camera],
+            3 => [simulation],
+            4 => [appearance],
+            _ => [recipes, discoveries]
         });
         panel.ScrollToTop();
+    }
+
+    private void SelectColour(int species)
+    {
+        colourSpecies = Math.Clamp(species, 0, editor.Configuration.Matrix.SpeciesCount - 1);
+        SelectTab(4);
+        report($"Editing display colour for species {colourSpecies}; trajectories are unchanged.");
     }
 
     private UiSection Section(string name, bool expanded = false)
@@ -188,7 +224,7 @@ internal sealed class LiveExperimentEditor
     private void BuildInteractions()
     {
         interactions.Children.Add(matrix);
-        interactions.Children.Add(new UiLabel(() => $"Selected {matrix.Receiver} <- {matrix.Source}   A={editor.Configuration.Matrix[matrix.Receiver, matrix.Source]:G8}", 25, UiCanvas.Accent));
+        interactions.Children.Add(new UiLabel(() => $"Selected {matrix.Receiver} <- {matrix.Source}   A={editor.Configuration.Matrix[matrix.Receiver, matrix.Source]:G17}", 25, UiCanvas.Accent));
         interactions.Children.Add(Number("Coefficient A", () => editor.Configuration.Matrix[matrix.Receiver, matrix.Source],
             value => editor.SetMatrixCoefficient(matrix.Receiver, matrix.Source, value, symmetry), 0, -1, 1,
             "A[receiver,source] is dimensionless, in [-1,1]. Positive outer values attract; negative repel. Core repulsion is independent of A."));
@@ -347,11 +383,11 @@ internal sealed class LiveExperimentEditor
         generation.Children.Add(Number("Generation seed", () => editor.Generation.Seed,
             value => editor.SetGeneration(editor.Generation with { Seed = Integer(value) }), 1, 0, 10000,
             "Integer seed for future generation and random matrices. Changing it alone never regenerates the running state. Replay saves actual generated values.", integer: true));
-        generation.Children.Add(new UiDropdown("Placement", ["Uniform", "Regular grid", "Central disk"],
+        generation.Children.Add(new UiDropdown("Future placement", Enum.GetNames<PlacementKind>(),
             () => (int)editor.Generation.Placement,
             index => editor.SetGeneration(editor.Generation with { Placement = (PlacementKind)index }),
             "Placement is used only for explicit new, resampled or added particles."));
-        generation.Children.Add(new UiDropdown("Velocity", ["Zero", "Common direction", "Random direction"],
+        generation.Children.Add(new UiDropdown("Future velocity", Enum.GetNames<VelocityKind>(),
             () => (int)editor.Generation.Velocity,
             index => editor.SetGeneration(editor.Generation with { Velocity = (VelocityKind)index }),
             "Speed and direction are generation settings, not live velocity overrides."));
@@ -573,7 +609,7 @@ internal sealed class LiveExperimentEditor
     }
 
     internal void Update(Rectangle bounds, Rectangle modalBounds, float scale, MouseState mouse,
-        IReadOnlyList<UiInputEvent> input)
+        IReadOnlyList<UiInputEvent> input, bool pointerControl = false, bool pointerShift = false)
     {
         editor.Pump();
         if (editor.IsBackground)
@@ -640,7 +676,7 @@ internal sealed class LiveExperimentEditor
         else if (editor.Appearance.ShowEditor)
         {
             panel.Bounds = bounds;
-            panel.Update(mouse, scale, input);
+            panel.Update(mouse, scale, input, pointerControl, pointerShift);
             ConsumedKeyboard = panel.ConsumedKeyboard;
         }
         else

@@ -13,6 +13,13 @@ internal sealed class InteractionMatrixWidget(EditorSession editor) : UiWidget(
     private int firstReceiver;
     private int firstSource;
     private const int Cell = 28;
+    internal MatrixSelection Selection { get; } = new(editor.Configuration.Matrix.SpeciesCount);
+    internal Action<int>? ColourRequested { get; set; }
+    internal Action? CopyRequested { get; set; }
+    internal Action? PasteRequested { get; set; }
+    private bool draggingCells;
+    private bool additiveDrag;
+    private Point previousDragPoint;
     internal int Receiver { get; private set; }
     internal int Source { get; private set; }
     private int Count => editor.Configuration.Matrix.SpeciesCount;
@@ -27,12 +34,14 @@ internal sealed class InteractionMatrixWidget(EditorSession editor) : UiWidget(
         }
         Receiver = receiver;
         Source = source;
+        Selection.Select(receiver, source);
         EnsureVisible();
     }
 
     internal void Synchronize()
     {
         Receiver = Math.Min(Receiver, Count - 1);
+        Selection.Resize(Count);
         Source = Math.Min(Source, Count - 1);
         firstReceiver = Math.Min(firstReceiver, Math.Max(0, Count - Visible));
         firstSource = Math.Min(firstSource, Math.Max(0, Count - Visible));
@@ -50,8 +59,11 @@ internal sealed class InteractionMatrixWidget(EditorSession editor) : UiWidget(
         }
     }
 
-    internal override void Press(Point point)
+    internal override void Press(Point point) => Press(point, false, false);
+
+    internal override void Press(Point point, bool control, bool shift)
     {
+        draggingCells = false;
         if (Count > Visible && point.Y >= Bounds.Bottom - 26)
         {
             int part = Math.Clamp((point.X - Bounds.X) * 4 / Bounds.Width, 0, 3);
@@ -68,18 +80,59 @@ internal sealed class InteractionMatrixWidget(EditorSession editor) : UiWidget(
         }
         int row = (point.Y - Bounds.Y - 32) / Cell;
         int column = (point.X - Bounds.X - 38) / Cell;
+        if (point.Y >= Bounds.Y + 15 && point.Y < Bounds.Y + 32 && point.X >= Bounds.X + 38
+            && column < Visible && firstSource + column < Count)
+        {
+            Source = firstSource + column;
+            if (shift) { ColourRequested?.Invoke(Source); }
+            else { Selection.SelectColumn(Source, control); }
+            return;
+        }
+        if (point.X >= Bounds.X && point.X < Bounds.X + 32 && point.Y >= Bounds.Y + 32
+            && row < Visible && firstReceiver + row < Count)
+        {
+            Receiver = firstReceiver + row;
+            if (shift) { ColourRequested?.Invoke(Receiver); }
+            else { Selection.SelectRow(Receiver, control); }
+            return;
+        }
         if (point.Y >= Bounds.Y + 32 && point.X >= Bounds.X + 38 && row < Visible && column < Visible
             && firstReceiver + row < Count && firstSource + column < Count)
         {
-            Select(firstReceiver + row, firstSource + column);
+            Receiver = firstReceiver + row;
+            Source = firstSource + column;
+            Selection.Select(Receiver, Source, shift, control);
+            draggingCells = true;
+            additiveDrag = control;
+            previousDragPoint = point;
+            EnsureVisible();
         }
     }
 
+    internal override void Drag(Point point)
+    {
+        if (!draggingCells || point == previousDragPoint) { return; }
+        previousDragPoint = point;
+        int row = Math.Clamp((point.Y - Bounds.Y - 32) / Cell, 0, Math.Min(Visible, Count - firstReceiver) - 1);
+        int column = Math.Clamp((point.X - Bounds.X - 38) / Cell, 0, Math.Min(Visible, Count - firstSource) - 1);
+        Receiver = firstReceiver + row; Source = firstSource + column;
+        Selection.Select(Receiver, Source, extend: true, additive: additiveDrag);
+    }
+
+    internal override void Release() => draggingCells = false;
+
     internal override void Key(Keys key, bool control, bool shift)
     {
+        if (control && key == Keys.A) { Selection.SelectAll(); return; }
+        if (control && key == Keys.C) { CopyRequested?.Invoke(); return; }
+        if (control && key == Keys.V) { PasteRequested?.Invoke(); return; }
+        if (control && key == Keys.Z) { editor.Undo(); return; }
+        if (control && key == Keys.Y) { editor.Redo(); return; }
+        if (key is not (Keys.Up or Keys.Down or Keys.Left or Keys.Right)) { return; }
         int row = Receiver + (key == Keys.Down ? 1 : key == Keys.Up ? -1 : 0);
         int column = Source + (key == Keys.Right ? 1 : key == Keys.Left ? -1 : 0);
-        Select(Math.Clamp(row, 0, Count - 1), Math.Clamp(column, 0, Count - 1));
+        Receiver = Math.Clamp(row, 0, Count - 1); Source = Math.Clamp(column, 0, Count - 1);
+        Selection.Select(Receiver, Source, shift, control); EnsureVisible();
     }
 
     internal override void Draw(UiCanvas canvas)
@@ -108,7 +161,7 @@ internal sealed class InteractionMatrixWidget(EditorSession editor) : UiWidget(
                 canvas.Rounded(cell, Color.Lerp(UiCanvas.Surface, tint, (float)(0.08 + 0.48 * Math.Abs(coefficient))), 3);
                 string value = Math.Abs(coefficient) < 0.005 ? "0" : coefficient.ToString("+.0;-.0");
                 canvas.TextCentered(value, cell, UiCanvas.Ink, size: 1.2f);
-                if (receiver == Receiver && source == Source)
+                if (Selection.Cells.Contains(new MatrixCell(receiver, source)))
                 {
                     canvas.RoundedBorder(cell, UiCanvas.Ink, 3);
                 }

@@ -46,6 +46,16 @@ Give each case an exact setup and repeatable actions before execution. Use Pendi
 
 ## Findings and follow-up checks
 
+### P3 concrete pending cases
+
+All cases below remain **Pending** until the consolidated review. Start with the saved two-species experiment paused, then repeat representative running cases with the larger saved grid workload, on CPU and GPU after integration.
+
+- V04: wheel-zoom around a labelled particle, middle/right-pan, V-fit, exact centre/zoom, smoothing on/off, and screen/world display radius. Repeat in normal, tall and minimum windows; the pointer footprint must match displayed geometry and saved/reloaded camera targets.
+- V05: drag a rectangle, Ctrl-toggle a cell, Shift-extend using arrows, select two receiver rows and a source column, then set/scale/randomize/zero with reverse linking. Copy/paste exact TSV and reject NaN, out-of-range, missing-cell and mismatched-dimension input without partial edits. Shift-click each header colour and inspect the directed force graph and undo.
+- V06: compare population bar counts/percentages with totals, click +/- and equalize, then undo after several steps. Verify surviving IDs retain current motion; open a colour picker from a bar chip.
+- V07: apply each position layout, position-only and species-filtered velocity-only generation; partial rotate/flip and spatial species reassignment; independent matrix and palette recipes. Save/replay actual results and verify unchanged components.
+- V08–V09: while paused and playing, use move/add/paint/erase/attract/repel/directional tools with circle/square shapes, filters and changed intensity. Pan/zoom first. Hold a stroke through a busy step, stop with Escape/focus loss, undo once, redo and replay. Confirm unrelated identities retain motion, rejected samples do not enlarge undo, and queued pointer previews do not lose total move displacement. Release Move after a small sub-threshold pointer change and after a quick release-frame displacement; the particles must reach the final pointer position, while releasing other tools must not add an extra impulse/population sample. Record session-memory/file cost for a bounded long stroke; do not infer compact storage.
+
 ### Concrete P2 render and ownership cases (pending)
 
 - Use the saved P1 50k fixed-density input with CPU grid, 24 workers and diagnostics disabled. While running, pan/resize and drag a force value, then pause and single-step. Record input response, graphics FPS, simulation steps/s and achieved speed separately. Confirm count never changes and an eventual pause completes after the in-flight step.

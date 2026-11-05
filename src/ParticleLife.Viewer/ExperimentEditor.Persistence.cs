@@ -174,6 +174,7 @@ public sealed partial class ExperimentEditor
         ViewerSettings? settings = LoadViewerSettings(path, content, finalSpecies);
         SessionReplayRunner prepared = new(session);
         EndGesture();
+        EndBrushStroke();
         pendingReplay = prepared;
         pendingReplaySettings = settings;
         Playback.SetPaused(true);
