@@ -11,6 +11,44 @@ namespace ParticleLife.Viewer.Tests;
 public sealed class BoundaryRangeEditorTests
 {
     [Fact]
+    public async Task QueuedRangePreviewsRetainBoundaryAndDoNotLeakAcrossUndo()
+    {
+        using EditorSession session = new(new ExperimentEditor(new PlaybackController(
+            PresetGenerator.Create(PresetKind.Random, 10, 2, 1), diagnosticEverySteps: 0)), runInBackground: true);
+        await session.Run("Initialize pair mode", editor =>
+        {
+            editor.Playback.SetPaused(true);
+            SimulationConfiguration current = editor.Configuration;
+            editor.ApplyConfiguration(new(current.Parameters with { Boundary = BoundaryKind.Periodic }, current.Matrix, current.TimeStep));
+            editor.EnablePairRanges(true);
+        });
+        using ManualResetEventSlim entered = new(), release = new();
+        Task blocked = session.Run("Hold completed boundary", _ => { entered.Set(); release.Wait(); });
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Task completed;
+        SessionDefinition? recorded = null;
+        try
+        {
+            session.SetPairRange(0, 1, 0.02, 0.2);
+            session.Undo();
+            session.SetPairRange(1, 0, 0.04, 0.3);
+            session.SetMatrixCoefficient(0, 1, 0.8);
+            completed = session.Run("Capture actual actions", editor => recorded = editor.CaptureSession("range previews"));
+        }
+        finally { release.Set(); }
+        await blocked;
+        await completed;
+        SimulationConfiguration actual = session.Publication.Configuration;
+        Assert.Equal(BoundaryKind.Periodic, actual.Parameters.Boundary);
+        Assert.Equal(0.1, actual.Matrix.Ranges!.CutoffRadii[1]);
+        Assert.Equal(0.3, actual.Matrix.Ranges.CutoffRadii[2]);
+        Assert.Equal(0.04, actual.Matrix.Ranges.CoreRadii[2]);
+        Assert.Equal(0.8, actual.Matrix[0, 1]);
+        using Simulation replay = SessionReplay.Replay(recorded!);
+        Assert.True(actual.EquivalentTo(replay.Configuration));
+    }
+
+    [Fact]
     public void SelectedRangeEditAndUndoKeepDirectionAndOtherPairs()
     {
         using PlaybackController controller = new(PresetGenerator.Create(PresetKind.Random, 10, 3, 1));
