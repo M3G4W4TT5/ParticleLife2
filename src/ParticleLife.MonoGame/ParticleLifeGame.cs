@@ -6,6 +6,7 @@ using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 using ParticleLife.MonoGame.Editor;
+using ParticleLife.MonoGame.Rendering;
 using ParticleLife.Viewer;
 
 namespace ParticleLife.MonoGame;
@@ -28,6 +29,7 @@ internal sealed class ParticleLifeGame : Game
     private SpriteBatch batch = null!;
     private Texture2D pixel = null!;
     private Texture2D particle = null!;
+    private ParticleRenderer? particleRenderer;
     private Texture2D? splash;
     private double splashElapsed;
     private bool splashPresented;
@@ -107,6 +109,7 @@ internal sealed class ParticleLifeGame : Game
         pixel = new Texture2D(GraphicsDevice, 1, 1);
         pixel.SetData(new[] { Color.White });
         particle = CreateParticleTexture();
+        particleRenderer = new ParticleRenderer(GraphicsDevice, particle);
         using (Stream stream = typeof(ParticleLifeGame).Assembly.GetManifestResourceStream(
             "ParticleLife.MonoGame.Assets.Branding.splash.png")
             ?? throw new InvalidOperationException("The startup artwork is missing."))
@@ -117,6 +120,7 @@ internal sealed class ParticleLifeGame : Game
         canvas = new UiCanvas(batch, pixel, font);
         clipped = new RasterizerState { CullMode = CullMode.None, ScissorTestEnable = true };
         Console.WriteLine($"Viewer: {GraphicsDevice.Adapter.Description}; {Environment.Version}; {Environment.OSVersion}");
+        Console.WriteLine($"Particle renderer: {particleRenderer.Description}; CPU drawing is independent of compute availability.");
         Console.WriteLine($"Experiment: {controller.Observe().ExperimentName}; {controller.Observe().Count} particles; dt={editor.Configuration.TimeStep:G17}; " +
             $"seed={editor.Generation.Seed}; diagnostics every {controller.DiagnosticEverySteps} steps.");
         Console.WriteLine($"Search requested: {editor.Configuration.Backend}; workers: {editor.Configuration.WorkerCount}; " +
@@ -706,30 +710,8 @@ internal sealed class ParticleLifeGame : Game
         }
         batch.End();
         GraphicsDevice.ScissorRectangle = Rectangle.Intersect(worldBounds, GraphicsDevice.Viewport.Bounds);
-        batch.Begin(samplerState: SamplerState.LinearClamp, rasterizerState: clipped);
-        float radius = ResolveParticleRadius(transform);
-        for (int index = 0; index < state.Count; index++)
-        {
-            Vector2d mapped = transform.ToScreen(state.Positions[index]);
-            if (!mapped.IsFinite || mapped.X < worldBounds.Left - radius || mapped.X > worldBounds.Right + radius
-                || mapped.Y < worldBounds.Top - radius || mapped.Y > worldBounds.Bottom + radius)
-            {
-                continue;
-            }
-            uint rgb = editor.Appearance.ColorForSpecies(state.Species[index]);
-            Color colour = new((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
-            batch.Draw(particle, new Vector2((float)mapped.X, (float)mapped.Y), null, colour, 0,
-                new Vector2(16, 16), radius / 16, SpriteEffects.None, 0);
-        }
-        batch.End();
+        particleRenderer!.Draw(state, transform, worldBounds, editor.Appearance);
         DrawBrushPreview(transform);
-    }
-
-    private float ResolveParticleRadius(WorldTransform transform)
-    {
-        double requested = editor.Appearance.ParticleSizeMode == ParticleSizeMode.WorldRelative
-            ? transform.WorldLengthToPixels(editor.Appearance.WorldParticleRadius) : editor.Appearance.ParticleRadius;
-        return (float)Math.Clamp(requested, 0.25, Math.Max(worldBounds.Width, worldBounds.Height));
     }
 
     private static Rectangle MappedWorldBounds(WorldTransform transform)
@@ -1145,6 +1127,14 @@ internal sealed class ParticleLifeGame : Game
         $"workers {editor.Configuration.WorkerCount}/{controller.LastExecution?.ActualWorkerCount.ToString() ?? "unstepped"}; " +
         $"fallback {controller.LastExecution?.FallbackReason.ToString() ?? "none"}; direct fallback steps {controller.DirectFallbackSteps}; " +
         $"accumulation fallback steps {controller.AccumulationFallbackSteps}; candidates {controller.LastStatistics.CandidatePairs}; accepted {controller.LastStatistics.AcceptedPairs}.");
+        if (particleRenderer is not null)
+        {
+            ParticleRenderMetrics metrics = particleRenderer.LastMetrics;
+            Console.WriteLine($"Last particle draw ({metrics.Backend}): preparation {metrics.PreparationMilliseconds:F3} ms; " +
+                $"upload call {metrics.UploadMilliseconds:F3} ms / {metrics.UploadedBytes:N0} bytes; " +
+                $"submission/state {metrics.SubmissionMilliseconds:F3} ms; submitted {metrics.SubmittedParticles:N0}/{metrics.InputCount:N0}; " +
+                $"fallback {metrics.FallbackReason ?? "none"}. Excludes GPU completion and present.");
+        }
         if (lastEditedSample is EditedTimingSample sample)
         {
             Console.WriteLine($"Last edited sample (~1 wall second, ended {sample.EndedUtc:O}): {sample.FramesPerSecond:F1} FPS; " +
@@ -1177,6 +1167,7 @@ internal sealed class ParticleLifeGame : Game
             softenedScene?.Dispose();
             font?.Dispose();
             splash?.Dispose();
+            particleRenderer?.Dispose();
             particle?.Dispose();
             pixel?.Dispose();
             clipped?.Dispose();

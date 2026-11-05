@@ -16,6 +16,7 @@ if (args.Length > 0 && args[0] == "--save-worker")
 Vector2d position = new(0.25, 0.75);
 Vector2 displayPosition = new((float)position.X, (float)position.Y);
 Console.WriteLine($"Core net10.0 / MonoGame {typeof(Game).Assembly.GetName().Version}: {displayPosition}");
+RenderingChecks.Run();
 
 // Exercise the real native numeric widget against the actual editor without creating a Game,
 // SDL window, texture or graphics device. These checks complement native interaction checks.

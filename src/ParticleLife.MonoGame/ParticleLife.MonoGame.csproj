@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>Assets/Branding/Icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
