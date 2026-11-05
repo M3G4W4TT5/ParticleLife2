@@ -46,7 +46,7 @@ public static class SoftWall
     /// <remarks>The caller checks the accumulated force for numerical overflow before publishing state.</remarks>
     internal static Vector2d EvaluateValidated(Vector2d position, ModelParameters parameters)
     {
-        if (parameters.WallStrength == 0)
+        if (parameters.Boundary != BoundaryKind.SoftWall || parameters.WallStrength == 0)
         {
             return default;
         }

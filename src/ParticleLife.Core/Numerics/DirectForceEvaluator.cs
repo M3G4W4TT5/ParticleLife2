@@ -26,6 +26,7 @@ public sealed class DirectForceEvaluator : IForceEvaluator
         ArgumentNullException.ThrowIfNull(parameters);
         ArgumentNullException.ThrowIfNull(matrix);
         parameters.Validate();
+        matrix.ValidateFor(parameters);
         this.parameters = parameters;
         this.matrix = matrix;
         kernel = new(parameters, matrix);
@@ -83,7 +84,8 @@ public sealed class DirectForceEvaluator : IForceEvaluator
                     continue;
                 }
 
-                PairKind kind = kernel.Evaluate(positions[source] - positions[receiver], row + species[source], out Vector2d pairForce);
+                PairKind kind = kernel.Evaluate(WorldBoundary.Displacement(positions[receiver], positions[source], parameters),
+                    row + species[source], out Vector2d pairForce);
                 if (kind == PairKind.Accepted)
                 {
                     acceptedPairs++;

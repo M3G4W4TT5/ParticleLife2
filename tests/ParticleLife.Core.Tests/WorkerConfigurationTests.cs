@@ -32,6 +32,9 @@ public sealed class WorkerConfigurationTests
     {
         ExperimentDefinition experiment = PresetGenerator.Create(PresetKind.Random, 8, 2, backend: ForceBackend.UniformGrid);
         JsonObject document = JsonNode.Parse(ExperimentFile.Serialize(experiment))!.AsObject();
+        document["schemaVersion"] = 2;
+        document["modelVersion"] = ExperimentFile.LegacyModelVersion;
+        document["matrix"]!.AsObject().Remove("pairRanges");
         document.Remove("workerCount");
         ExperimentDefinition loaded = ExperimentFile.Deserialize(document.ToJsonString());
         Assert.Equal(ForceBackend.UniformGrid, loaded.Backend);

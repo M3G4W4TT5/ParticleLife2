@@ -20,6 +20,7 @@ public sealed class SimulationConfiguration
         ArgumentNullException.ThrowIfNull(parameters);
         ArgumentNullException.ThrowIfNull(matrix);
         parameters.Validate();
+        matrix.ValidateFor(parameters);
         ForceWorkerConfiguration.Validate(backend, workerCount);
         _ = SemiImplicitEuler.DampingFactor(timeStep, parameters.DampingHalfLife);
         Parameters = parameters;
@@ -50,6 +51,5 @@ public sealed class SimulationConfiguration
     public bool EquivalentTo(SimulationConfiguration? other) => other is not null
         && Parameters == other.Parameters && TimeStep == other.TimeStep
         && Backend == other.Backend && WorkerCount == other.WorkerCount
-        && Matrix.SpeciesCount == other.Matrix.SpeciesCount
-        && (ReferenceEquals(Matrix, other.Matrix) || Matrix.Values.SequenceEqual(other.Matrix.Values));
+        && (ReferenceEquals(Matrix, other.Matrix) || Matrix.EquivalentTo(other.Matrix));
 }

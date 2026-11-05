@@ -48,8 +48,8 @@ public sealed class ExperimentTests
         Assert.Equal(ForceBackend.Direct, legacy.Backend);
         using JsonDocument saved = JsonDocument.Parse(ExperimentFile.Serialize(legacy));
         JsonElement root = saved.RootElement;
-        Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
-        Assert.Equal("particle-life/1", root.GetProperty("modelVersion").GetString());
+        Assert.Equal(3, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("particle-life/2", root.GetProperty("modelVersion").GetString());
         Assert.Equal("damped-semi-implicit-euler/1", root.GetProperty("integratorVersion").GetString());
         Assert.Equal("direct/1", root.GetProperty("neighbourSearchVersion").GetString());
         Assert.False(root.TryGetProperty("solverVersion", out _));
@@ -112,7 +112,7 @@ public sealed class ExperimentTests
     [InlineData("modelVersion", "\"other/1\"")]
     [InlineData("integratorVersion", "\"other/1\"")]
     [InlineData("neighbourSearchVersion", "\"approximate/1\"")]
-    [InlineData("boundary", "\"periodic\"")]
+    [InlineData("boundary", "\"unknown-world\"")]
     [InlineData("units", "\"SI\"")]
     public void UnsupportedConventionsAreRejected(string property, string value)
     {
@@ -151,7 +151,7 @@ public sealed class ExperimentTests
     {
         string json = ExperimentFile.Serialize(Fixture());
         Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(json.Replace("\"name\":", "\"unknown\": 1, \"name\":")));
-        Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(json.Replace("\"schemaVersion\": 2", "\"schemaVersion\": 2, \"schemaVersion\": 2")));
+        Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(json.Replace("\"schemaVersion\": 3", "\"schemaVersion\": 3, \"schemaVersion\": 3")));
         Assert.Throws<JsonException>(() => ExperimentFile.Deserialize(json.Replace("\"name\":", "\"solverVersion\": \"direct-damped-semi-implicit-euler/1\", \"name\":")));
     }
 

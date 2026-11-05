@@ -7,7 +7,9 @@ namespace ParticleLife.Core.Numerics;
 /// <remarks>
 /// <para>Each call validates and builds the index from the same complete input used for pair and wall
 /// forces. A cell has a full signed integer coordinate; each source is visited at most once per receiver.
-/// Width is the next power of two at least as large as the cutoff; nine cells cover every neighbour.
+/// Nonperiodic width is the next power of two at least as large as the maximum directed cutoff;
+/// nine cells cover every neighbour. Periodic worlds use an even per-axis tiling with a conservative
+/// deduplicated extra ring, and minimum-image displacement. Pair tables retain every directed range.
 /// Negative and finite off-world positions, overlaps and unbounded cell occupancy are retained.</para>
 /// <para>If any scaled coordinate is non-finite or has magnitude at least 2^50 cell widths, the entire
 /// evaluation uses the direct reference search. A non-finite grid-order force sum also retries the
@@ -18,7 +20,7 @@ namespace ParticleLife.Core.Numerics;
 /// separations; finite accumulation can differ by roundoff. This fallback does not retry later integration
 /// failures or replace finite grid sums with reference sums near an integration overflow boundary.</para>
 /// <para>Positions and species are copied into reusable contiguous cell ranges. Within each cell,
-/// source storage order and the nine-cell query order are unchanged from uniform-grid/1. Workers own
+/// source storage order is stable; nonperiodic nine-cell query order is unchanged from uniform-grid/1. Workers own
 /// disjoint receiver outputs and never split a receiver's sum. Thus worker scheduling does not reorder
 /// that sum or assume equal-and-opposite forces. Stable identities and the host state remain in their
 /// original order. One worker uses a direct serial loop; larger counts use persistent background
@@ -37,7 +39,7 @@ namespace ParticleLife.Core.Numerics;
 public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
 {
     /// <summary>Identifies packed layout and receiver scheduling independently of the saved grid/1 search semantics.</summary>
-    public const string AlgorithmVersion = "uniform-grid-packed/1";
+    public const string AlgorithmVersion = "uniform-grid-packed/2";
 
     private const int ReceiverChunkSize = 32;
     private ModelParameters parameters;
@@ -70,7 +72,8 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
         this.parameters = parameters;
         this.matrix = matrix;
         kernel = new PairForceKernel(parameters, matrix);
-        index = new UniformGridIndex(parameters.Cutoff);
+        index = new UniformGridIndex(matrix.MaximumCutoff(parameters));
+        index.ConfigureBoundary(parameters, matrix.MaximumCutoff(parameters));
         WorkerCount = workerCount;
         workerResults = new RangeResult[workerCount];
         workers = workerCount > 1 ? new ForceWorkerPool(workerCount, EvaluateWorker) : null;
@@ -89,7 +92,8 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         PairForceKernel nextKernel = new(nextParameters, nextMatrix);
         DirectForceEvaluator nextDirect = new(nextParameters, nextMatrix);
-        index.ReconfigureCutoff(nextParameters.Cutoff);
+        index.ReconfigureCutoff(nextMatrix.MaximumCutoff(nextParameters));
+        index.ConfigureBoundary(nextParameters, nextMatrix.MaximumCutoff(nextParameters));
         parameters = nextParameters;
         matrix = nextMatrix;
         kernel = nextKernel;
@@ -246,7 +250,7 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
                     }
 
                     candidatePairs++;
-                    PairKind kind = kernel.Evaluate(packedPositions[packedSource] - receiverPosition,
+                    PairKind kind = kernel.Evaluate(WorldBoundary.Displacement(receiverPosition, packedPositions[packedSource], parameters),
                         row + packedSpecies[packedSource], out Vector2d pairForce);
                     if (kind == PairKind.Accepted)
                     {
