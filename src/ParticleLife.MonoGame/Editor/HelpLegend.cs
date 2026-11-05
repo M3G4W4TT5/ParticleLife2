@@ -10,6 +10,7 @@ internal sealed class HelpLegend
     internal Rectangle Bounds => panel.Bounds;
     internal Rectangle Body => panel.Body;
     internal void Arrange(Rectangle bounds) => panel.Arrange(bounds);
+    internal void PrepareForOpen(bool pointerHeld) => panel.PrepareForOpen(pointerHeld);
 
     internal HelpLegend(Action close, Action<string> report)
     {

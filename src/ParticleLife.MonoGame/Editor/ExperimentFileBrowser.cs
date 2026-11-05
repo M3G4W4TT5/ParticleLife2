@@ -38,8 +38,9 @@ internal sealed class ExperimentFileBrowser
             "An absolute or relative local folder path. Enter opens it. The file list shows folders and JSON files."));
     }
 
-    internal void Open()
+    internal void Open(bool pointerHeld = false)
     {
+        panel.PrepareForOpen(pointerHeld);
         IsOpen = true;
         name = $"experiment-{DateTime.Now:yyyyMMdd-HHmmss}";
         Refresh();
@@ -70,6 +71,7 @@ internal sealed class ExperimentFileBrowser
         }
         directory = candidate;
         selected = null;
+        result = "Choose a file below, then choose how to load it. Saving never changes the running state.";
         panel.ScrollToTop();
         Refresh();
     }
@@ -132,6 +134,9 @@ internal sealed class ExperimentFileBrowser
         catch (Exception exception) when (ViewerErrors.IsExpected(exception))
         {
             Error(exception.Message);
+            panel.Content.Clear();
+            panel.Content.Add(new UiLabel(() => result, 42, UiCanvas.Error));
+            panel.Content.Add(new UiLabel(() => "Choose an accessible folder to continue.", 36));
         }
     }
 

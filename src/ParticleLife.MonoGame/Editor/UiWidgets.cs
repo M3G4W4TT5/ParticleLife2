@@ -549,10 +549,13 @@ internal sealed class UiNumber : UiWidget
     }
 }
 
+/// <summary>Reserves its requested minimum height plus any space needed by the current wrapped text.</summary>
+/// <remarks>The panel assigns width before reading height. Resizing or changing dynamic text
+/// therefore moves following controls instead of clipping a final line.</remarks>
 internal sealed class UiLabel(Func<string> text, int height = 40, Color? color = null) : UiWidget
 {
     internal override bool Focusable => false;
-    internal override int Height => height;
+    internal override int Height => Math.Max(height, UiCanvas.MeasureWrappedHeight(text(), Bounds.Width));
     internal override void Draw(UiCanvas canvas) => canvas.Wrapped(text(), Bounds, color ?? UiCanvas.Muted);
 }
 

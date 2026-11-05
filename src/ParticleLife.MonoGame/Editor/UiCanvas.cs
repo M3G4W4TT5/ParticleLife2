@@ -152,49 +152,80 @@ internal sealed class UiCanvas(SpriteBatch batch, Texture2D pixel, BitmapFont fo
         Text("…", bounds.X + (int)MathF.Ceiling(BitmapFont.Measure(text.AsSpan(0, count), size)), y, color, size: size);
     }
 
+    /// <summary>Measures all wrapped lines using exactly the line breaks used by <see cref="Wrapped"/>.</summary>
+    /// <remarks>A nonpositive width or empty string has zero height. Explicit blank lines count;
+    /// an overlong word is split at glyph boundaries so layout always makes progress.</remarks>
+    internal static int MeasureWrappedHeight(string text, int width)
+    {
+        if (width <= 0)
+        {
+            return 0;
+        }
+        int offset = 0;
+        int lines = 0;
+        while (offset < text.Length)
+        {
+            WrappedLineLength(text, offset, width, out offset);
+            lines++;
+        }
+        return lines * (int)BitmapFont.LineHeight(FontSize);
+    }
+
     /// <summary>Wraps prose using proportional advances; explicit newlines retain their paragraph break.</summary>
     internal void Wrapped(string text, Rectangle bounds, Color? color = null)
     {
+        if (bounds.Width <= 0)
+        {
+            return;
+        }
         int offset = 0;
         int y = bounds.Y;
         int lineHeight = (int)BitmapFont.LineHeight(FontSize);
         while (offset < text.Length && y + lineHeight <= bounds.Bottom)
         {
-            int length = 0;
-            int lastSpace = -1;
-            while (offset + length < text.Length && text[offset + length] != '\n')
-            {
-                if (BitmapFont.Measure(text.AsSpan(offset, length + 1), FontSize) > bounds.Width)
-                {
-                    break;
-                }
-                if (text[offset + length] == ' ')
-                {
-                    lastSpace = length;
-                }
-                length++;
-            }
-            bool wrapped = offset + length < text.Length && text[offset + length] != '\n';
-            if (wrapped && lastSpace > 0)
-            {
-                length = lastSpace;
-            }
-            if (length == 0 && text[offset] != '\n')
-            {
-                length = 1;
-            }
+            int length = WrappedLineLength(text, offset, bounds.Width, out int next);
             Text(text.Substring(offset, length), bounds.X, y, color);
-            offset += length;
-            while (offset < text.Length && text[offset] == ' ')
-            {
-                offset++;
-            }
-            if (offset < text.Length && text[offset] == '\n')
-            {
-                offset++;
-            }
+            offset = next;
             y += lineHeight;
         }
+    }
+
+    /// <summary>Returns the next drawable line and the first unconsumed input offset for layout and drawing.</summary>
+    private static int WrappedLineLength(string text, int offset, int width, out int next)
+    {
+        int length = 0;
+        int lastSpace = -1;
+        while (offset + length < text.Length && text[offset + length] != '\n')
+        {
+            if (BitmapFont.Measure(text.AsSpan(offset, length + 1), FontSize) > width)
+            {
+                break;
+            }
+            if (text[offset + length] == ' ')
+            {
+                lastSpace = length;
+            }
+            length++;
+        }
+        bool wrapped = offset + length < text.Length && text[offset + length] != '\n';
+        if (wrapped && lastSpace > 0)
+        {
+            length = lastSpace;
+        }
+        if (length == 0 && text[offset] != '\n')
+        {
+            length = 1;
+        }
+        next = offset + length;
+        while (next < text.Length && text[next] == ' ')
+        {
+            next++;
+        }
+        if (next < text.Length && text[next] == '\n')
+        {
+            next++;
+        }
+        return length;
     }
 
     internal void Line(Vector2 start, Vector2 end, Color color, float thickness = 1)

@@ -45,7 +45,7 @@ internal sealed class ParticleLifeGame : Game
     private EditedTimingSample? lastEditedSample;
     private ButtonState previousMouseButton;
     private float uiScale = 1;
-    private Rectangle worldBounds, editorBounds, modalBounds, legendBounds;
+    private Rectangle worldBounds, gridBounds, editorBounds, modalBounds, legendBounds;
     private float inspectorWidth = 350;
     private float inspectorProgress;
     private bool statsExpanded = true;
@@ -167,6 +167,10 @@ internal sealed class ParticleLifeGame : Game
                 // Let the editor validate an outgoing draft before header actions may mutate state.
                 surface.Update(editorBounds, modalBounds, uiScale, mouse, input);
                 skipPlayback |= surface.SuppressPlayback;
+                if (editor.Appearance.ShowHelp)
+                {
+                    legend.PrepareForOpen(mouse.LeftButton == ButtonState.Pressed);
+                }
                 if (clicked && !surface.IsModal && ToastVisible && ToastCloseBounds.Contains(mouse.Position))
                 {
                     messageUntil = 0;
@@ -314,25 +318,29 @@ internal sealed class ParticleLifeGame : Game
     private void ToggleLegend()
     {
         surface.LoseFocus();
+        if (!editor.Appearance.ShowHelp)
+        {
+            legend.PrepareForOpen(Mouse.GetState().LeftButton == ButtonState.Pressed);
+        }
         editor.SetAppearance(editor.Appearance with { ShowHelp = !editor.Appearance.ShowHelp });
     }
 
     private void CloseLegend() => editor.SetAppearance(editor.Appearance with { ShowHelp = false });
 
-    /// <summary>Returns physical header hit rectangles shared by drawing and input.</summary>
+    /// <summary>Returns physical workspace-control hit rectangles shared by drawing and input.</summary>
     private Rectangle HeaderButton(int index)
     {
         int width = GraphicsDevice.Viewport.Width;
-        int start = width >= 620 ? 184 : 68;
+        int start = Math.Clamp(gridBounds.X + 10, worldBounds.X + 6, Math.Max(worldBounds.X + 6, worldBounds.Right - 120));
+        int top = Math.Clamp(gridBounds.Y + 10, worldBounds.Y + 6, Math.Max(worldBounds.Y + 6, worldBounds.Bottom - 38));
+        int inspectorTop = width >= 960 ? 60 : 70 + Math.Max(66, (int)((GraphicsDevice.Viewport.Height - 76) * 0.36));
         return index switch
         {
-            0 => new Rectangle(start, 14, 34, 30),
-            1 => new Rectangle(start + 38, 14, 34, 30),
-            2 => editor.Appearance.ShowEditor && inspectorProgress > 0.95f
-                ? new Rectangle(Physical(editorBounds).Right - 34, Physical(editorBounds).Y + 2, 30, 28)
-                : new Rectangle(width - 48, 14, 34, 30),
+            0 => new Rectangle(start, top, 34, 30),
+            1 => new Rectangle(start + 38, top, 34, 30),
+            2 => new Rectangle(width - 48, inspectorTop + 2, 30, 28),
             3 => new Rectangle(18, GraphicsDevice.Viewport.Height - 44, 30, 28),
-            4 => new Rectangle(start + 76, 14, 34, 30),
+            4 => new Rectangle(start + 76, top, 34, 30),
             _ => new Rectangle(18, 65, 28, 28)
         };
     }
@@ -416,6 +424,9 @@ internal sealed class ParticleLifeGame : Game
         int legendHeight = Math.Min(height - 76, (int)(720 * uiScale));
         legendBounds = Logical(new Rectangle((width - legendWidth) / 2, 60, legendWidth, Math.Max(120, legendHeight)));
         legend.Arrange(legendBounds);
+        WorldTransform transform = CreateWorldTransform();
+        gridBounds = new Rectangle((int)transform.OffsetX, (int)transform.OffsetY,
+            Math.Max(1, (int)transform.Width), Math.Max(1, (int)transform.Height));
     }
 
     private Rectangle Logical(Rectangle screen) => new((int)(screen.X / uiScale), (int)(screen.Y / uiScale),
@@ -469,10 +480,13 @@ internal sealed class ParticleLifeGame : Game
 
         batch.Begin(samplerState: SamplerState.LinearClamp);
         canvas.Text(width >= 620 ? "Particle Life 2" : "PL2", 20, 17, UiCanvas.Ink, size: 2.1f);
-        canvas.Glass(new Rectangle(HeaderButton(0).X - 2, 13, 114, 32), 6);
+        Rectangle transport = TransportBounds;
+        float transportOpacity = TransportOpacity;
+        canvas.Rounded(transport, UiCanvas.Background * (0.9f * transportOpacity), 6);
+        canvas.RoundedBorder(transport, UiCanvas.Muted * (0.25f * transportOpacity), 6);
         for (int index = 0; index < 6; index++)
         {
-            if (index == 2 && editor.Appearance.ShowEditor && inspectorProgress > 0.95f)
+            if (index == 2)
             {
                 continue;
             }
@@ -484,10 +498,6 @@ internal sealed class ParticleLifeGame : Game
         {
             DrawPanel(surface.PanelBounds, surface.PanelBody, surface.DrawChrome, surface.DrawBody, surface.DrawOverlay);
             batch.Begin(samplerState: SamplerState.LinearClamp);
-            if (editor.Appearance.ShowEditor && inspectorProgress > 0.95f)
-            {
-                DrawHeaderControl(2);
-            }
             if (width >= 960 && inspectorProgress > 0.95f)
             {
                 Rectangle panel = Physical(editorBounds);
@@ -496,6 +506,7 @@ internal sealed class ParticleLifeGame : Game
             batch.End();
         }
         batch.Begin(samplerState: SamplerState.LinearClamp);
+        DrawHeaderControl(2);
         DrawNotification();
         batch.End();
         if (surface.IsModal || editor.Appearance.ShowHelp)
@@ -550,12 +561,14 @@ internal sealed class ParticleLifeGame : Game
         }
     }
 
+    private WorldTransform CreateWorldTransform() => new(editor.Configuration.Parameters.WorldWidth,
+        editor.Configuration.Parameters.WorldHeight, worldBounds.X, worldBounds.Y,
+        Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height));
+
     private void DrawWorld()
     {
-        SimulationConfiguration configuration = editor.Configuration;
-        WorldTransform transform = new(configuration.Parameters.WorldWidth, configuration.Parameters.WorldHeight,
-            worldBounds.X, worldBounds.Y, Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height));
-        Rectangle world = new((int)transform.OffsetX, (int)transform.OffsetY, Math.Max(1, (int)transform.Width), Math.Max(1, (int)transform.Height));
+        WorldTransform transform = CreateWorldTransform();
+        Rectangle world = gridBounds;
         batch.Begin(samplerState: SamplerState.LinearClamp);
         // A quiet full-window field sits beneath the floating control layer.
         for (int x = worldBounds.X; x < GraphicsDevice.Viewport.Width; x += 48)
@@ -594,6 +607,11 @@ internal sealed class ParticleLifeGame : Game
         batch.End();
     }
 
+    /// <summary>Groups playback controls inside the grid, with more transparent material while idle.</summary>
+    private Rectangle TransportBounds => new(HeaderButton(0).X - 2, HeaderButton(0).Y - 1, 114, 32);
+
+    private float TransportOpacity => TransportBounds.Contains(Mouse.GetState().Position) ? 1 : 0.4f;
+
     /// <summary>Draws transport and pane affordances with the same hit bounds used by input.</summary>
     private void DrawHeaderControl(int index)
     {
@@ -608,6 +626,10 @@ internal sealed class ParticleLifeGame : Game
             canvas.Rounded(bounds, UiCanvas.Accent * 0.12f, 5);
         }
         Color tint = index == 0 ? UiCanvas.Ink : UiCanvas.Muted;
+        if (index is 0 or 1 or 4)
+        {
+            tint *= TransportOpacity;
+        }
         Vector2 center = new(bounds.Center.X, bounds.Center.Y);
         if (index == 0 && !controller.IsPaused)
         {
@@ -629,18 +651,11 @@ internal sealed class ParticleLifeGame : Game
         }
         else if (index == 2)
         {
-            if (editor.Appearance.ShowEditor && inspectorProgress > 0.95f)
-            {
-                canvas.Line(center + new Vector2(-4, -4), center + new Vector2(4, 4), tint, 1.5f);
-                canvas.Line(center + new Vector2(-4, 4), center + new Vector2(4, -4), tint, 1.5f);
-            }
-            else
-            {
-                canvas.RoundedBorder(new Rectangle(bounds.Center.X - 9, bounds.Center.Y - 6, 18, 13), tint, 2);
-                canvas.Line(center + new Vector2(3, -6), center + new Vector2(3, 6), tint);
-                canvas.Line(center + new Vector2(-5, -2), center + new Vector2(-2, 0), tint);
-                canvas.Line(center + new Vector2(-2, 0), center + new Vector2(-5, 2), tint);
-            }
+            canvas.RoundedBorder(new Rectangle(bounds.Center.X - 8, bounds.Center.Y - 6, 16, 13), tint, 2);
+            canvas.Line(center + new Vector2(3, -6), center + new Vector2(3, 6), tint);
+            float direction = editor.Appearance.ShowEditor ? 1 : -1;
+            canvas.Line(center + new Vector2(-2 - direction * 2, -2), center + new Vector2(-2 + direction * 2, 0), tint);
+            canvas.Line(center + new Vector2(-2 + direction * 2, 0), center + new Vector2(-2 - direction * 2, 2), tint);
         }
         else if (index == 3)
         {

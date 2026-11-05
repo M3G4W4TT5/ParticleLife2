@@ -38,6 +38,7 @@ internal sealed class LiveExperimentEditor
     private PresetKind selectedRecipe = PresetKind.CoreHalo;
     private string recipePopulationSummary = string.Empty;
     private int selectedTab;
+    private ButtonState currentMouseButton;
     private readonly UiSection recipes;
     private readonly UiSection interactions;
     private readonly UiSection forces;
@@ -533,6 +534,7 @@ internal sealed class LiveExperimentEditor
     internal void Update(Rectangle bounds, Rectangle modalBounds, float scale, MouseState mouse,
         IReadOnlyList<UiInputEvent> input)
     {
+        currentMouseButton = mouse.LeftButton;
         SuppressPlayback = false;
         ConsumedKeyboard = false;
         panel.Arrange(bounds);
@@ -596,7 +598,7 @@ internal sealed class LiveExperimentEditor
     internal void OpenFiles()
     {
         panel.ClearFocus();
-        browser.Open();
+        browser.Open(pointerHeld: currentMouseButton == ButtonState.Pressed);
     }
 
     internal void ToggleVisibility()

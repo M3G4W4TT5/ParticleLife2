@@ -291,6 +291,94 @@ scrollingPanel.Update(MouseAt(scrollClick, pressed: true, wheel: -120), 1, []);
 Require(scrollingPanel.Content[1].Bounds.Contains(scrollClick) && clickedRow == 1,
     "A wheel-and-press sample activated the stale pre-scroll target.");
 
+// A newly opened modal inherits the opening button state, never the hidden panel's old edge.
+int presentedActions = 0;
+UiPanel presentedPanel = new(_ => { });
+UiButton presentedAction = new(() => "Action", () => presentedActions++);
+presentedPanel.Content.Add(presentedAction);
+for (int index = 0; index < 8; index++)
+{
+    presentedPanel.Content.Add(new UiLabel(() => "Overflow", 28));
+}
+presentedPanel.Arrange(new Rectangle(0, 0, 400, 240));
+Point presentedPoint = presentedAction.Bounds.Center;
+presentedPanel.PrepareForOpen(pointerHeld: true);
+presentedPanel.Update(MouseAt(presentedPoint, pressed: true, wheel: -960), 1, []);
+Require(presentedActions == 0 && presentedAction.Bounds.Contains(presentedPoint),
+    "An opening press or accumulated hidden-panel wheel input reached a newly presented modal.");
+presentedPanel.Update(MouseAt(presentedPoint, wheel: -960), 1, []);
+presentedPanel.Update(MouseAt(presentedPoint, pressed: true, wheel: -960), 1, []);
+Require(presentedActions == 1, "A modal did not accept a real click after the opening press was released.");
+presentedPanel.PrepareForOpen(pointerHeld: false);
+presentedPanel.Update(MouseAt(presentedPoint, pressed: true, wheel: -960), 1, []);
+Require(presentedActions == 2, "Keyboard opening discarded the first fresh pointer click.");
+
+// Reproduce the actual small-window overlap: Files at y218 sits above Save from here after opening.
+string modalDirectory = Path.GetFullPath(Path.Combine("artifacts", "modal-pointer-check", Guid.NewGuid().ToString("N")));
+using (PlaybackController modalPlayback = new(PresetGenerator.Create(PresetKind.Random, 4, 2, 31)))
+{
+    ExperimentEditor modalEditor = new(modalPlayback);
+    LiveExperimentEditor modalSurface = new(modalEditor, modalDirectory, _ => { }, () => { });
+    Rectangle smallInspector = new(14, 165, 392, 121);
+    Rectangle smallBrowser = new(14, 60, 392, 264);
+    Point filesAndSave = new(330, 218);
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave, pressed: true), []);
+    Require(modalSurface.IsModal, "The compact Files action did not open its browser.");
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave, pressed: true), []);
+    Require(Directory.GetFiles(modalDirectory, "*.json").Length == 0,
+        "Holding the compact Files opening click accidentally saved an experiment.");
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave, pressed: true), []);
+    Require(Directory.GetFiles(modalDirectory, "*.json").Length == 2,
+        "A real subsequent Save from here click did not save the experiment and companion.");
+}
+
+// At high UI scale a small native pane can be only 80 logical pixels high.
+UiPanel shortPanel = new(_ => { });
+UiButton shortToolbar = new(() => "Toolbar", () => { });
+UiButton shortContent = new(() => "Content", () => { });
+shortPanel.Toolbar.Add(shortToolbar);
+shortPanel.Content.Add(shortContent);
+shortPanel.Arrange(new Rectangle(10, 10, 350, 80));
+Require(shortPanel.Body.Height >= shortContent.Height && shortPanel.Bounds.Contains(shortPanel.Body)
+    && shortPanel.Footer == Rectangle.Empty, "A short pane's footer consumed or escaped its last full control row.");
+shortPanel.Update(default, 1,
+[
+    UiInputEvent.KeyPress(Keys.Tab, false, false),
+    UiInputEvent.KeyPress(Keys.Tab, false, false)
+]);
+Require(shortContent.Focused && shortPanel.Body.Contains(shortContent.Bounds),
+    "Keyboard navigation could not expose a complete row in an 80px pane.");
+shortPanel.Arrange(new Rectangle(10, 10, 350, 108));
+Require(shortPanel.Footer.Height == 18 && shortPanel.Bounds.Contains(shortPanel.Footer)
+    && shortPanel.Body.Height >= shortContent.Height, "Intermediate pane height did not use a bounded one-line footer.");
+shortPanel.Arrange(new Rectangle(10, 10, 350, 180));
+Require(shortPanel.Footer.Height == 38 && shortPanel.Bounds.Contains(shortPanel.Footer),
+    "Normal pane height did not restore its bounded two-line footer.");
+
+// Inspector prose must reserve every actual line at its assigned width, including the final word/seed.
+UiPanel wrappingPanel = new(_ => { });
+UiLabel worldNote = new(() => "World draft: apply together. Positions and velocities stay.", 32);
+UiLabel populationNote = new(() => "Population draft: survivors keep their identities and motion.", 32);
+UiLabel recipeSummary = new(() => "420 particles / 2 species (84 core / 336 halo) / seed 2147483647", 22);
+UiLabel minimumNote = new(() => "Short note.", 48);
+UiButton afterNotes = new(() => "Apply", () => { });
+wrappingPanel.Content.AddRange([worldNote, populationNote, recipeSummary, minimumNote, afterNotes]);
+wrappingPanel.Arrange(new Rectangle(0, 0, 350, 500));
+Require(worldNote.Height == 36 && populationNote.Height == 36 && recipeSummary.Height == 36,
+    "A narrow inspector label clipped its second line instead of reserving its full wrapped height.");
+Require(populationNote.Bounds.Y >= worldNote.Bounds.Bottom && recipeSummary.Bounds.Y >= populationNote.Bounds.Bottom
+    && minimumNote.Bounds.Y >= recipeSummary.Bounds.Bottom && afterNotes.Bounds.Y >= minimumNote.Bounds.Bottom,
+    "Wrapped labels overlapped following controls.");
+Require(minimumNote.Height == 48, "Wrapped measurement discarded an explicit minimum label height.");
+wrappingPanel.Arrange(new Rectangle(0, 0, 600, 500));
+Require(worldNote.Height == 32 && populationNote.Height == 32 && recipeSummary.Height == 22,
+    "Widening the inspector retained unnecessary wrapped-line height.");
+Require(UiCanvas.MeasureWrappedHeight("First\n\nThird", 326) == 54
+    && UiCanvas.MeasureWrappedHeight("abcd", 1) == 72 && UiCanvas.MeasureWrappedHeight("", 326) == 0,
+    "Wrapped layout did not preserve explicit blank lines or split an overlong word consistently.");
+
 // Use the actual native recipe actions, including selection's no-op semantics and switching
 // to a smaller species matrix. This needs no graphics device.
 LiveExperimentEditor recipePanel = new(editor, Path.GetTempPath(), _ => { }, () => { });

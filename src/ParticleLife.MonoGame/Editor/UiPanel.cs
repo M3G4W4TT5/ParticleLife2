@@ -14,6 +14,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
     private UiWidget? captured;
     private UiWidget? hovered;
     private int previousWheel;
+    private bool synchronizeWheel;
     private ButtonState previousButton;
     private Point previousPointer;
     private float scroll;
@@ -23,6 +24,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
     internal List<UiWidget> Content { get; } = [];
     internal Rectangle Bounds { get; set; }
     internal Rectangle Body { get; private set; }
+    internal Rectangle Footer { get; private set; }
     internal bool HasFocus => focused is not null;
     internal bool Capturing => focused is not null || captured is not null || draggingScroll;
     internal bool EditingText => focused?.EditingText == true;
@@ -49,6 +51,17 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
 
     internal void ScrollToTop() => scroll = 0;
 
+    /// <summary>Seeds edge detection from the pointer state that opened a previously inactive panel.</summary>
+    /// <remarks>A held opening press cannot activate a covered modal control. A keyboard opening
+    /// with the pointer released still accepts a fresh first click. The next wheel reading is a
+    /// baseline, because accumulated scrolling while the panel was hidden is not input for it.</remarks>
+    internal void PrepareForOpen(bool pointerHeld)
+    {
+        ClearFocus();
+        previousButton = pointerHeld ? ButtonState.Pressed : ButtonState.Released;
+        synchronizeWheel = true;
+    }
+
     internal void Update(MouseState mouse, float scale, IReadOnlyList<UiInputEvent> input)
     {
         ConsumedKeyboard = false;
@@ -59,7 +72,8 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         previousPointer = point;
         bool pressed = mouse.LeftButton == ButtonState.Pressed && previousButton == ButtonState.Released;
         bool released = mouse.LeftButton == ButtonState.Released && previousButton == ButtonState.Pressed;
-        int wheel = mouse.ScrollWheelValue - previousWheel;
+        int wheel = synchronizeWheel ? 0 : mouse.ScrollWheelValue - previousWheel;
+        synchronizeWheel = false;
         previousWheel = mouse.ScrollWheelValue;
         previousButton = mouse.LeftButton;
 
@@ -256,7 +270,16 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
                 y += widget.Height + 3;
             }
         }
-        Body = new Rectangle(Bounds.X + 10, y + 5, Math.Max(1, Bounds.Width - 20), Math.Max(20, Bounds.Bottom - y - 52));
+        int bodyTop = Math.Min(Bounds.Bottom, y + 5);
+        int availableHeight = Bounds.Bottom - bodyTop;
+        // A short inspector must retain at least one complete 28px control row. Context help
+        // drops to one line, then disappears, before it can consume or overflow that row.
+        int footerHeight = availableHeight >= 28 + 47 ? 38 : availableHeight >= 28 + 27 ? 18 : 0;
+        int bottomInset = footerHeight > 0 ? footerHeight + 9 : 8;
+        Body = new Rectangle(Bounds.X + 10, bodyTop, Math.Max(1, Bounds.Width - 20), Math.Max(0, availableHeight - bottomInset));
+        Footer = footerHeight > 0
+            ? new Rectangle(Bounds.X + 12, Body.Bottom + 7, Math.Max(1, Bounds.Width - 24), footerHeight)
+            : Rectangle.Empty;
         y = Body.Y - (int)scroll;
         if (Compact)
         {
@@ -344,14 +367,16 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         }
         UiWidget? explained = hovered ?? focused;
         string help = explained?.Explanation ?? string.Empty;
-        Rectangle footer = new(Bounds.X + 12, Body.Bottom + 7, Bounds.Width - 24, 38);
-        canvas.Fill(new Rectangle(Bounds.X + 10, Body.Bottom + 3, Bounds.Width - 20, 1), UiCanvas.Muted * 0.12f);
-        canvas.Wrapped(help, footer, UiCanvas.Muted);
+        if (Footer.Height > 0)
+        {
+            canvas.Fill(new Rectangle(Bounds.X + 10, Body.Bottom + 3, Bounds.Width - 20, 1), UiCanvas.Muted * 0.12f);
+            canvas.Wrapped(help, Footer, UiCanvas.Muted);
+        }
         if (contentHeight > Body.Height)
         {
             Rectangle track = new(Bounds.Right - 8, Body.Y, 4, Body.Height);
             canvas.Fill(track, UiCanvas.Surface);
-            int size = Math.Max(22, (int)(Body.Height * Body.Height / contentHeight));
+            int size = Math.Min(track.Height, Math.Max(22, (int)(Body.Height * Body.Height / contentHeight)));
             int offset = (int)((Body.Height - size) * scroll / (contentHeight - Body.Height));
             canvas.Rounded(new Rectangle(track.X, track.Y + offset, track.Width, size), UiCanvas.Muted * 0.55f, 2);
         }
