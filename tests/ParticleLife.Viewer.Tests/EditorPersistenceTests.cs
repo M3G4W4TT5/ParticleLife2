@@ -241,6 +241,32 @@ public sealed class EditorPersistenceTests : IDisposable
         loadedEditor.LoadExperiment(path);
         Assert.Equal("writer " + loadedEditor.Generation.Seed, loaded.Experiment.Name);
         Assert.Empty(Directory.GetFiles(directory, "*.tmp*"));
+        Assert.Empty(Directory.GetFiles(directory, "*.save.lock"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BusyOrInterruptedSaveRetainsItsReservationAndRetryWorksAfterRelease(bool companion)
+    {
+        using PlaybackController playback = CreatePlayback();
+        ExperimentEditor editor = new(playback);
+        Directory.CreateDirectory(directory);
+        string path = PathFor("reserved.json");
+        string reservedDestination = companion ? path + ".viewer.json" : path;
+        string reservation = reservedDestination + ".save.lock";
+        File.WriteAllText(reservation, "another writer");
+        Assert.Throws<IOException>(() => editor.SaveCurrent(path, "blocked"));
+        Assert.Throws<IOException>(() => ExperimentStorage.SaveNew(reservedDestination, playback.Experiment));
+        Assert.Equal("another writer", File.ReadAllText(reservation));
+        Assert.False(File.Exists(path));
+        Assert.False(File.Exists(path + ".viewer.json"));
+        Assert.Single(Directory.GetFiles(directory));
+        File.Delete(reservation);
+        editor.SaveCurrent(path, "retry");
+        Assert.Equal("retry", ExperimentFile.Load(path).Name);
+        Assert.True(File.Exists(path + ".viewer.json"));
+        Assert.Empty(Directory.GetFiles(directory, "*.save.lock"));
     }
 
     [Fact]
