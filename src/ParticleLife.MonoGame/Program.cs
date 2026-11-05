@@ -11,6 +11,13 @@ try
         return 0;
     }
 
+    if (args.Length == 2 && args[0] == "--trail-render-checks")
+    {
+        using TrailRenderingChecksGame checks = new(args[1]);
+        checks.Run();
+        return checks.ExitCode;
+    }
+
     if (args.Length == 2 && args[0] == "--cpu-render-checks")
     {
         using CpuRenderingChecksGame checks = new(args[1]);

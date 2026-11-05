@@ -6,7 +6,10 @@ namespace ParticleLife.Viewer;
 /// <summary>Encodes a bounded queue of explicit canvas readbacks on a background writer.</summary>
 /// <remarks>At most two queued frames and one pending frame are retained. Backpressure skips an
 /// image rather than delaying simulation; actual timestamp gaps become GIF delays. The caller keeps
-/// ownership of its readback buffer. A final artifact is published only after a successful trailer.</remarks>
+/// ownership of its readback buffer. GIF delay quantization follows cumulative elapsed time from the
+/// first accepted image, so independently rounded frame intervals cannot shorten a recording. GIF's
+/// one-centisecond minimum and maximum representable per-frame delay still bound individual intervals.
+/// A final artifact is published only after a successful trailer.</remarks>
 public sealed class AnimationCapture
 {
     private readonly Channel<Frame> frames = Channel.CreateBounded<Frame>(new BoundedChannelOptions(2)
@@ -71,6 +74,8 @@ public sealed class AnimationCapture
     private void Encode(Stream stream)
     {
         Frame? pending = null;
+        double? firstTimestamp = null;
+        long encodedCentiseconds = 0;
         using GifAnimationWriter gif = new(stream, Width, Height);
         try
         {
@@ -98,8 +103,11 @@ public sealed class AnimationCapture
         }
         void Write(Frame frame, double until)
         {
-            int delay = (int)Math.Clamp(Math.Round(Math.Max(0.01, until - frame.Timestamp) * 100), 1, ushort.MaxValue);
+            firstTimestamp ??= frame.Timestamp;
+            double elapsedCentiseconds = Math.Round(Math.Max(0, until - firstTimestamp.Value) * 100);
+            int delay = (int)Math.Clamp(elapsedCentiseconds - encodedCentiseconds, 1, ushort.MaxValue);
             gif.AppendFrame(frame.Bytes.AsSpan(0, byteCount), delay); Interlocked.Increment(ref written);
+            encodedCentiseconds += delay;
         }
     }
     private sealed record Frame(byte[] Bytes, double Timestamp);

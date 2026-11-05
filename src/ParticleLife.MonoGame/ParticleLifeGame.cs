@@ -114,7 +114,7 @@ internal sealed partial class ParticleLifeGame : Game
         pixel.SetData(new[] { Color.White });
         particle = CreateParticleTexture();
         particleRenderer = new ParticleRenderer(GraphicsDevice, particle);
-        worldVisuals = new WorldVisuals(GraphicsDevice, batch);
+        worldVisuals = new WorldVisuals(GraphicsDevice, batch, SetMessage);
         surface.ConfigureResidentFactory((configuration, state) =>
         {
             particleRenderer.PrepareResident();
