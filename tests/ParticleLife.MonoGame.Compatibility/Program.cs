@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using ParticleLife.Core.Experiments;
@@ -323,10 +324,11 @@ Require(presentedActions == 2, "Keyboard opening discarded the first fresh point
 // A held Files press must not activate the newly opened compact library. Then exercise
 // its current keyboard Save pattern workflow, including scrolling a short modal.
 string modalDirectory = Path.GetFullPath(Path.Combine("artifacts", "modal-pointer-check", Guid.NewGuid().ToString("N")));
+Directory.CreateDirectory(modalDirectory);
 using (PlaybackController modalPlayback = new(PresetGenerator.Create(PresetKind.Random, 4, 2, 31)))
 {
     ExperimentEditor modalEditor = new(modalPlayback);
-    LiveExperimentEditor modalSurface = new(modalEditor, modalDirectory, _ => { }, () => { });
+    using LiveExperimentEditor modalSurface = new(modalEditor, modalDirectory, _ => { }, () => { });
     Rectangle smallInspector = new(14, 165, 392, 121);
     Rectangle smallBrowser = new(14, 60, 392, 264);
     Point filesAndSave = new(330, 218);
@@ -351,6 +353,17 @@ using (PlaybackController modalPlayback = new(PresetGenerator.Create(PresetKind.
     }
     modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
         [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
+    // File encoding/publication is asynchronous. Closing the modal must not strand completion.
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+        [UiInputEvent.KeyPress(Keys.Escape, false, false)]);
+    Require(!modalSurface.IsModal, "The library did not close while its save completed in the background.");
+    long saveStarted = Stopwatch.GetTimestamp();
+    while (Directory.GetFiles(modalDirectory, "*.discovery.json").Length == 0
+        && Stopwatch.GetElapsedTime(saveStarted).TotalSeconds < 10)
+    {
+        modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
+        Thread.Sleep(1);
+    }
     Require(Directory.GetFiles(modalDirectory, "*.experiment.json").Length == 1
         && Directory.GetFiles(modalDirectory, "*.viewer.json").Length == 1
         && Directory.GetFiles(modalDirectory, "*.discovery.json").Length == 1,

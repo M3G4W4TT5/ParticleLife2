@@ -12,7 +12,7 @@ namespace ParticleLife.MonoGame.Editor;
 /// <summary>Connects retained native controls to the shared, graphics-free experiment editor.</summary>
 /// <remarks>Owns only UI drafts and selection. The controller validates and owns numerical changes,
 /// undo payloads and replay events. Draw never edits a model or retains a state observation.</remarks>
-internal sealed class LiveExperimentEditor
+internal sealed class LiveExperimentEditor : IDisposable
 {
     private readonly EditorSession editor;
     private readonly UiPanel panel;
@@ -615,6 +615,7 @@ internal sealed class LiveExperimentEditor
         IReadOnlyList<UiInputEvent> input, bool pointerControl = false, bool pointerShift = false)
     {
         editor.Pump();
+        browser.Pump();
         if (editor.IsBackground)
         {
             bool replaying = editor.IsReplaying;
@@ -694,6 +695,9 @@ internal sealed class LiveExperimentEditor
         panel.ClearFocus();
         editor.EndGesture();
     }
+
+    /// <summary>Finishes dispatched file writes and cancels library scanning before graphics/owner shutdown.</summary>
+    public void Dispose() => browser.Dispose();
 
     internal void OpenFiles()
     {
