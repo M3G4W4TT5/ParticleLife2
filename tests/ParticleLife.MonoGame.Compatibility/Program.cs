@@ -233,6 +233,20 @@ choicePanel.Update(MouseAt(stationaryPointer, wheel: 120), 1, []);
 choicePanel.Update(MouseAt(stationaryPointer, wheel: 120), 1, [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
 Require(selectedOption == 17, "A stationary pointer overrode keyboard dropdown navigation.");
 
+// A compact menu must never put an option underneath the host's title-bar close icon.
+int compactSelection = 0;
+UiDropdown compactChoice = new("Choice", Enumerable.Range(0, 18).Select(index => $"Option {index}").ToArray(),
+    () => compactSelection, index => compactSelection = index);
+UiPanel compactChoices = new(_ => { });
+compactChoices.Toolbar.Add(new UiButton(() => "Toolbar", () => { }));
+compactChoices.Content.Add(compactChoice);
+compactChoices.Arrange(new Rectangle(10, 10, 350, 140));
+Click(compactChoices, compactChoice.Bounds.Center);
+Require(compactChoice.IsOpen && compactChoice.PopupBounds.Top >= compactChoices.Bounds.Y + 34,
+    "A compact dropdown covered the title close control.");
+Click(compactChoices, new Point(compactChoices.Bounds.Right - 20, compactChoices.Bounds.Y + 16));
+Require(!compactChoice.IsOpen && compactSelection == 0, "A title-bar click selected a hidden menu option.");
+
 // A dropdown cannot bypass an invalid numeric draft when focus changes.
 UiPanel guardedChoices = new(_ => { });
 guardedChoices.Content.Add(number);

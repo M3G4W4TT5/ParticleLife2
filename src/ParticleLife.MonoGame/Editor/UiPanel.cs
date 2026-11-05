@@ -296,7 +296,8 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         {
             if (widget is UiDropdown dropdown)
             {
-                dropdown.ArrangePopup(Bounds);
+                // Keep menus below the title and its host-owned close affordance.
+                dropdown.ArrangePopup(new Rectangle(Bounds.X, Bounds.Y + 34, Bounds.Width, Math.Max(1, Bounds.Height - 34)));
             }
         }
     }

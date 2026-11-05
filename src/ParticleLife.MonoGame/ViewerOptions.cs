@@ -112,9 +112,9 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
             [--preset NAME] [--particles N] [--species N] [--seed 1]
             [--paused] [--sample-every 144] [--save-dir artifacts/viewer] [--backend direct|grid] [--workers 1]
 
-        The editor opens beside the simulation. Expand a section and scroll to its controls.
+        The inspector opens beside the simulation. Model, World and View group its controls.
         Click a numeric value, type, then Enter to apply; Esc cancels a draft. Tab navigates.
-        Drag sliders for live edits; one drag is one Undo operation. R beside a slider resets
+        Drag labels/sliders for live edits; one drag is one Undo operation. The reset arrow resets
         that value. Invalid/partial text never changes the simulation. Hover for explanations.
 
         Space     Pause/resume                 N / Right   One step, then pause
@@ -122,7 +122,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         M         Randomize matrix, new seed   1 / 2 / 3   Random / chains / snakes matrix live
         S / O     Open save/load file library  E           Hide/show editor
         Ctrl+Z/Y  Undo/redo editor changes      F5          Reload startup file or open library
-        D         Toggle sampled diagnostics   H / F1      Toggle keyboard hints
+        D         Toggle sampled diagnostics   H / F1      Open/close Help
         Esc       Cancel field/modal or quit   F9          Print separated viewer timings
 
         Shortcuts do not fire while a control has keyboard focus. Click the world to return

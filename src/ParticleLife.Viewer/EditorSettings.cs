@@ -81,10 +81,10 @@ public sealed record AppearanceSettings
     /// <summary>Gets whether sampled diagnostics are visible; visibility does not enable sampling.</summary>
     public bool ShowDiagnostics { get; init; } = true;
 
-    /// <summary>Gets whether keyboard and interaction help is visible.</summary>
-    public bool ShowHelp { get; init; } = true;
+    /// <summary>Gets whether the keyboard and interaction help panel is open; hidden by default.</summary>
+    public bool ShowHelp { get; init; }
 
-    /// <summary>Gets whether the simulation status overlay is visible.</summary>
+    /// <summary>Gets whether simulation status is shown in the statistics rail.</summary>
     public bool ShowOverlay { get; init; } = true;
 
     /// <summary>Gets whether the editor panel is visible.</summary>

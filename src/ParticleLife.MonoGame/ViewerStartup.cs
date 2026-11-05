@@ -11,7 +11,7 @@ internal sealed record ViewerStartup(ExperimentEditor Editor, string Message)
 {
     internal static ViewerStartup Create(ViewerOptions options)
     {
-        string message = "Live experiment editor | Expand a section to explore | S opens save/load library";
+        string message = "Particle Life 2";
         bool paused = options.Paused;
         if (options.InputPath is not null)
         {
@@ -32,7 +32,7 @@ internal sealed record ViewerStartup(ExperimentEditor Editor, string Message)
         PresetInfo recipe = PresetCatalog.Get(options.Preset);
         string label = recipe.Name + (recipe.IsExperimental ? " (experimental)" : "");
         message = options.InputPath is null
-            ? $"{label} | Built-in recipes offers more starting points | S opens save/load library"
+            ? $"{label} / {options.Particles} particles / seed {options.Seed}"
             : message + $" Fallback: {label}.";
         PlaybackController playback = new(options.CreateDefaultExperiment(), diagnosticEverySteps: options.SampleEvery);
         try
