@@ -21,6 +21,14 @@ public sealed class PreparedDiscoverySave
         DiscoveryLibrary.Validate(this.metadata);
     }
 
+    /// <summary>Declares whether preparing this save needs the current resident state rather than immutable settings/baseline.</summary>
+    /// <param name="kind">Explicit save purpose.</param><returns>True for current patterns and terminal session captures.</returns>
+    public static bool RequiresCurrentCapture(DiscoveryKind kind)
+    {
+        if (!Enum.IsDefined(kind)) { throw new ArgumentOutOfRangeException(nameof(kind)); }
+        return kind is DiscoveryKind.Pattern or DiscoveryKind.Session or DiscoveryKind.CapturedSession;
+    }
+
     /// <summary>Serializes and exclusively writes captured values; library metadata failure is a warning after success.</summary>
     /// <param name="path">New explicit destination.</param><returns>Actual successful publication and optional metadata warning.</returns>
     public DiscoveryFileOutcome Write(string path)
@@ -43,7 +51,11 @@ public enum DiscoveryLoadAction
     /// <summary>Prepares a generated preset population on the worker before owner publication.</summary>
     PresetNew,
     /// <summary>Parses a preset for explicit component/alignment review, without any application.</summary>
-    ReviewPreset
+    ReviewPreset,
+    /// <summary>Restores exact stored terminal values/history on CPU without repeating numerical actions.</summary>
+    RestoreCapturedState,
+    /// <summary>Explicitly re-simulates captured-session actions on CPU; it does not restore the saved GPU trajectory.</summary>
+    ResimulateCapturedOnCpu
 }
 
 /// <summary>Owns a parsed immutable file action ready for completed-boundary owner publication.</summary>
@@ -52,12 +64,21 @@ public enum DiscoveryLoadAction
 public sealed class PreparedDiscoveryLoad
 {
     private readonly Action<ExperimentEditor> apply;
-    internal PreparedDiscoveryLoad(Action<ExperimentEditor> apply, PresetDefinition? preset = null)
+    internal PreparedDiscoveryLoad(Action<ExperimentEditor> apply, PresetDefinition? preset = null, string? notice = null)
     {
-        this.apply = apply; Preset = preset;
+        this.apply = apply; Preset = preset; Notice = notice;
     }
     /// <summary>Gets a parsed immutable source preset for review, or null for state/session files.</summary>
     public PresetDefinition? Preset { get; }
+    /// <summary>Gets the explicit restore/re-simulation policy displayed after owner publication, or null for ordinary files.</summary>
+    public string? Notice { get; }
+    /// <summary>Declares the current-resident capture needed before publishing an explicit file action.</summary>
+    /// <param name="action">Prepared action.</param><returns>True for action replay's CPU transfer and live preset world mapping; stored-state restore needs no old-state readback.</returns>
+    public static bool RequiresCurrentCapture(DiscoveryLoadAction action)
+    {
+        if (!Enum.IsDefined(action)) { throw new ArgumentOutOfRangeException(nameof(action)); }
+        return action is DiscoveryLoadAction.ReplayActions or DiscoveryLoadAction.ResimulateCapturedOnCpu or DiscoveryLoadAction.PresetLive;
+    }
     /// <summary>Publishes only on the editor owner at a completed boundary; this operation performs no file I/O.</summary>
     /// <param name="editor">Exclusive active editor owner.</param>
     public void Apply(ExperimentEditor editor)

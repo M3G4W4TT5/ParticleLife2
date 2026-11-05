@@ -744,7 +744,7 @@ internal sealed partial class ParticleLifeGame : Game
         batch.End();
         GraphicsDevice.ScissorRectangle = Rectangle.Intersect(worldBounds, GraphicsDevice.Viewport.Bounds);
         if (resident is null) { ObserveWorld(state!); }
-        else { InvalidatePreviousDiscovery(editor.Publication.BaselineVersion); }
+        else { ObserveResidentWorld(resident as IResidentSpatialObservation); }
         DrawObservation(transform);
         AppearanceSettings appearance = editor.Appearance;
         bool effects = worldVisuals!.Begin(scene!, appearance);

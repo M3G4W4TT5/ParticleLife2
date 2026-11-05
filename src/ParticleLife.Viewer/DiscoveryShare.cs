@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Security.Cryptography;
 using ParticleLife.Core.Experiments;
+using ParticleLife.Core.Execution;
 
 namespace ParticleLife.Viewer;
 
@@ -162,7 +163,13 @@ public sealed partial class ExperimentEditor
             if (companion is not null) { throw new ArgumentException("A preset cannot carry a scientific viewer companion."); }
             return DiscoveryKind.Preset;
         }
-        if (root.TryGetProperty("format", out JsonElement format) && format.GetString() == SessionFile.Format)
+        if (root.TryGetProperty("format", out JsonElement format) && format.GetString() == ExecutionCaptureFile.Format)
+        {
+            CapturedSessionDefinition captured = ExecutionCaptureFile.Deserialize(content);
+            species = captured.TerminalCapture.Configuration.Matrix.SpeciesCount;
+            kind = DiscoveryKind.CapturedSession;
+        }
+        else if (root.TryGetProperty("format", out format) && format.GetString() == SessionFile.Format)
         {
             SessionDefinition session = SessionFile.Deserialize(content);
             species = session.Events.Count == 0 ? session.InitialExperiment.Matrix.SpeciesCount : session.Events[^1].Configuration.Matrix.SpeciesCount;

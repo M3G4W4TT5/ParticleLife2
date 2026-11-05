@@ -7,9 +7,21 @@ using ParticleLife.Core.State;
 using ParticleLife.MonoGame.Editor;
 using ParticleLife.Viewer;
 
+if (args.Length == 1 && args[0] == "--gpu-measurement-checks")
+{
+    GpuMeasurementChecks.Run();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--save-worker")
 {
     Environment.ExitCode = StorageChecks.RunWorker(args);
+    return;
+}
+
+if (args.Length > 0 && args[0] == "--replay-completion-checks")
+{
+    ReplayCompletionChecks.Run();
     return;
 }
 
@@ -19,6 +31,7 @@ Vector2 displayPosition = new((float)position.X, (float)position.Y);
 Console.WriteLine($"Core net10.0 / MonoGame {typeof(Game).Assembly.GetName().Version}: {displayPosition}");
 RenderingChecks.Run();
 GuidanceChecks.Run();
+GpuMeasurementChecks.Run();
 
 // Exercise the real native numeric widget against the actual editor without creating a Game,
 // SDL window, texture or graphics device. These checks complement native interaction checks.
@@ -443,6 +456,7 @@ Require(editor.Configuration.Matrix.SpeciesCount == 2 && recipePanel.Graph is no
     "Native recipe switch failed to refresh the smaller matrix.");
 Console.WriteLine("Native widget integration: compact exact input, dropdown routing, validation, live slider/replay/undo, matrix navigation and built-in recipes passed without graphics.");
 StartupChecks.Run();
+ReplayCompletionChecks.Run();
 await StorageChecks.RunAsync();
 
 static MouseState MouseAt(Point point, bool pressed = false, int wheel = 0) => new(point.X, point.Y, wheel,

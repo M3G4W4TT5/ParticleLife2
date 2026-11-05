@@ -16,6 +16,7 @@ internal sealed unsafe class GpuWorkspace : IDisposable
     internal readonly int Count, BucketCount;
     internal readonly uint[] ScanSums, ScanOffsets, Summaries;
     internal readonly int[] ScanCounts, SummaryCounts;
+    internal long RetainedBytes { get; private set; }
 
     internal GpuWorkspace(GpuComputeApi api, ReadOnlySpan<GpuParticle> particles)
     {
@@ -88,6 +89,7 @@ internal sealed unsafe class GpuWorkspace : IDisposable
     {
         uint buffer = api.CreateBuffer(checked((nint)bytes), data);
         owned.Add(buffer);
+        RetainedBytes += bytes;
         return buffer;
     }
 

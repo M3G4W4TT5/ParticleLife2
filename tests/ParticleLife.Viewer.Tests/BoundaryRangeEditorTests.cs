@@ -146,6 +146,38 @@ public sealed class BoundaryRangeEditorTests
         Assert.Equal(71, controller.Observe().Ids[0]);
     }
 
+    [Theory]
+    [InlineData(BoundaryKind.Periodic, 0.9, 0.1, 0.2, 0.3)]
+    [InlineData(BoundaryKind.Reflecting, 0.1, 0.9, -0.2, -0.3)]
+    public void CompleteLivePresetMapsWorldAsOneRecordedUndoableAction(BoundaryKind boundary,
+        double x, double y, double vx, double vy)
+    {
+        ExperimentDefinition source = new("off-world preset", new ModelParameters { Boundary = BoundaryKind.Open, ForceScale = 0 },
+            new InteractionMatrix(1, [0]), new ParticleSnapshot([71], [new(-0.1, 1.1)], [new(0.2, 0.3)], [0]),
+            1.0 / 144, new GeneratorMetadata("test", "1", null, "test"));
+        using PlaybackController controller = new(source, diagnosticEverySteps: 0);
+        ExperimentEditor editor = new(controller);
+        SimulationConfiguration bounded = new(source.Parameters with { Boundary = boundary }, source.Matrix, source.TimeStep);
+        PresetDefinition preset = new("bounded preset", bounded, [1], editor.Generation,
+            editor.Appearance with { ParticleRadius = 4 }, PlaybackSettings.Capture(controller));
+        editor.ApplyPreset(preset, generatePopulation: false);
+        ParticleStateView state = controller.Observe();
+        Assert.InRange(Math.Abs(state.Positions[0].X - x), 0, 1e-14);
+        Assert.InRange(Math.Abs(state.Positions[0].Y - y), 0, 1e-14);
+        Assert.Equal(new Vector2d(vx, vy), state.Velocities[0]);
+        Assert.Equal(4, editor.Appearance.ParticleRadius);
+        SessionDefinition recorded = editor.CaptureSession("preset mapping");
+        Assert.Single(recorded.Events);
+        using Simulation replay = SessionReplay.Replay(recorded);
+        Assert.Equal(state.Positions.ToArray(), replay.Observe().Positions.ToArray());
+        controller.SingleStep();
+        editor.Undo();
+        Assert.Equal(BoundaryKind.Open, controller.Configuration.Parameters.Boundary);
+        Assert.Equal(source.InitialState.Positions.ToArray(), controller.Observe().Positions.ToArray());
+        Assert.Equal(source.InitialState.Velocities.ToArray(), controller.Observe().Velocities.ToArray());
+        Assert.Equal(1, controller.Observe().Step);
+    }
+
     [Fact]
     public void CoefficientEditsAndPopulationResizeRetainExistingPairRanges()
     {
