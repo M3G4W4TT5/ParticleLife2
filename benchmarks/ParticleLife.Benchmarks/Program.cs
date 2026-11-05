@@ -3,6 +3,37 @@ using ParticleLife.Benchmarks;
 
 try
 {
+    if (args.Length > 0 && args[0] == "prepare-p2")
+    {
+        if (args.Length != 3)
+        {
+            throw new ArgumentException("Use prepare-p2 fresh-output-directory saved-input.json.");
+        }
+        P2Candidates.Prepare(args[1], args[2]);
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "measure-p2")
+    {
+        if (args.Length != 6)
+        {
+            throw new ArgumentException("Use measure-p2 output.json input.json workers static|evolving samples.");
+        }
+        P2Runner.Run(args[1], args[2], int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture),
+            args[4], int.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture));
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "profile-p2")
+    {
+        if (args.Length != 4)
+        {
+            throw new ArgumentException("Use profile-p2 output.json input.json samples.");
+        }
+        P2Candidates.Run(args[1], args[2], int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture));
+        return 0;
+    }
+
     if (args.Length > 0 && args[0] == "prepare-p1")
     {
         if (args.Length is < 2 or > 3)
@@ -135,6 +166,9 @@ try
     }
 
     Console.WriteLine("Particle Life CPU benchmarks (run Release without a debugger)");
+    Console.WriteLine("  prepare-p2 fresh-output-directory saved-input.json");
+    Console.WriteLine("  measure-p2 output.json input.json workers static|evolving samples");
+    Console.WriteLine("  profile-p2 output.json input.json samples");
     Console.WriteLine("  prepare-p1 input-directory [screen|density|ladder|stress|stretch|all|case]");
     Console.WriteLine("  measure-p1 output-directory input-directory [screen|density|ladder|stress|stretch|all|case] [samples >= 5] [timeout-seconds] [workers] [evolving|static]");
     Console.WriteLine("  editor output-directory input-experiment.json [samples >= 20]");

@@ -33,6 +33,15 @@ internal sealed class HelpLegend
             ("Arrow keys", "Navigate matrix cells or menu options"),
             ("Scroll", "Scroll the inspector or open dropdown"),
             ("Drag panel edge", "Resize inspector width in wide windows")]);
+        Add("Camera and canvas", [
+            ("Wheel on canvas", "Zoom around the pointer"), ("Middle / right drag", "Pan the view"),
+            ("V", "Fit the nominal world"), ("World > Camera", "Exact zoom/centre, smoothing and size units"),
+            ("Particles > Brushes", "Choose move/add/paint/erase/force tools"),
+            ("Left drag canvas", "Apply the selected live brush"), ("Escape in gesture", "Stop; Ctrl+Z undoes applied edits")]);
+        Add("Directed matrix", [
+            ("Drag cells", "Select a rectangle"), ("Ctrl+click", "Toggle cells or add a header selection"),
+            ("Shift+click/arrows", "Extend selection from its anchor"), ("Click row/column", "Select a whole directed row/column"),
+            ("Shift+header", "Open that species colour picker"), ("Ctrl+A / C / V", "Select all / copy full matrix / validate paste")]);
         panel.Content.Add(new UiLabel(() => "Focused controls capture simulation shortcuts. Hover a control for its units, range and meaning.", 40));
     }
 

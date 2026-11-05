@@ -263,7 +263,9 @@ public sealed class EditorSession : IDisposable
         appearanceFields |= Changed(settings.ParticleRadius != before.ParticleRadius, 0)
             | Changed(settings.ShowDiagnostics != before.ShowDiagnostics, 1) | Changed(settings.ShowHelp != before.ShowHelp, 2)
             | Changed(settings.ShowOverlay != before.ShowOverlay, 3) | Changed(settings.ShowEditor != before.ShowEditor, 4)
-            | Changed(settings.UiScale != before.UiScale, 5) | Changed(!settings.SpeciesColors.SequenceEqual(before.SpeciesColors), 6);
+            | Changed(settings.UiScale != before.UiScale, 5) | Changed(!settings.SpeciesColors.SequenceEqual(before.SpeciesColors), 6)
+            | Changed(settings.Camera != before.Camera, 7) | Changed(settings.ParticleSizeMode != before.ParticleSizeMode, 8)
+            | Changed(settings.WorldParticleRadius != before.WorldParticleRadius, 9);
         int fields = appearanceFields;
         requestedAppearance = settings;
         appearanceTask = Run("Appearance", editor =>
@@ -278,7 +280,10 @@ public sealed class EditorSession : IDisposable
                 ShowHelp = Has(fields, 2) ? settings.ShowHelp : current.ShowHelp,
                 ShowOverlay = Has(fields, 3) ? settings.ShowOverlay : current.ShowOverlay,
                 ShowEditor = Has(fields, 4) ? settings.ShowEditor : current.ShowEditor,
-                UiScale = Has(fields, 5) ? settings.UiScale : current.UiScale
+                UiScale = Has(fields, 5) ? settings.UiScale : current.UiScale,
+                Camera = Has(fields, 7) ? settings.Camera : current.Camera,
+                ParticleSizeMode = Has(fields, 8) ? settings.ParticleSizeMode : current.ParticleSizeMode,
+                WorldParticleRadius = Has(fields, 9) ? settings.WorldParticleRadius : current.WorldParticleRadius
             });
         }, previewKey: "appearance");
     }
@@ -329,6 +334,14 @@ public sealed class EditorSession : IDisposable
     public void Redo() => Run("Redo", editor => editor.Redo());
     /// <summary>Queues explicit resampling at the current completed boundary.</summary>
     public void ResampleParticles() => Run("Resample particles", editor => editor.ResampleParticles());
+    /// <summary>Begins an ordered direct-tool gesture at an actual world position.</summary>
+    /// <param name="settings">Settings captured for the whole stroke.</param><param name="point">World-space start.</param>
+    public void BeginBrushStroke(BrushSettings settings, Core.State.Vector2d point) => Run("Begin brush stroke", editor => editor.BeginBrushStroke(settings, point));
+    /// <summary>Submits a coalescible unapplied pointer sample; each executed sample retains an actual replay event.</summary>
+    /// <param name="point">World-space pointer position.</param>
+    public void ApplyBrushSample(Core.State.Vector2d point) => Run("Brush sample", editor => editor.ApplyBrushSample(point), previewKey: "brush");
+    /// <summary>Ends the brush undo group after all prior actual samples.</summary>
+    public void EndBrushStroke() => Run("End brush stroke", editor => editor.EndBrushStroke());
     /// <summary>Queues an explicitly new generated experiment.</summary>
     /// <param name="kind">Matrix template.</param><param name="name">Experiment name.</param>
     public void NewExperiment(PresetKind kind, string name) => Run("New experiment", editor =>

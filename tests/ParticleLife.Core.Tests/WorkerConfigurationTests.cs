@@ -11,6 +11,8 @@ public sealed class WorkerConfigurationTests
     [InlineData(2)]
     [InlineData(4)]
     [InlineData(8)]
+    [InlineData(12)]
+    [InlineData(24)]
     public void WorkerSelectionRoundTripsAndCreatesMatchingSimulation(int workers)
     {
         ExperimentDefinition initial = PresetGenerator.Create(PresetKind.Random, 12, 3, 19,
@@ -44,7 +46,7 @@ public sealed class WorkerConfigurationTests
     [Theory]
     [InlineData(ForceBackend.Direct, 2)]
     [InlineData(ForceBackend.UniformGrid, 0)]
-    [InlineData(ForceBackend.UniformGrid, 9)]
+    [InlineData(ForceBackend.UniformGrid, 65)]
     public void InvalidWorkerSettingsAreRejectedAtExperimentBoundary(ForceBackend backend, int workers)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => PresetGenerator.Create(PresetKind.Random,
