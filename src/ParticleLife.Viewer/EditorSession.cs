@@ -205,7 +205,8 @@ public sealed class EditorSession : IDisposable
             | Changed(settings.ShowOverlay != before.ShowOverlay, 3) | Changed(settings.ShowEditor != before.ShowEditor, 4)
             | Changed(settings.UiScale != before.UiScale, 5) | Changed(!settings.SpeciesColors.SequenceEqual(before.SpeciesColors), 6)
             | Changed(settings.Camera != before.Camera, 7) | Changed(settings.ParticleSizeMode != before.ParticleSizeMode, 8)
-            | Changed(settings.WorldParticleRadius != before.WorldParticleRadius, 9);
+            | Changed(settings.WorldParticleRadius != before.WorldParticleRadius, 9)
+            | Changed(settings.Visuals != before.Visuals, 10);
         int fields = appearanceFields;
         requestedAppearance = settings;
         appearanceTask = Run("Appearance", editor =>
@@ -223,7 +224,8 @@ public sealed class EditorSession : IDisposable
                 UiScale = Has(fields, 5) ? settings.UiScale : current.UiScale,
                 Camera = Has(fields, 7) ? settings.Camera : current.Camera,
                 ParticleSizeMode = Has(fields, 8) ? settings.ParticleSizeMode : current.ParticleSizeMode,
-                WorldParticleRadius = Has(fields, 9) ? settings.WorldParticleRadius : current.WorldParticleRadius
+                WorldParticleRadius = Has(fields, 9) ? settings.WorldParticleRadius : current.WorldParticleRadius,
+                Visuals = Has(fields, 10) ? settings.Visuals : current.Visuals
             });
         }, previewKey: "appearance");
     }
@@ -364,7 +366,7 @@ public sealed class EditorSession : IDisposable
             editor.Playback.AccumulationFallbackSteps, editor.Playback.LastStatistics, editor.Playback.LatestDiagnostic,
             editor.Playback.DroppedPlaybackSeconds, editor.IsReplaying, editor.ReplayCompletedStep,
             editor.ReplayTerminalStep, 0, null, 0, 0)
-        { Recording = editor.Recording };
+        { Recording = editor.Recording, BaselineVersion = editor.BaselineVersion };
     }
     /// <summary>Retains fields touched by any unapplied preview, including a drag returning to its starting value.</summary>
     private static int Changed(bool changed, int bit) => changed ? 1 << bit : 0;

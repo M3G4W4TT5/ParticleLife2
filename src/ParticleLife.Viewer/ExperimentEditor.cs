@@ -59,6 +59,10 @@ public sealed partial class ExperimentEditor
     /// <summary>Gets a change counter for UI cache invalidation; completed numerical steps do not increment it.</summary>
     public long Revision { get; private set; }
 
+    /// <summary>Gets the baseline epoch, incremented by successful reset, replacement, restore or completed replay.</summary>
+    /// <remarks>Presentation caches use this explicit boundary even when both states have the same clock and configuration.</remarks>
+    public long BaselineVersion { get; private set; }
+
     /// <summary>Gets whether at least one completed editor operation can be undone.</summary>
     public bool CanUndo => historyPosition > 0 || gestureChanged || brushStroke?.Changed == true;
 
@@ -618,6 +622,7 @@ public sealed partial class ExperimentEditor
 
     private void ClearTimeline()
     {
+        BaselineVersion++;
         events.Clear();
         recordedBytes = 0;
         evictedUndoActions = 0;
@@ -655,6 +660,7 @@ public sealed partial class ExperimentEditor
         && left.ShowHelp == right.ShowHelp && left.ShowOverlay == right.ShowOverlay
         && left.ShowEditor == right.ShowEditor && left.UiScale == right.UiScale
         && left.ParticleSizeMode == right.ParticleSizeMode && left.WorldParticleRadius == right.WorldParticleRadius && left.Camera == right.Camera
+        && left.Visuals == right.Visuals
         && left.SpeciesColors.SequenceEqual(right.SpeciesColors);
 
     private static bool SameState(ParticleSnapshot left, ParticleStateView right) =>

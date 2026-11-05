@@ -9,9 +9,10 @@ internal static class RenderingChecks
 {
     internal static void Run()
     {
-        Require(Marshal.SizeOf<ParticleDisplayVertex>() == 12
-            && Marshal.OffsetOf<ParticleDisplayVertex>(nameof(ParticleDisplayVertex.Species)).ToInt32() == 8,
-            "Native particle vertex layout no longer matches its two attributes.");
+        Require(Marshal.SizeOf<ParticleDisplayVertex>() == 20
+            && Marshal.OffsetOf<ParticleDisplayVertex>(nameof(ParticleDisplayVertex.Species)).ToInt32() == 8
+            && Marshal.OffsetOf<ParticleDisplayVertex>(nameof(ParticleDisplayVertex.VelocityX)).ToInt32() == 12,
+            "Native particle vertex layout no longer matches its three attributes.");
 
         // Normalized display packing must keep ordinary visible geometry in both extreme finite worlds.
         foreach (double extent in new[] { 1.0, 1e-200, 1e200 })
@@ -53,13 +54,29 @@ internal static class RenderingChecks
         Require(!new ParticleDisplayTransform(1, 1e9, 0, 800, 800).SupportsFloatDisplay(1),
             "A camera with excessive float cancellation did not request double-mapped rendering.");
 
+        Vector2d[] extremeVelocities = [new(1e300, 1e200), new(1e-200, -1e-200)];
+        ParticleDisplayVertex[] velocityPacked = new ParticleDisplayVertex[extremeVelocities.Length];
+        ParticleDisplayData.Pack([new(0.25, 0.25), new(0.75, 0.75)], [0, 1], 1, velocityPacked, extremeVelocities);
+        for (int index = 0; index < extremeVelocities.Length; index++)
+        {
+            ParticleDisplayVertex point = velocityPacked[index];
+            Require(float.IsFinite(point.VelocityX) && float.IsFinite(point.VelocityY) && point.VelocityX > 0,
+                "Extreme finite CPU velocity produced unusable display components.");
+            double expectedAngle = Math.Atan2(extremeVelocities[index].Y, extremeVelocities[index].X);
+            double actualAngle = Math.Atan2(point.VelocityY, point.VelocityX);
+            Require(Math.Abs(expectedAngle - actualAngle) < 1e-6,
+                "Extreme display velocity packing changed its direction colour.");
+        }
+        Require(extremeVelocities[0] == new Vector2d(1e300, 1e200) && extremeVelocities[1] == new Vector2d(1e-200, -1e-200),
+            "Display velocity packing modified source CPU state.");
+
         Rectangle clip = new(20, 30, 100, 80);
         Require(ParticleDisplayData.IsVisible(new(18, 60), clip, 3),
             "A particle whose disc crosses the clip edge was incorrectly hidden by centre-only culling.");
         Require(!ParticleDisplayData.IsVisible(new(16, 60), clip, 3)
             && !ParticleDisplayData.IsVisible(new(double.PositiveInfinity, 60), clip, 3),
             "Fully offscreen or unrepresentable raster geometry was not culled.");
-        Console.WriteLine("Bulk renderer managed checks: layout, normal/extreme worlds, camera-only mapping, integer species and display clipping passed.");
+        Console.WriteLine("Bulk renderer managed checks: layout, normal/extreme worlds and velocities, camera-only mapping, integer species and display clipping passed.");
     }
 
     private static void Require(bool condition, string message)

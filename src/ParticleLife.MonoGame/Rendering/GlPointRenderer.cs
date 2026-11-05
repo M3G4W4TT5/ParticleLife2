@@ -15,7 +15,7 @@ internal sealed unsafe class GlPointRenderer : IDisposable
     private readonly GraphicsDevice device;
     private readonly OpenGlDrawApi gl;
     private uint vertexBuffer, vertexArray, paletteBuffer, paletteTexture, program;
-    private readonly int cameraUniform, diameterUniform, paletteUniform, paletteCountUniform;
+    private readonly int cameraUniform, diameterUniform, paletteUniform, paletteCountUniform, visualUniform;
     private ParticleDisplayVertex[] staging = [];
     private uint[] palette = [], paletteRgba = [];
     private long packedSequence = -1, uploadedSequence = -1;
@@ -37,7 +37,8 @@ internal sealed unsafe class GlPointRenderer : IDisposable
             diameterUniform = gl.GetUniformLocation(program, "diameter");
             paletteUniform = gl.GetUniformLocation(program, "palette");
             paletteCountUniform = gl.GetUniformLocation(program, "paletteCount");
-            if (cameraUniform < 0 || diameterUniform < 0 || paletteUniform < 0 || paletteCountUniform < 0)
+            visualUniform = gl.GetUniformLocation(program, "visual");
+            if (cameraUniform < 0 || diameterUniform < 0 || paletteUniform < 0 || paletteCountUniform < 0 || visualUniform < 0)
             {
                 throw new InvalidOperationException("The native particle shader is missing an expected presentation uniform.");
             }
@@ -51,6 +52,8 @@ internal sealed unsafe class GlPointRenderer : IDisposable
             gl.VertexAttribPointer(0, 2, 0x1406, 0, sizeof(ParticleDisplayVertex), 0);
             gl.EnableVertexAttribArray(1);
             gl.VertexAttribIPointer(1, 1, 0x1405, sizeof(ParticleDisplayVertex), 8);
+            gl.EnableVertexAttribArray(2);
+            gl.VertexAttribPointer(2, 2, 0x1406, 0, sizeof(ParticleDisplayVertex), 12);
             gl.BindBuffer(OpenGlDrawApi.ArrayBuffer, paletteBuffer);
             uint initialColour = uint.MaxValue;
             gl.BufferData(OpenGlDrawApi.ArrayBuffer, sizeof(uint), &initialColour, 0x88E8);
@@ -103,7 +106,7 @@ internal sealed unsafe class GlPointRenderer : IDisposable
             {
                 staging = new ParticleDisplayVertex[frame.Count];
             }
-            normalizedMagnitude = ParticleDisplayData.Pack(frame.Positions, frame.Species, mapping.Extent, staging);
+            normalizedMagnitude = ParticleDisplayData.Pack(frame.Positions, frame.Species, mapping.Extent, staging, frame.Velocities);
             packedSequence = frame.Sequence;
             packedCount = frame.Count;
         }
@@ -173,6 +176,8 @@ internal sealed unsafe class GlPointRenderer : IDisposable
             gl.Uniform1f(diameterUniform, diameter);
             gl.Uniform1i(paletteUniform, 0);
             gl.Uniform1i(paletteCountUniform, palette.Length);
+            gl.Uniform4f(visualUniform, (float)appearance.Visuals.Opacity, (float)appearance.Visuals.Velocity,
+                (float)appearance.Visuals.SpeedScale, 0);
             gl.Viewport(state.Viewport.X - margin, state.Viewport.Y - margin, (int)expandedWidth, (int)expandedHeight);
             int scissorY = renderTarget ? clip.Y : device.PresentationParameters.BackBufferHeight - clip.Bottom;
             gl.Scissor(clip.X, scissorY, clip.Width, clip.Height);
@@ -182,7 +187,7 @@ internal sealed unsafe class GlPointRenderer : IDisposable
             gl.Enable(OpenGlDrawApi.ProgramPointSize);
             gl.Enable(OpenGlDrawApi.Blend);
             gl.BlendEquationSeparate(0x8006, 0x8006);
-            gl.BlendFuncSeparate(1, 0x0303, 1, 0x0303);
+            gl.BlendFuncSeparate(1, appearance.Visuals.Blend == ParticleBlend.Additive ? 1u : 0x0303u, 1, 0x0303);
             gl.DrawArrays(0, 0, frame.Count);
             gl.Check("submitting bulk particle drawing");
         }
@@ -231,27 +236,41 @@ internal sealed unsafe class GlPointRenderer : IDisposable
         #version 330
         layout(location = 0) in vec2 position;
         layout(location = 1) in uint species;
+        layout(location = 2) in vec2 velocity;
         uniform vec4 camera;
         uniform float diameter;
         flat out uint particleSpecies;
+        flat out vec2 particleVelocity;
         void main() {
             gl_Position = vec4(position * camera.xy + camera.zw, 0.0, 1.0);
             gl_PointSize = diameter;
             particleSpecies = species;
+            particleVelocity = velocity;
         }
         """;
 
     private const string FragmentSource = """
         #version 330
         flat in uint particleSpecies;
+        flat in vec2 particleVelocity;
         uniform samplerBuffer palette;
         uniform int paletteCount;
         uniform float diameter;
+        uniform vec4 visual;
         out vec4 colour;
         void main() {
             float distanceFromCentre = length(gl_PointCoord * 2.0 - 1.0);
             float coverage = clamp((1.0 - distanceFromCentre) * diameter * 0.5, 0.0, 1.0);
             vec3 rgb = texelFetch(palette, int(particleSpecies % uint(paletteCount))).rgb;
+            float speed = min(1.0, length(min(vec2(1.0), abs(particleVelocity) / visual.z)));
+            if (visual.y > 0.5 && visual.y < 1.5) rgb *= 0.2 + 0.8 * speed;
+            if (visual.y > 1.5) {
+                float angle = all(equal(particleVelocity, vec2(0.0))) ? 0.0 : atan(particleVelocity.y, particleVelocity.x);
+                float hue = visual.y < 2.5 ? (1.0 - speed) * 2.0 / 3.0
+                    : (angle + 3.14159265359) / 6.28318530718;
+                rgb = clamp(abs(fract(hue + vec3(0.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+            }
+            coverage *= visual.x;
             colour = vec4(rgb * coverage, coverage);
         }
         """;

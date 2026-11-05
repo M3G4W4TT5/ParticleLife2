@@ -63,6 +63,7 @@ internal sealed class LiveExperimentEditor
     internal Rectangle BrowserBody => browser.Body;
     internal bool BrushEnabled => exploration.BrushEnabled;
     internal BrushSettings Brush => exploration.Brush;
+    internal VisualToolsControls VisualTools { get; }
     internal void FitCamera() => exploration.Fit();
 
     internal LiveExperimentEditor(ExperimentEditor editor, string saveDirectory, Action<string> report, Action printTimings)
@@ -103,6 +104,7 @@ internal sealed class LiveExperimentEditor
         BuildGeneration();
         BuildSimulation();
         BuildAppearance();
+        VisualTools = new VisualToolsControls(editor, appearance, discoveries);
         world.Children.AddRange(population.Children.Take(4));
         population.Children.RemoveRange(0, 4);
         exploration.AddMatrixTools(interactions);
