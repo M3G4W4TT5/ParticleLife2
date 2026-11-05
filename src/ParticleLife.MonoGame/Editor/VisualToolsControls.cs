@@ -24,6 +24,7 @@ internal sealed class VisualToolsControls
     {
         VisualSettings Current() => editor.Appearance.Visuals;
         void Set(VisualSettings value) => editor.SetAppearance(editor.Appearance with { Visuals = value });
+        QualityControls.AddTo(appearance, editor);
         UiNumber Number(string label, Func<double> get, Action<double> set, double initial, double minimum,
             double maximum, string help, bool integer = false) => new(label, get, set, initial, minimum, maximum,
                 help, integral: integer, beginGesture: editor.BeginGesture, endGesture: editor.EndGesture);

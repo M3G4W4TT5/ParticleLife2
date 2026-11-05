@@ -112,7 +112,8 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
             [--preset NAME] [--particles N] [--species N] [--seed 1]
             [--paused] [--sample-every 144] [--save-dir artifacts/viewer] [--backend direct|grid] [--workers 1]
 
-        The inspector opens beside the simulation. Model, World and View group its controls.
+        The inspector groups Particles, Interactions, World, Playback, Appearance and Discoveries.
+        Guide / H / F1 opens a quickstart, file choices and keyboard help without changing the scene.
         Click a numeric value, type, then Enter to apply; Esc cancels a draft. Tab navigates.
         Drag labels/sliders for live edits; one drag is one Undo operation. The reset arrow resets
         that value. Invalid/partial text never changes the simulation. Hover for explanations.
@@ -124,6 +125,8 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         Ctrl+Z/Y  Undo/redo editor changes      F5          Reload startup file or open library
         D         Toggle sampled diagnostics   H / F1      Open/close Help
         Esc       Cancel field/modal or quit   F9          Print separated viewer timings
+        V         Fit world to canvas          Ctrl+0      Restore 1x UI scale (canvas focus)
+        Ctrl+plus/minus Adjust UI scale         PageUp/Down Scroll a focused panel or Help
 
         Shortcuts do not fire while a control has keyboard focus. Click the world to return
         focus to shortcuts. Focus loss pauses; resume explicitly. BUILT-IN RECIPES selects a
@@ -133,6 +136,8 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         Ordinary rule/timestep/backend changes also retain completed state and accumulated time.
         World drafts apply together; population drafts explain survivor/remapping/addition policy.
         Generation seed, placement and initial velocity edits alone do not move particles.
+        Appearance offers manual Economy, Balanced and Luminous display presets. Individual controls
+        remain editable; quality presets never change solver, precision, population, rules or timestep.
 
         FILES opens the in-app local browser. Enter a folder/name; save preset, save from here,
         save initial or save session. Existing names are protected by exclusive creation.

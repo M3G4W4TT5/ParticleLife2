@@ -1,0 +1,18 @@
+# Legacy interaction dispositions
+
+The historical `IForceEquation.Compute` implementations were reviewed individually for the 2D preview. The table records their actual returned scalar curves, using normalized distance `q` and the directed coefficient `A`. It does not claim full parity with the historical solver, physical validation or an equivalence between a potential and a force.
+
+| Historical mode | Actual scalar behavior | Preview disposition |
+| --- | --- | --- |
+| **ParticleLife** | Core `q / 0.3 - 1`; triangular outer coefficient scaled by `A`; zero at/beyond cutoff. | Retained as the versioned Particle Life model. Random, Chains and Snakes retain their matrix meanings; P4 explicitly extends boundaries and directed ranges. |
+| **SineWave** | `A * sin(-2πq)`, producing alternating radial lobes. | Deliberately omitted from this preview. A useful future artistic candidate under an explicit oscillating-kernel name; it changes the independent-core rule and needs a separately saved model plus CPU/GPU implementations. Existing recipe names do not select this equation. |
+| **Predators** | `0.2 * A * log(q + 0.1)`; the core sign depends on `A`, and the curve is nonzero at `q = 1`. | Deliberately omitted. The label does not implement predator/prey populations or behaviour. A future logarithmic artistic rule needs an explicit cutoff/core policy, not a matrix alias. |
+| **Coulomb** | `0.001 * A / max(q, 0.01)^2`. | Deliberately omitted. This is a capped, normalized inverse-square experiment, not a charge model. Restoring it would require explicit truncation/saturation and saved equation meaning. |
+| **Magnetic** | `-0.1 * A / max(q, 0.01)`. | Deliberately omitted. This radial inverse-distance scalar is not a magnetic field or velocity-dependent Lorentz force. A physical label would be misleading; any artistic return needs a distinct model identifier. |
+| **Elastic** | `-1000 * (1 - q)` for `q < 1`, otherwise zero; ignores `A`. | Deliberately omitted. It is a stiff all-range penalty curve. Its force scale, timestep and any saturation need a deliberate product choice; it must not silently replace the present core or per-pair radii. |
+| **LennardJonesPotential** | `4 * A * ((0.1/q)^12 - (0.1/q)^6)`, without a zero-distance clamp. | Deferred as a distinct model. A potential-shaped expression is returned through a force interface; using its radial derivative instead would change the equation and require separate versioning and zero-distance policy. No intermolecular-physics claim is retained. |
+| **VanDerWaals** | For `q <= 0.3`, clamps `q` at `0.01` and returns `4 * A * ((0.1/q)^6 - (0.1/q)^3)`; otherwise zero. | Deferred as a distinct model. These powers and truncation differ from the conventional 12/6 potential, and the returned value is used as a force scalar. Neither correcting the name nor changing exponents is a compatible migration. |
+
+This review intentionally adds no new numerical kernel. The preview already supplies directed matrices, core/cutoff ranges and independent generators for visual variation. Adding a model solely to preserve a historical menu label would broaden the persistence and GPU contracts without a selected exploration workflow. The omissions above are explicit; full historical-mode parity is not a release prerequisite.
+
+The reviewed files came from the local historical snapshot under `review/snapshots/ParticleLife/Simulation/Physics/Force/Equations`. That ignored snapshot is not a source, test or packaging dependency. The implemented equations, ranges and ownership contracts remain documented alongside the maintained C# code. The [architecture plan](architecture-and-migration.md#migration-of-the-existing-code) records the migration direction.

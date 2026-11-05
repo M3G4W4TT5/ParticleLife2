@@ -6,9 +6,9 @@ _Exploring emergent behaviour from simple interactions._
 
 Particle Life 2 is a continuation of [Particle Life](https://github.com/M3G4W4TT5/ParticleLife). The goal is to make it easy to create and explore emergent particle behaviour: patterns forming, clustering, separating and moving together. It is a creative sandbox, with saving and replay to help revisit interesting discoveries.
 
-The current app is two-dimensional, with an engine-independent C# core and MonoGame for rendering. The focus is on large populations, responsive exploration and understandable rules. GPU simulation alongside the CPU option, richer interaction tools and a later 3D mode are planned.
+The app is two-dimensional, with an engine-independent C# core and MonoGame for rendering. The focus is on large populations, responsive exploration and understandable rules. The CPU remains available for desktop and headless use; compatible OpenGL compute hardware also supports device-resident GPU simulation. 3D is a later phase.
 
-The interactive editor and headless runner share the same simulation. Change directed species interactions, forces and populations while particles move, inspect their force curves, and save complete experiments or replayable editing sessions. The solver uses double precision and advances independently of rendering. An exact uniform grid accelerates neighbour discovery, with the direct all-pairs solver available for comparison.
+Change directed interactions, core/cutoff ranges and populations while particles move, inspect their force curves, pan and zoom, or use brushes to perturb a pattern. Soft-wall, open, reflecting and periodic worlds are explicit choices. Save interesting states in the discovery library, reuse selected preset components, and capture PNG images or short GIFs. Display effects and manual quality presets do not change particle rules.
 
 ## Explore the simulation
 
@@ -26,9 +26,13 @@ The viewer starts with 500 particles, seven species, seed 1 and grid search. Loa
 dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- examples/experiments/two-species.json --paused
 ```
 
-Use `--help` for startup options, including `--preset`, `--particles`, `--species`, `--seed`, `--backend direct|grid`, `--workers`, `--sample-every` and `--save-dir`. Grid search defaults to one worker; `--workers 4` explicitly selects parallel evaluation (1–8 workers). Saved experiments retain their backend and workers; older files remain serial and schema-1 files use direct search. DesktopGL needs a working OpenGL display. Resizing preserves world geometry; off-world particles remain in the simulation.
+Press **H / F1** or choose **Guide** for the quickstart. **Space** pauses, **N** single-steps, **V** fits the world and **E** hides the inspector. The [exploration guide](docs/quickstart.md) explains Reset, Resample, New, brushes, files and keyboard controls.
 
-Try **Built-in recipes** for Chains, Snakes, Core and halo, Alternating bands, Ribbons, Cyclic pursuit, Chase cycles, Species islands and experimental Biased ribbons. The [recipe guide](docs/recipes.md) explains the numbers and includes command-line examples.
+Use `--help` for startup options. CPU grid search defaults to one worker; `--workers 4` explicitly selects parallel evaluation (1–64 workers). Saved experiments retain their choices; old schema-1 files keep direct search. The CPU uses double precision and a fixed timestep independently of rendering, with an exact uniform grid and direct reference available. GPU arithmetic and ordering can produce different trajectories. DesktopGL needs a working OpenGL display even when CPU simulation is selected.
+
+In **Discoveries > Starting recipe**, try Chains, Snakes, Core and halo, Alternating bands, Ribbons, Cyclic pursuit, Chase cycles, Species islands and experimental Biased ribbons. The [recipe guide](docs/recipes.md) explains the numbers and includes command-line examples.
+
+For an unsigned Windows x64 private preview with its own runtime, use the [packaging instructions](docs/portable-preview.md). The package includes the viewer, CPU CLI, guides, small examples and font license. It does not require an installed SDK to run.
 
 ## Run without graphics
 
@@ -49,6 +53,8 @@ dotnet run --project src/ParticleLife.Cli -c Release --no-build -- replay exampl
 
 Use `--continue-steps N` to continue afterwards. Replay follows simulation-step boundaries; rendered frame timing is not part of the scientific timeline. Reports preserve explicit execution overrides separately from recorded choices.
 
-This is a phenomenological model for exploring emergence. Soft walls confine rather than reflect particles, and directed interactions and damping generally do not conserve momentum or energy.
+Capture-backed sessions require an explicit choice: `replay capture.json --restore-capture` restores actual recorded values and clock on CPU; `--resimulate-on-cpu` runs the embedded actions again. Widening stored float values is exact; reproducing a GPU trajectory on CPU is a different promise. Saved captures, action replay and cross-backend similarity are distinct features.
 
-See the [architecture and migration plan](docs/architecture-and-migration.md), [contributor guidance](CONTRIBUTING.md) and [CPU performance comparison](docs/performance-m4-1.md) for the numerical conventions, checks and current limits.
+This is a phenomenological model for exploring emergence. Directed interactions and damping generally do not conserve momentum or energy. Sparse worlds and dense clusters have different costs; particle count alone is not a performance guarantee.
+
+See the [small examples](examples/README.md), [discovery guide](docs/discovery-library.md), [worlds and ranges](docs/world-boundaries-and-ranges.md), [legacy mode dispositions](docs/legacy-modes.md) and [contributor guidance](CONTRIBUTING.md). The [architecture plan](docs/architecture-and-migration.md) and [performance reports](docs/performance-p2.md) describe the implementation and measured limits.

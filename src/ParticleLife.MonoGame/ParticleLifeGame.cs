@@ -82,7 +82,7 @@ internal sealed partial class ParticleLifeGame : Game
                 SetMessage($"Operation failed: {failure}. Last completed state retained.");
             };
             surface = new LiveExperimentEditor(this.editor, options.SaveDirectory, SetMessage, PrintTimings);
-            legend = new HelpLegend(CloseLegend, SetMessage);
+            legend = new HelpLegend(CloseLegend, SetMessage, () => this.message);
             graphics = new GraphicsDeviceManager(this)
             {
                 PreferredBackBufferWidth = 1360,
@@ -379,6 +379,11 @@ internal sealed partial class ParticleLifeGame : Game
         if (control && key == Keys.Y)
         {
             editor.Redo();
+            return false;
+        }
+        if (control && UiAccessibility.TryAdjustScale(key, editor.Appearance.UiScale, out double requestedScale))
+        {
+            editor.SetAppearance(editor.Appearance with { UiScale = requestedScale });
             return false;
         }
         switch (key)

@@ -63,6 +63,10 @@ For startup artwork changes, also check the executable and native window icons, 
 
 The catch-up limit bounds steps per frame, not the cost of one all-pairs step or diagnostic. A large population can still delay input. Test native startup and controls on the target platform; passing the display-free checks alone does not establish that result.
 
+### Windows private preview packaging
+
+Use `pwsh -NoProfile -File scripts/package-windows-preview.ps1 -SmokeTest` to create a fresh, self-contained Windows x64 viewer and CPU CLI package under ignored `artifacts/packages/`. Publishing runs from a copied source snapshot, with locked framework restore and checked package pins; it does not rewrite source lock files or replace an existing package. The [package guide](docs/portable-preview.md) defines contents, hashes, runtime provenance and clean-checkout commands. Its headless smokes are separate from extracted-package native acceptance in the [visual checklist](docs/visual-review-checklist.md). Keep packaging outside benchmark windows; no signing or release publication is implied.
+
 ## Readable numerical code
 
 Keep equations in small named functions with explicit inputs. Use classes for state ownership and lifecycle, and small value types for numerical data. Give an interface a concrete purpose, such as selecting between the direct reference search and the grid search. Use composition where compatible terms contribute to the same physical quantity.

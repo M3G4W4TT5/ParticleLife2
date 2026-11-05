@@ -12,10 +12,11 @@ internal sealed class HelpLegend
     internal void Arrange(Rectangle bounds) => panel.Arrange(bounds);
     internal void PrepareForOpen(bool pointerHeld) => panel.PrepareForOpen(pointerHeld);
 
-    internal HelpLegend(Action close, Action<string> report)
+    internal HelpLegend(Action close, Action<string> report, Func<string>? latestFeedback = null)
     {
         panel = new UiPanel(report, dismissOnEscape: true);
         panel.Toolbar.Add(new UiButton(() => "Close help", close));
+        QuickstartHelp.AddTo(panel, latestFeedback);
         Add("Playback", [
             ("Space", "Pause or resume"), ("N / Right", "Pause and advance one step"),
             ("R", "Reset exact initial state and rules"), ("I", "Resample positions and velocities"),
@@ -29,6 +30,7 @@ internal sealed class HelpLegend
             ("Drag label", "Scrub a value; one gesture, one undo"),
             ("Click value", "Type an exact number"), ("Tab / Shift+Tab", "Move between controls"),
             ("Enter", "Apply a draft or dropdown choice"), ("Escape", "Cancel a draft or dropdown"),
+            ("Page Up / Down", "Scroll a panel or this guide"), ("Ctrl+plus/minus/0", "Adjust / restore UI scale with canvas focus"),
             ("Ctrl+A / C / X / V", "Select / copy / cut / paste"),
             ("Arrow keys", "Navigate matrix cells or menu options"),
             ("Scroll", "Scroll the inspector or open dropdown"),

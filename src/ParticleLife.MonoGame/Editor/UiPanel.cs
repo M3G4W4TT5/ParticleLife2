@@ -188,6 +188,14 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
             {
                 MoveFocus(shift ? -1 : 1);
             }
+            else if (key is Keys.PageUp or Keys.PageDown && focused?.EditingText != true && focused is not UiDropdown { IsOpen: true }
+                && (HasFocus || Bounds.Contains(point) || dismissOnEscape))
+            {
+                scroll = Math.Clamp(scroll + (key == Keys.PageDown ? 1 : -1) * Math.Max(28, Body.Height - 28),
+                    0, Math.Max(0, contentHeight - Body.Height));
+                ConsumedKeyboard = true;
+                Layout();
+            }
             else if (key == Keys.Escape && focused is UiDropdown { IsOpen: true } dropdown)
             {
                 dropdown.Close();

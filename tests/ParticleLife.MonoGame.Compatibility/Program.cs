@@ -17,6 +17,7 @@ Vector2d position = new(0.25, 0.75);
 Vector2 displayPosition = new((float)position.X, (float)position.Y);
 Console.WriteLine($"Core net10.0 / MonoGame {typeof(Game).Assembly.GetName().Version}: {displayPosition}");
 RenderingChecks.Run();
+GuidanceChecks.Run();
 
 // Exercise the real native numeric widget against the actual editor without creating a Game,
 // SDL window, texture or graphics device. These checks complement native interaction checks.
@@ -329,7 +330,8 @@ using (PlaybackController modalPlayback = new(PresetGenerator.Create(PresetKind.
     LiveExperimentEditor modalSurface = new(modalEditor, modalDirectory, _ => { }, () => { });
     Rectangle smallInspector = new(14, 165, 392, 121);
     Rectangle smallBrowser = new(14, 60, 392, 264);
-    Point filesAndSave = new(330, 218);
+    // Files is the third control in the four-button Undo / Redo / Files / Guide row.
+    Point filesAndSave = new(250, 218);
     modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
     modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave, pressed: true), []);
     Require(modalSurface.IsModal, "The compact Files action did not open its browser.");
