@@ -22,7 +22,7 @@ UiNumber number = new("Cutoff", () => editor.Configuration.Parameters.Cutoff, va
         current.Matrix, current.TimeStep, current.Backend, current.WorkerCount));
 }, 0.1, 0.01, 0.5, "Reduced length", beginGesture: editor.BeginGesture, endGesture: editor.EndGesture)
 {
-    Bounds = new Rectangle(0, 0, 460, 68)
+    Bounds = new Rectangle(0, 0, 400, 28)
 };
 
 number.Focus(true);
@@ -40,9 +40,9 @@ Require(editor.Configuration.Parameters.Cutoff == double.Parse("0.12345678912345
     "Exact numeric input lost double precision.");
 
 double beforeGesture = editor.Configuration.Parameters.Cutoff;
-number.Press(new Point(120, 45));
+number.Press(new Point(number.SliderBounds.X + number.SliderBounds.Width / 4, number.SliderBounds.Center.Y));
 playback.SingleStep();
-number.Drag(new Point(280, 45));
+number.Drag(new Point(number.SliderBounds.X + number.SliderBounds.Width * 3 / 4, number.SliderBounds.Center.Y));
 number.Release();
 int appliedEvents = editor.SessionEventCount;
 Require(appliedEvents >= 3, "Slider samples were not represented in scientific replay.");
@@ -152,15 +152,131 @@ int selectedSpecies = 0;
 UiNumber selector = new("Species", () => selectedSpecies, value => selectedSpecies = (int)value,
     0, 0, 31, "Existing species index", integral: true, maximumValue: () => selectableSpecies - 1)
 {
-    Bounds = new Rectangle(0, 0, 460, 68)
+    Bounds = new Rectangle(0, 0, 400, 28)
 };
-selector.Press(new Point(454, 45));
+selector.Press(new Point(selector.SliderBounds.Right, selector.SliderBounds.Center.Y));
 selector.Release();
 Require(selectedSpecies == 6 && selector.SliderFraction == 1, "Species selector range did not end at the last valid species.");
 selectableSpecies = 1;
-selector.Press(new Point(454, 45));
+selector.Press(new Point(selector.SliderBounds.Right, selector.SliderBounds.Center.Y));
 selector.Release();
 Require(selectedSpecies == 0 && selector.SliderFraction == 0, "A one-species selector produced an invalid index or undefined thumb fraction.");
+// Compact hit targets preserve exact-entry, reset and slider semantics in one inspector row.
+Require(number.Height == 28 && !number.SliderBounds.Intersects(number.ValueBounds)
+    && !number.ValueBounds.Intersects(number.ResetBounds), "Compact numeric hit targets overlap.");
+number.Focus(true);
+number.Press(number.ValueBounds.Center);
+number.Key(Keys.A, true, false);
+foreach (char character in "0.23456789123456789")
+{
+    number.Text(character);
+}
+number.Key(Keys.Enter, false, false);
+Require(editor.Configuration.Parameters.Cutoff == double.Parse("0.23456789123456789", System.Globalization.CultureInfo.InvariantCulture),
+    "Compact exact-entry hit target did not retain double precision.");
+number.Press(number.ResetBounds.Center);
+Require(editor.Configuration.Parameters.Cutoff == 0.1, "Compact reset target did not restore the explicit default.");
+number.Focus(false);
+
+// Dropdown navigation is a draft; only an explicit row click or confirmation changes selection.
+int selectedOption = 2;
+int selectionChanges = 0;
+int toolbarActions = 0;
+UiDropdown choices = new("Recipe", Enumerable.Range(0, 18).Select(index => $"Recipe {index}").ToArray(),
+    () => selectedOption, index => { selectedOption = index; selectionChanges++; });
+UiButton toolbarAction = new(() => "Action", () => toolbarActions++);
+UiPanel choicePanel = new(_ => { });
+choicePanel.Toolbar.Add(toolbarAction);
+choicePanel.Content.Add(choices);
+choicePanel.Arrange(new Rectangle(10, 10, 400, 420));
+Click(choicePanel, choices.Bounds.Center);
+Require(choices.IsOpen && selectedOption == 2 && selectionChanges == 0,
+    "Opening a dropdown changed its selection.");
+Require(choicePanel.Bounds.Contains(choices.PopupBounds), "Dropdown popup escaped panel clipping.");
+choicePanel.Update(default, 1,
+[
+    UiInputEvent.KeyPress(Keys.End, false, false),
+    UiInputEvent.KeyPress(Keys.Escape, false, false)
+]);
+Require(!choices.IsOpen && selectedOption == 2 && selectionChanges == 0 && choicePanel.ConsumedKeyboard,
+    "Cancelling keyboard dropdown navigation applied a choice or leaked the key.");
+choicePanel.Update(default, 1,
+[
+    UiInputEvent.KeyPress(Keys.Enter, false, false),
+    UiInputEvent.KeyPress(Keys.End, false, false)
+]);
+Require(choices.IsOpen && choices.HighlightedIndex == 17 && choices.FirstVisibleIndex > 0,
+    "Long dropdown keyboard navigation did not expose its final option.");
+Require(choices.PopupBounds.Contains(choices.OptionBounds(17)), "Navigated option is not visible inside popup.");
+choicePanel.Update(default, 1, [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
+Require(!choices.IsOpen && selectedOption == 17 && selectionChanges == 1,
+    "Explicit dropdown confirmation did not apply exactly one selection.");
+Click(choicePanel, choices.Bounds.Center);
+Click(choicePanel, toolbarAction.Bounds.Center);
+Require(!choices.IsOpen && toolbarActions == 0, "Dropdown dismissal clicked through to the toolbar.");
+Click(choicePanel, toolbarAction.Bounds.Center);
+Require(toolbarActions == 1, "Toolbar could not be used after dropdown dismissal.");
+Click(choicePanel, choices.Bounds.Center);
+choicePanel.Update(MouseAt(choices.PopupBounds.Center, wheel: 120), 1, []);
+Require(selectedOption == 17 && selectionChanges == 1, "Scrolling options committed an unintended choice.");
+int pointerChoice = choices.FirstVisibleIndex;
+Click(choicePanel, choices.OptionBounds(pointerChoice).Center, wheel: 120);
+Require(selectedOption == pointerChoice && selectionChanges == 2 && !choices.IsOpen,
+    "Visible dropdown row did not select the displayed option exactly once.");
+
+// Keyboard navigation remains authoritative until the pointer actually moves again.
+Click(choicePanel, choices.Bounds.Center, wheel: 120);
+Point stationaryPointer = choices.OptionBounds(choices.FirstVisibleIndex).Center;
+choicePanel.Update(MouseAt(stationaryPointer, wheel: 120), 1, []);
+choicePanel.Update(MouseAt(stationaryPointer, wheel: 120), 1, [UiInputEvent.KeyPress(Keys.End, false, false)]);
+choicePanel.Update(MouseAt(stationaryPointer, wheel: 120), 1, []);
+choicePanel.Update(MouseAt(stationaryPointer, wheel: 120), 1, [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
+Require(selectedOption == 17, "A stationary pointer overrode keyboard dropdown navigation.");
+
+// A dropdown cannot bypass an invalid numeric draft when focus changes.
+UiPanel guardedChoices = new(_ => { });
+guardedChoices.Content.Add(number);
+guardedChoices.Content.Add(choices);
+guardedChoices.Arrange(new Rectangle(0, 0, 400, 400));
+guardedChoices.Update(default, 1,
+[
+    UiInputEvent.KeyPress(Keys.Tab, false, false),
+    UiInputEvent.Text('-', false, false)
+]);
+Click(guardedChoices, choices.Bounds.Center);
+Require(number.Focused && !choices.IsOpen, "Opening a dropdown abandoned an invalid numeric draft.");
+guardedChoices.ClearFocus();
+
+// Collapsed or replaced content must never leave an invisible field consuming keyboard input.
+UiSection collapsible = new("Parameters", true);
+collapsible.Children.Add(number);
+UiPanel sectionPanel = new(_ => { });
+sectionPanel.Content.Add(collapsible);
+sectionPanel.Arrange(new Rectangle(0, 0, 400, 400));
+sectionPanel.Update(default, 1,
+[
+    UiInputEvent.KeyPress(Keys.Tab, false, false),
+    UiInputEvent.KeyPress(Keys.Tab, false, false)
+]);
+Require(number.Focused, "Section child did not receive focus.");
+collapsible.Expanded = false;
+sectionPanel.Arrange(sectionPanel.Bounds);
+Require(!number.Focused && !sectionPanel.Capturing, "Collapsed section retained an invisible focused control.");
+
+// Wheel and press can arrive in one native sample; activate the post-scroll target.
+UiPanel scrollingPanel = new(_ => { });
+int clickedRow = -1;
+for (int index = 0; index < 10; index++)
+{
+    int row = index;
+    scrollingPanel.Content.Add(new UiButton(() => $"Action {row}", () => clickedRow = row));
+}
+scrollingPanel.Arrange(new Rectangle(0, 0, 400, 240));
+Point scrollClick = scrollingPanel.Content[0].Bounds.Center;
+scrollingPanel.Update(MouseAt(scrollClick, pressed: true, wheel: -120), 1, []);
+Require(scrollingPanel.Content[1].Bounds.Contains(scrollClick) && clickedRow == 1,
+    "A wheel-and-press sample activated the stale pre-scroll target.");
+
 // Use the actual native recipe actions, including selection's no-op semantics and switching
 // to a smaller species matrix. This needs no graphics device.
 LiveExperimentEditor recipePanel = new(editor, Path.GetTempPath(), _ => { }, () => { });
@@ -185,8 +301,19 @@ recipePanel.StartSelectedRecipe();
 recipePanel.Update(new Rectangle(0, 0, 460, 700), new Rectangle(0, 0, 800, 700), 1, default, []);
 Require(editor.Configuration.Matrix.SpeciesCount == 2 && recipePanel.Graph is not null,
     "Native recipe switch failed to refresh the smaller matrix.");
-Console.WriteLine("Native widget integration: draft validation, live slider/replay/undo, matrix navigation and built-in recipes passed without graphics.");
+Console.WriteLine("Native widget integration: compact exact input, dropdown routing, validation, live slider/replay/undo, matrix navigation and built-in recipes passed without graphics.");
 StartupChecks.Run();
+
+static MouseState MouseAt(Point point, bool pressed = false, int wheel = 0) => new(point.X, point.Y, wheel,
+    pressed ? ButtonState.Pressed : ButtonState.Released, ButtonState.Released,
+    ButtonState.Released, ButtonState.Released, ButtonState.Released);
+
+static void Click(UiPanel panel, Point point, int wheel = 0)
+{
+    panel.Update(MouseAt(point, wheel: wheel), 1, []);
+    panel.Update(MouseAt(point, pressed: true, wheel: wheel), 1, []);
+    panel.Update(MouseAt(point, wheel: wheel), 1, []);
+}
 
 static void Require(bool condition, string message)
 {

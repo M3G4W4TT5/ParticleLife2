@@ -8,4 +8,9 @@
     <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.6" />
     <ProjectReference Include="../ParticleLife.Viewer/ParticleLife.Viewer.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/Fonts/plex-sans-atlas.png" />
+    <EmbeddedResource Include="Assets/Fonts/plex-sans-metrics.json" />
+    <None Update="Assets/Fonts/OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

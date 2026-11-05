@@ -16,7 +16,7 @@ internal abstract class UiWidget(string help = "")
     internal bool Hovered { get; set; }
     internal virtual bool Focusable => true;
     internal virtual bool EditingText => false;
-    internal virtual int Height => 34;
+    internal virtual int Height => 28;
     internal virtual bool Focus(bool focused)
     {
         Focused = focused;
@@ -33,12 +33,13 @@ internal abstract class UiWidget(string help = "")
     {
         if (Focused)
         {
-            canvas.Border(Bounds, UiCanvas.Accent);
+            canvas.RoundedBorder(Bounds, UiCanvas.Accent * 0.7f, 4);
         }
     }
 }
 
-internal sealed class UiButton(Func<string> label, Action clicked, string help = "", Func<bool>? enabled = null) : UiWidget(help)
+internal sealed class UiButton(Func<string> label, Action clicked, string help = "", Func<bool>? enabled = null,
+    Func<bool>? selected = null) : UiWidget(help)
 {
     internal override void Press(Point point)
     {
@@ -59,9 +60,13 @@ internal sealed class UiButton(Func<string> label, Action clicked, string help =
     internal override void Draw(UiCanvas canvas)
     {
         bool active = enabled?.Invoke() != false;
-        canvas.Fill(Bounds, Hovered && active ? UiCanvas.Raised : UiCanvas.Surface);
-        canvas.Text(label(), Bounds.X + 10, Bounds.Y + 11, active ? UiCanvas.Ink : UiCanvas.Muted,
-            Math.Max(1, (Bounds.Width - 16) / 9));
+        bool current = selected?.Invoke() == true;
+        canvas.Rounded(Bounds, current ? UiCanvas.Accent * 0.15f : Hovered && active ? UiCanvas.Raised : UiCanvas.Surface, 4);
+        if (current)
+        {
+            canvas.Fill(new Rectangle(Bounds.X + 8, Bounds.Bottom - 2, Bounds.Width - 16, 1), UiCanvas.Accent * 0.7f);
+        }
+        canvas.TextCentered(label(), Bounds, !active ? UiCanvas.Muted * 0.65f : current ? UiCanvas.Accent : UiCanvas.Ink);
         DrawFocus(canvas);
     }
 }
@@ -77,11 +82,17 @@ internal sealed class UiToggle(string label, Func<bool> get, Action<bool> set, s
         }
     }
 
+    internal override int Height => 26;
+
     internal override void Draw(UiCanvas canvas)
     {
-        canvas.Fill(Bounds, Hovered ? UiCanvas.Raised : UiCanvas.Surface);
-        canvas.Fill(new Rectangle(Bounds.X + 10, Bounds.Y + 9, 16, 16), get() ? UiCanvas.Accent : UiCanvas.Background);
-        canvas.Text(label, Bounds.X + 36, Bounds.Y + 11, UiCanvas.Ink, Math.Max(1, (Bounds.Width - 44) / 9));
+        canvas.Rounded(Bounds, Hovered ? UiCanvas.Raised : UiCanvas.Surface, 4);
+        Rectangle track = new(Bounds.Right - 36, Bounds.Y + 6, 28, 14);
+        bool enabled = get();
+        canvas.Rounded(track, enabled ? UiCanvas.Accent * 0.55f : UiCanvas.Muted * 0.22f, 7);
+        canvas.Rounded(new Rectangle(track.X + (enabled ? 15 : 3), track.Y + 3, 10, 8),
+            enabled ? UiCanvas.Ink : UiCanvas.Muted, 4);
+        canvas.TextFit(label, new Rectangle(Bounds.X + 8, Bounds.Y, Bounds.Width - 52, Height), UiCanvas.Ink);
         DrawFocus(canvas);
     }
 }
@@ -94,7 +105,7 @@ internal class UiTextField(string label, Func<string> get, Action<string> commit
     private bool selected;
     private bool dirty;
     private int cursor;
-    internal override int Height => error is null ? 58 : 78;
+    internal override int Height => 28;
     internal override bool EditingText => Focused;
     internal string Draft => Focused || dirty ? draft : get();
     internal override string? ClipboardText => Draft;
@@ -213,30 +224,12 @@ internal class UiTextField(string label, Func<string> get, Action<string> commit
 
     internal override void Draw(UiCanvas canvas)
     {
-        canvas.Text(label, Bounds.X, Bounds.Y + 2, UiCanvas.Muted);
-        Rectangle box = new(Bounds.X, Bounds.Y + 21, Bounds.Width, 30);
-        canvas.Fill(box, UiCanvas.Background);
-        canvas.Border(box, error is not null ? UiCanvas.Error : Focused ? UiCanvas.Accent : UiCanvas.Raised);
-        string text = Draft;
-        int capacity = Math.Max(1, (box.Width - 16) / 9);
-        int offset = Focused && !selected ? Math.Clamp(cursor - capacity + 1, 0, Math.Max(0, text.Length - capacity)) : 0;
-        if (text.Length > capacity)
-        {
-            text = text.Substring(offset, capacity);
-        }
-        if (Focused && selected)
-        {
-            canvas.Fill(new Rectangle(box.X + 6, box.Y + 5, Math.Min(box.Width - 12, text.Length * 9), 20), UiCanvas.Raised);
-        }
-        canvas.Text(text, box.X + 8, box.Y + 10, UiCanvas.Ink, capacity);
-        if (Focused && !selected)
-        {
-            canvas.Fill(new Rectangle(box.X + 8 + (cursor - offset) * 9, box.Y + 6, 1, 18), UiCanvas.Accent);
-        }
-        if (error is not null)
-        {
-            canvas.Text(error, Bounds.X, Bounds.Y + 58, UiCanvas.Error, Math.Max(1, Bounds.Width / 9));
-        }
+        int labelWidth = Math.Min(150, Bounds.Width / 3);
+        canvas.TextFit(label, new Rectangle(Bounds.X + 8, Bounds.Y, labelWidth - 12, Height), UiCanvas.Muted);
+        Rectangle box = new(Bounds.X + labelWidth, Bounds.Y, Bounds.Width - labelWidth, Height);
+        canvas.Rounded(box, UiCanvas.Surface, 4);
+        canvas.RoundedBorder(box, error is not null ? UiCanvas.Error : Focused ? UiCanvas.Accent : UiCanvas.Raised, 4);
+        UiDraftText.Draw(canvas, Draft, cursor, Focused, selected, box);
     }
 }
 
@@ -282,7 +275,7 @@ internal sealed class UiNumber : UiWidget
         this.endGesture = endGesture;
     }
 
-    internal override int Height => error is null ? 68 : 86;
+    internal override int Height => 28;
     internal override bool EditingText => Focused && editing;
     internal override string? ClipboardText => editing ? draft : Format(get());
     private double Maximum => maximumValue?.Invoke() ?? maximum;
@@ -302,9 +295,11 @@ internal sealed class UiNumber : UiWidget
                 : (value - minimum) / (limit - minimum), 0, 1);
         }
     }
-    private Rectangle Entry => new(Bounds.X + Bounds.Width - 186, Bounds.Y + 1, 146, 28);
-    private Rectangle Reset => new(Bounds.Right - 34, Bounds.Y + 1, 34, 28);
-    private Rectangle Slider => new(Bounds.X + 6, Bounds.Y + 39, Bounds.Width - 12, 18);
+    /// <summary>The exact-entry target is separate from the label/slider scrub target.</summary>
+    internal Rectangle ValueBounds => new(Bounds.Right - Math.Min(150, Bounds.Width / 2) - 25, Bounds.Y,
+        Math.Min(150, Bounds.Width / 2), Height);
+    internal Rectangle ResetBounds => new(Bounds.Right - 22, Bounds.Y, 22, Height);
+    internal Rectangle SliderBounds => new(Bounds.X + 5, Bounds.Y, Math.Max(1, ValueBounds.X - Bounds.X - 10), Height);
 
     internal override bool Focus(bool focused)
     {
@@ -334,14 +329,14 @@ internal sealed class UiNumber : UiWidget
 
     internal override void Press(Point point)
     {
-        if (Reset.Contains(point))
+        if (ResetBounds.Contains(point))
         {
             editing = false;
             set(reset);
             error = null;
             dirty = false;
         }
-        else if (point.Y >= Bounds.Y + 33)
+        else if (point.X < ValueBounds.X)
         {
             editing = false;
             dragging = true;
@@ -365,7 +360,7 @@ internal sealed class UiNumber : UiWidget
         {
             return;
         }
-        double fraction = Math.Clamp((double)(point.X - Slider.X) / Slider.Width, 0, 1);
+        double fraction = Math.Clamp((double)(point.X - SliderBounds.X) / SliderBounds.Width, 0, 1);
         double limit = Maximum;
         double value = logarithmic ? Math.Exp(Math.Log(minimum) + fraction * Math.Log(limit / minimum))
             : minimum + fraction * (limit - minimum);
@@ -518,36 +513,38 @@ internal sealed class UiNumber : UiWidget
 
     internal override void Draw(UiCanvas canvas)
     {
-        canvas.Text(label, Bounds.X, Bounds.Y + 9, UiCanvas.Ink, Math.Max(1, (Bounds.Width - 194) / 9));
-        canvas.Fill(Entry, UiCanvas.Background);
-        canvas.Border(Entry, error is not null ? UiCanvas.Error : Focused && editing ? UiCanvas.Accent : UiCanvas.Raised);
-        string valueText = editing && Focused || dirty ? draft : get().ToString("G9", CultureInfo.InvariantCulture);
-        if (Focused && editing && selected)
-        {
-            canvas.Fill(new Rectangle(Entry.X + 4, Entry.Y + 4, Math.Min(Entry.Width - 8, valueText.Length * 9), 20), UiCanvas.Raised);
-        }
-        int offset = Focused && editing && !selected ? Math.Clamp(cursor - 14, 0, Math.Max(0, valueText.Length - 15)) : 0;
-        canvas.Text(valueText.Length > 15 ? valueText.Substring(offset, 15) : valueText, Entry.X + 6, Entry.Y + 9, UiCanvas.Ink, 15);
-        if (Focused && editing && !selected)
-        {
-            canvas.Fill(new Rectangle(Entry.X + 6 + (cursor - offset) * 9, Entry.Y + 5, 1, 18), UiCanvas.Accent);
-        }
-        canvas.Fill(Reset, UiCanvas.Surface);
-        canvas.Text("R", Reset.X + 12, Reset.Y + 9, UiCanvas.Muted);
-        double value = get();
+        Rectangle slider = SliderBounds;
+        canvas.Rounded(new Rectangle(Bounds.X, Bounds.Y, ValueBounds.X - Bounds.X - 3, Height),
+            Hovered ? UiCanvas.Raised : UiCanvas.Surface, 4);
         double fraction = SliderFraction;
-        Rectangle slider = Slider;
-        canvas.Fill(new Rectangle(slider.X, slider.Y + 6, slider.Width, 4), UiCanvas.Raised);
-        canvas.Fill(new Rectangle(slider.X, slider.Y + 6, (int)(slider.Width * fraction), 4), UiCanvas.Accent * 0.65f);
-        canvas.Fill(new Rectangle(slider.X + (int)(slider.Width * fraction) - 4, slider.Y + 1, 8, 14), UiCanvas.Accent);
-        if (value < minimum || value > Maximum)
+        int marker = slider.X + (int)(slider.Width * fraction);
+        canvas.Rounded(new Rectangle(slider.X, slider.Y + 2, Math.Max(1, marker - slider.X), Height - 4),
+            UiCanvas.Accent * 0.09f, 3);
+        for (int index = 1; index < 5; index++)
         {
-            canvas.Text("VALUE OUTSIDE SLIDER RANGE", Bounds.X, Bounds.Y + 57, UiCanvas.Muted, size: 1);
+            canvas.Fill(new Rectangle(slider.X + slider.Width * index / 5, slider.Bottom - 5, 1, 2), UiCanvas.Muted * 0.28f);
         }
-        if (error is not null)
+        canvas.Fill(new Rectangle(marker, slider.Bottom - 7, 1, 4), UiCanvas.Accent * 0.8f);
+        canvas.TextFit(label, new Rectangle(Bounds.X + 8, Bounds.Y - 1, slider.Width - 10, Height), UiCanvas.Ink);
+        canvas.Rounded(ValueBounds, UiCanvas.Surface, 4);
+        canvas.RoundedBorder(ValueBounds, error is not null ? UiCanvas.Error
+            : Focused && editing ? UiCanvas.Accent * 0.75f : UiCanvas.Raised * 0.5f, 4);
+        string valueText = editing && Focused || dirty ? draft : get().ToString("G9", CultureInfo.InvariantCulture);
+        if (Focused && editing)
         {
-            canvas.Text(error, Bounds.X, Bounds.Y + 68, UiCanvas.Error, Math.Max(1, Bounds.Width / 9));
+            UiDraftText.Draw(canvas, valueText, cursor, true, selected, ValueBounds);
         }
+        else
+        {
+            canvas.TextRight(valueText, ValueBounds.Right - 8, ValueBounds.Y + 6, UiCanvas.Ink);
+        }
+        canvas.Rounded(ResetBounds, UiCanvas.Surface, 4);
+        Vector2 origin = new(ResetBounds.X + 7, ResetBounds.Y + 9);
+        canvas.Line(origin + new Vector2(6, 0), origin, UiCanvas.Muted);
+        canvas.Line(origin, origin + new Vector2(0, 7), UiCanvas.Muted);
+        canvas.Line(origin + new Vector2(0, 7), origin + new Vector2(6, 7), UiCanvas.Muted);
+        canvas.Line(origin, origin + new Vector2(3, -3), UiCanvas.Muted);
+        canvas.Line(origin, origin + new Vector2(3, 3), UiCanvas.Muted);
         DrawFocus(canvas);
     }
 }
@@ -582,11 +579,11 @@ internal sealed class UiRow(params UiWidget[] children) : UiWidget
     }
 }
 
-internal sealed class UiSection(string title, bool expanded = false) : UiWidget("Click or press Enter to expand/collapse. Scroll the panel; Tab moves between controls.")
+internal sealed class UiSection(string title, bool expanded = false) : UiWidget
 {
     internal List<UiWidget> Children { get; } = [];
     internal bool Expanded { get; set; } = expanded;
-    internal override int Height => 38;
+    internal override int Height => 28;
     internal override void Press(Point point) => Expanded = !Expanded;
     internal override void Key(Keys key, bool control, bool shift)
     {
@@ -597,8 +594,267 @@ internal sealed class UiSection(string title, bool expanded = false) : UiWidget(
     }
     internal override void Draw(UiCanvas canvas)
     {
-        canvas.Fill(Bounds, Hovered ? UiCanvas.Raised : UiCanvas.Surface);
-        canvas.Text((Expanded ? "- " : "+ ") + title, Bounds.X + 10, Bounds.Y + 13, UiCanvas.Accent);
+        canvas.Rounded(Bounds, Hovered ? UiCanvas.Raised : UiCanvas.Surface * 0.6f, 4);
+        Vector2 origin = new(Bounds.X + 9, Bounds.Y + 12);
+        if (Expanded)
+        {
+            canvas.Line(origin, origin + new Vector2(4, 4), UiCanvas.Muted);
+            canvas.Line(origin + new Vector2(4, 4), origin + new Vector2(8, 0), UiCanvas.Muted);
+        }
+        else
+        {
+            canvas.Line(origin, origin + new Vector2(4, 4), UiCanvas.Muted);
+            canvas.Line(origin + new Vector2(4, 4), origin + new Vector2(0, 8), UiCanvas.Muted);
+        }
+        canvas.TextFit(title, new Rectangle(Bounds.X + 26, Bounds.Y, Bounds.Width - 34, Height), UiCanvas.Accent);
         DrawFocus(canvas);
+    }
+}
+
+/// <summary>Draws a horizontally scrolling edit draft with a measured proportional-text caret.</summary>
+internal static class UiDraftText
+{
+    internal static void Draw(UiCanvas canvas, string text, int cursor, bool focused, bool selected, Rectangle box)
+    {
+        float available = Math.Max(1, box.Width - 16);
+        int offset = 0;
+        cursor = Math.Clamp(cursor, 0, text.Length);
+        if (focused && !selected)
+        {
+            // Walk only the short suffix that can fit, even for a very long pasted path.
+            offset = cursor;
+            while (offset > 0 && canvas.Measure(text[(offset - 1)..cursor]) <= available - 2)
+            {
+                offset--;
+            }
+        }
+        int length = 0;
+        while (offset + length < text.Length && canvas.Measure(text.Substring(offset, length + 1)) <= available)
+        {
+            length++;
+        }
+        string visible = text.Substring(offset, length);
+        if (focused && selected)
+        {
+            canvas.Rounded(new Rectangle(box.X + 5, box.Y + 3,
+                Math.Max(1, (int)Math.Ceiling(canvas.Measure(visible)) + 5), box.Height - 6), UiCanvas.Accent * 0.18f, 2);
+        }
+        canvas.Text(visible, box.X + 8, box.Y + 6, UiCanvas.Ink);
+        if (focused && !selected)
+        {
+            int caret = (int)Math.Round(canvas.Measure(text[offset..cursor]));
+            canvas.Fill(new Rectangle(box.X + 8 + caret, box.Y + 5, 1, box.Height - 10), UiCanvas.Accent);
+        }
+    }
+}
+
+/// <summary>A retained choice control whose popup stages navigation until an explicit selection.</summary>
+/// <remarks>Opening, navigating, scrolling and dismissing the popup never invoke the setter.
+/// The panel owns popup placement and routes pointer/keyboard input before ordinary controls,
+/// preventing a dismissal click from activating a control behind the popup.</remarks>
+internal sealed class UiDropdown : UiWidget
+{
+    private const int OptionHeight = 26;
+    private const int Padding = 4;
+    private readonly string label;
+    private readonly IReadOnlyList<string> options;
+    private readonly Func<int> get;
+    private readonly Action<int> set;
+    private int highlighted;
+    private int firstVisible;
+    private int visibleCount = 1;
+    internal bool IsOpen { get; private set; }
+    internal Rectangle PopupBounds { get; private set; }
+    internal int HighlightedIndex => highlighted;
+    internal int FirstVisibleIndex => firstVisible;
+    internal int VisibleOptionCount => visibleCount;
+
+    internal UiDropdown(string label, IReadOnlyList<string> options, Func<int> get, Action<int> set,
+        string explanation = "") : base(explanation)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.Count == 0)
+        {
+            throw new ArgumentException("A dropdown needs at least one option.", nameof(options));
+        }
+        this.label = label;
+        this.options = options;
+        this.get = get;
+        this.set = set;
+    }
+
+    internal override bool Focus(bool focused)
+    {
+        if (!focused)
+        {
+            Close();
+        }
+        return base.Focus(focused);
+    }
+
+    internal void Close() => IsOpen = false;
+
+    private void Open()
+    {
+        highlighted = Math.Clamp(get(), 0, options.Count - 1);
+        firstVisible = Math.Clamp(highlighted - visibleCount + 1, 0, Math.Max(0, options.Count - visibleCount));
+        IsOpen = true;
+    }
+
+    /// <summary>Fits the popup into the panel, choosing the side with enough space for useful options.</summary>
+    internal void ArrangePopup(Rectangle panelBounds)
+    {
+        int below = Math.Max(0, panelBounds.Bottom - Bounds.Bottom - 10);
+        int above = Math.Max(0, Bounds.Y - panelBounds.Y - 10);
+        int desired = Math.Min(9, options.Count) * OptionHeight + Padding * 2;
+        bool opensBelow = below >= desired || below >= above;
+        int available = opensBelow ? below : above;
+        visibleCount = Math.Clamp((available - Padding * 2) / OptionHeight, 1, Math.Min(9, options.Count));
+        int height = visibleCount * OptionHeight + Padding * 2;
+        int y = opensBelow ? Bounds.Bottom + 3 : Bounds.Y - height - 3;
+        y = Math.Clamp(y, panelBounds.Y + 4, Math.Max(panelBounds.Y + 4, panelBounds.Bottom - height - 4));
+        PopupBounds = new Rectangle(Bounds.X, y, Bounds.Width, height);
+        firstVisible = Math.Clamp(firstVisible, 0, Math.Max(0, options.Count - visibleCount));
+    }
+
+    internal Rectangle OptionBounds(int index) => new(PopupBounds.X + Padding,
+        PopupBounds.Y + Padding + (index - firstVisible) * OptionHeight,
+        PopupBounds.Width - Padding * 2, OptionHeight);
+
+    internal override void Press(Point point)
+    {
+        if (!IsOpen)
+        {
+            Open();
+        }
+        else if (PopupBounds.Contains(point))
+        {
+            int index = firstVisible + (point.Y - PopupBounds.Y - Padding) / OptionHeight;
+            if (point.Y >= PopupBounds.Y + Padding && index < firstVisible + visibleCount && index < options.Count)
+            {
+                highlighted = index;
+                Select();
+            }
+        }
+        else
+        {
+            Close();
+        }
+    }
+
+    internal void HoverOption(Point point)
+    {
+        if (PopupBounds.Contains(point) && point.Y >= PopupBounds.Y + Padding)
+        {
+            int index = firstVisible + (point.Y - PopupBounds.Y - Padding) / OptionHeight;
+            if (index < firstVisible + visibleCount && index < options.Count)
+            {
+                highlighted = index;
+            }
+        }
+    }
+
+    internal void ScrollOptions(int wheel)
+    {
+        int rows = Math.Max(1, Math.Abs(wheel) / 120);
+        firstVisible = Math.Clamp(firstVisible - Math.Sign(wheel) * rows,
+            0, Math.Max(0, options.Count - visibleCount));
+    }
+
+    internal override void Key(Keys key, bool control, bool shift)
+    {
+        if (key == Keys.Escape)
+        {
+            Close();
+            return;
+        }
+        if (key is Keys.Enter or Keys.Space)
+        {
+            if (IsOpen)
+            {
+                Select();
+            }
+            else
+            {
+                Open();
+            }
+            return;
+        }
+        if (key is Keys.Up or Keys.Down or Keys.Home or Keys.End)
+        {
+            if (!IsOpen)
+            {
+                Open();
+            }
+            highlighted = key == Keys.Home ? 0 : key == Keys.End ? options.Count - 1
+                : Math.Clamp(highlighted + (key == Keys.Up ? -1 : 1), 0, options.Count - 1);
+            if (highlighted < firstVisible)
+            {
+                firstVisible = highlighted;
+            }
+            else if (highlighted >= firstVisible + visibleCount)
+            {
+                firstVisible = highlighted - visibleCount + 1;
+            }
+        }
+    }
+
+    private void Select()
+    {
+        if (highlighted != get())
+        {
+            set(highlighted);
+        }
+        Close();
+    }
+
+    internal override void Draw(UiCanvas canvas)
+    {
+        int labelWidth = string.IsNullOrEmpty(label) ? 0 : Math.Min(130, Bounds.Width / 3);
+        if (labelWidth > 0)
+        {
+            canvas.TextFit(label, new Rectangle(Bounds.X + 8, Bounds.Y, labelWidth - 12, Height), UiCanvas.Muted);
+        }
+        Rectangle value = new(Bounds.X + labelWidth, Bounds.Y, Bounds.Width - labelWidth, Height);
+        canvas.Rounded(value, Hovered || IsOpen ? UiCanvas.Raised : UiCanvas.Surface, 4);
+        canvas.TextFit(options[Math.Clamp(get(), 0, options.Count - 1)],
+            new Rectangle(value.X + 8, value.Y, value.Width - 32, Height), UiCanvas.Ink);
+        Vector2 origin = new(value.Right - 18, value.Y + 12);
+        canvas.Line(origin, origin + new Vector2(4, 4), UiCanvas.Muted);
+        canvas.Line(origin + new Vector2(4, 4), origin + new Vector2(8, 0), UiCanvas.Muted);
+        DrawFocus(canvas);
+    }
+
+    internal void DrawPopup(UiCanvas canvas)
+    {
+        if (!IsOpen)
+        {
+            return;
+        }
+        canvas.Glass(PopupBounds, 6);
+        // Menus need enough opacity to separate overlapping inspector labels.
+        canvas.Rounded(PopupBounds, UiCanvas.Background * 0.94f, 6);
+        canvas.RoundedBorder(PopupBounds, UiCanvas.Muted * 0.4f, 6);
+        int selected = Math.Clamp(get(), 0, options.Count - 1);
+        for (int index = firstVisible; index < firstVisible + visibleCount; index++)
+        {
+            Rectangle row = OptionBounds(index);
+            if (index == highlighted)
+            {
+                canvas.Rounded(row, UiCanvas.Accent * 0.15f, 3);
+            }
+            if (index == selected)
+            {
+                canvas.Rounded(new Rectangle(row.X + 7, row.Y + 11, 4, 4), UiCanvas.Accent, 2);
+            }
+            canvas.TextFit(options[index], new Rectangle(row.X + 20, row.Y, row.Width - 30, row.Height),
+                index == selected ? UiCanvas.Accent : UiCanvas.Ink);
+        }
+        if (options.Count > visibleCount)
+        {
+            int height = Math.Max(12, (PopupBounds.Height - 8) * visibleCount / options.Count);
+            int offset = (PopupBounds.Height - 8 - height) * firstVisible / (options.Count - visibleCount);
+            canvas.Rounded(new Rectangle(PopupBounds.Right - 5, PopupBounds.Y + 4 + offset, 2, height), UiCanvas.Muted * 0.6f, 1);
+        }
     }
 }

@@ -15,6 +15,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
     private UiWidget? hovered;
     private int previousWheel;
     private ButtonState previousButton;
+    private Point previousPointer;
     private float scroll;
     private float contentHeight;
     private bool draggingScroll;
@@ -54,28 +55,60 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         DismissRequested = false;
         Layout();
         Point point = new((int)(mouse.X / scale), (int)(mouse.Y / scale));
+        bool pointerMoved = point != previousPointer;
+        previousPointer = point;
         bool pressed = mouse.LeftButton == ButtonState.Pressed && previousButton == ButtonState.Released;
         bool released = mouse.LeftButton == ButtonState.Released && previousButton == ButtonState.Pressed;
         int wheel = mouse.ScrollWheelValue - previousWheel;
         previousWheel = mouse.ScrollWheelValue;
         previousButton = mouse.LeftButton;
 
+        UiDropdown? popup = focused as UiDropdown;
+        if (popup?.IsOpen != true)
+        {
+            popup = null;
+        }
+        if (popup is not null)
+        {
+            if (wheel != 0)
+            {
+                popup.ScrollOptions(wheel);
+            }
+            if (pointerMoved || wheel != 0)
+            {
+                popup.HoverOption(point);
+            }
+        }
+        else if (wheel != 0 && Body.Contains(point) && captured is null)
+        {
+            scroll = Math.Clamp(scroll - wheel * 0.3f, 0, Math.Max(0, contentHeight - Body.Height));
+            Layout();
+        }
+
+        // Wheel input can move the layout during the same frame as a press. Hit-test only
+        // after that move, so the visible control under the pointer receives the click.
         hovered = null;
         foreach (UiWidget widget in layout)
         {
-            widget.Hovered = widget.Bounds.Contains(point) && (IsToolbar(widget) || Body.Contains(point));
+            widget.Hovered = popup is null && widget.Bounds.Contains(point) && (IsToolbar(widget) || Body.Contains(point));
             if (widget.Hovered && widget.Focusable)
             {
                 hovered = widget;
             }
         }
-        if (wheel != 0 && Body.Contains(point) && captured is null)
+        if (popup is not null)
         {
-            scroll = Math.Clamp(scroll - wheel * 0.45f, 0, Math.Max(0, contentHeight - Body.Height));
-            Layout();
+            popup.Hovered = popup.Bounds.Contains(point) || popup.PopupBounds.Contains(point);
+            hovered = popup;
         }
 
-        if (pressed)
+        if (pressed && popup is not null)
+        {
+            // Even an outside dismissal consumes this press. Nothing behind the menu is activated.
+            Try(() => popup.Press(point));
+            captured = null;
+        }
+        else if (pressed)
         {
             Rectangle scrollTrack = new(Bounds.Right - 10, Body.Y, 10, Body.Height);
             if (scrollTrack.Contains(point))
@@ -140,6 +173,10 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
             if (key == Keys.Tab)
             {
                 MoveFocus(shift ? -1 : 1);
+            }
+            else if (key == Keys.Escape && focused is UiDropdown { IsOpen: true } dropdown)
+            {
+                dropdown.Close();
             }
             else if (key == Keys.Escape && focused is not null)
             {
@@ -210,47 +247,64 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
     {
         layout.Clear();
         focusOrder.Clear();
-        int y = Bounds.Y + (Compact ? 28 : 36);
+        int y = Bounds.Y + 34;
         if (!Compact)
         {
             foreach (UiWidget widget in Toolbar)
             {
                 Place(widget, y);
-                y += widget.Height + 6;
+                y += widget.Height + 3;
             }
         }
-        Body = new Rectangle(Bounds.X + 12, y + 6, Bounds.Width - 24, Math.Max(20, Bounds.Bottom - y - (Compact ? 43 : 87)));
+        Body = new Rectangle(Bounds.X + 10, y + 5, Math.Max(1, Bounds.Width - 20), Math.Max(20, Bounds.Bottom - y - 52));
         y = Body.Y - (int)scroll;
         if (Compact)
         {
             foreach (UiWidget widget in Toolbar)
             {
                 Place(widget, y);
-                y += widget.Height + 6;
+                y += widget.Height + 3;
             }
         }
         foreach (UiWidget widget in Content)
         {
             Place(widget, y);
-            y += widget.Height + 8;
+            y += widget.Height + 3;
             if (widget is UiSection { Expanded: true } section)
             {
                 foreach (UiWidget child in section.Children)
                 {
                     Place(child, y);
-                    y += child.Height + 7;
+                    y += child.Height + 3;
                 }
-                y += 7;
+                y += 4;
             }
         }
         contentHeight = y + scroll - Body.Y;
-        scroll = Math.Clamp(scroll, 0, Math.Max(0, contentHeight - Body.Height));
+        float clamped = Math.Clamp(scroll, 0, Math.Max(0, contentHeight - Body.Height));
+        if (clamped != scroll)
+        {
+            scroll = clamped;
+            Layout();
+            return;
+        }
+        if (focused is not null && !layout.Contains(focused) || captured is not null && !layout.Contains(captured))
+        {
+            ClearFocus();
+        }
+        foreach (UiWidget widget in layout)
+        {
+            if (widget is UiDropdown dropdown)
+            {
+                dropdown.ArrangePopup(Bounds);
+            }
+        }
     }
 
     private void Place(UiWidget widget, int y)
     {
         widget.ReportValidationError = reportError;
-        widget.Bounds = new Rectangle(Bounds.X + 12, y, Bounds.Width - 30, 0);
+        widget.Bounds = new Rectangle(Bounds.X + 10, y, Math.Max(1, Bounds.Width - 24), 0);
         widget.Bounds = new Rectangle(widget.Bounds.X, widget.Bounds.Y, widget.Bounds.Width, widget.Height);
         if (widget is UiRow row)
         {
@@ -277,9 +331,9 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
 
     internal void DrawChrome(UiCanvas canvas, string title)
     {
-        canvas.Fill(Bounds, UiCanvas.Background);
-        canvas.Border(Bounds, UiCanvas.Raised);
-        canvas.Text(title, Bounds.X + 12, Bounds.Y + 12, UiCanvas.Accent);
+        canvas.Glass(Bounds);
+        canvas.TextFit(title, new Rectangle(Bounds.X + 12, Bounds.Y + 3, Bounds.Width - 24, 28), UiCanvas.Ink);
+        canvas.Fill(new Rectangle(Bounds.X + 10, Bounds.Y + 30, Bounds.Width - 20, 1), UiCanvas.Muted * 0.14f);
         if (!Compact)
         {
             foreach (UiWidget widget in Toolbar)
@@ -288,8 +342,9 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
             }
         }
         UiWidget? explained = hovered ?? focused;
-        string help = explained?.Explanation ?? "Scroll to explore. Tab navigates. Click a value to type; Enter applies. R beside a slider resets that value.";
-        Rectangle footer = new(Bounds.X + 12, Body.Bottom + (Compact ? 5 : 10), Bounds.Width - 24, Compact ? 30 : 65);
+        string help = explained?.Explanation ?? string.Empty;
+        Rectangle footer = new(Bounds.X + 12, Body.Bottom + 7, Bounds.Width - 24, 38);
+        canvas.Fill(new Rectangle(Bounds.X + 10, Body.Bottom + 3, Bounds.Width - 20, 1), UiCanvas.Muted * 0.12f);
         canvas.Wrapped(help, footer, UiCanvas.Muted);
         if (contentHeight > Body.Height)
         {
@@ -297,7 +352,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
             canvas.Fill(track, UiCanvas.Surface);
             int size = Math.Max(22, (int)(Body.Height * Body.Height / contentHeight));
             int offset = (int)((Body.Height - size) * scroll / (contentHeight - Body.Height));
-            canvas.Fill(new Rectangle(track.X, track.Y + offset, track.Width, size), UiCanvas.Accent * 0.7f);
+            canvas.Rounded(new Rectangle(track.X, track.Y + offset, track.Width, size), UiCanvas.Muted * 0.55f, 2);
         }
     }
 
@@ -329,6 +384,15 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>Draws the active menu after body scissoring has ended, within the panel bounds.</summary>
+    internal void DrawOverlay(UiCanvas canvas)
+    {
+        if (focused is UiDropdown { IsOpen: true } dropdown)
+        {
+            dropdown.DrawPopup(canvas);
         }
     }
 
