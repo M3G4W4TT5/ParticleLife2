@@ -1,7 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ParticleLife.Core.Models;
-using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 
 namespace ParticleLife.Core.Experiments;
@@ -16,8 +14,8 @@ public static class SessionFile
     /// <summary>Gets the supported session format identifier, distinct from experiments and run reports.</summary>
     public const string Format = "particle-life-session";
 
-    /// <summary>Gets the supported session schema version.</summary>
-    public const int SchemaVersion = 1;
+    /// <summary>Gets the written session schema version; legacy schema 1 remains readable.</summary>
+    public const int SchemaVersion = 2;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -62,7 +60,7 @@ public static class SessionFile
         for (int i = 0; i < events.Length; i++)
         {
             SessionEvent change = session.Events[i];
-            events[i] = new(change.BoundaryStep, ConfigurationData.From(change.Configuration), change.Label,
+            events[i] = new(change.BoundaryStep, ConfigurationFile.Encode(change.Configuration), change.Label,
                 change.ReplacementState is null ? null : SnapshotData.From(change.ReplacementState), change.Generator);
         }
 
@@ -80,7 +78,7 @@ public static class SessionFile
     {
         FileData data = JsonSerializer.Deserialize<FileData>(json, Options)
             ?? throw new JsonException("A session must be an object.");
-        if (data.Format != Format || data.SchemaVersion != SchemaVersion)
+        if (data.Format != Format || data.SchemaVersion is not (1 or SchemaVersion))
         {
             throw new NotSupportedException("Unsupported session format or schema version.");
         }
@@ -90,7 +88,7 @@ public static class SessionFile
         for (int i = 0; i < events.Length; i++)
         {
             EventData change = data.Events[i] ?? throw new JsonException("Session events cannot contain null entries.");
-            events[i] = new(change.BoundaryStep, change.Configuration.ToConfiguration(),
+            events[i] = new(change.BoundaryStep, ConfigurationFile.Decode(change.Configuration, legacy: data.SchemaVersion == 1),
                 change.ReplacementState?.ToSnapshot(), change.Label, change.Generator);
         }
 
@@ -100,31 +98,9 @@ public static class SessionFile
     private sealed record FileData(string Format, int SchemaVersion, JsonElement InitialExperiment,
         EventData[] Events, long TerminalStep);
 
-    private sealed record EventData(long BoundaryStep, ConfigurationData Configuration, string Label,
+    private sealed record EventData(long BoundaryStep, JsonElement Configuration, string Label,
         SnapshotData? ReplacementState = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GeneratorMetadata? Generator = null);
-
-    private sealed record ConfigurationData(ParameterData Parameters, MatrixData Matrix, double TimeStep,
-        string NeighbourSearchVersion, int WorkerCount)
-    {
-        internal static ConfigurationData From(SimulationConfiguration configuration) => new(
-            ParameterData.From(configuration.Parameters), new(configuration.Matrix.SpeciesCount, configuration.Matrix.Values.ToArray()),
-            configuration.TimeStep, ExperimentFile.GetNeighbourSearchVersion(configuration.Backend), configuration.WorkerCount);
-
-        internal SimulationConfiguration ToConfiguration()
-        {
-            ForceBackend backend = NeighbourSearchVersion switch
-            {
-                "direct/1" => ForceBackend.Direct,
-                "uniform-grid/1" => ForceBackend.UniformGrid,
-                _ => throw new NotSupportedException("Unsupported session neighbour-search convention.")
-            };
-            return new(Parameters.ToParameters(), new InteractionMatrix(Matrix.SpeciesCount, Matrix.Values),
-                TimeStep, backend, WorkerCount);
-        }
-    }
-
-    private sealed record MatrixData(int SpeciesCount, double[] Values);
 
     private sealed record SnapshotData(long[] Ids, PointData[] Positions, PointData[] Velocities,
         int[] Species, double Time, long Step)
@@ -160,22 +136,4 @@ public static class SessionFile
         return vectors;
     }
 
-    private sealed record ParameterData(double WorldWidth, double WorldHeight, double Cutoff, double ForceScale,
-        double RepulsionFraction, double? DampingHalfLife, double WallWidth, double WallStrength)
-    {
-        internal static ParameterData From(ModelParameters p) => new(p.WorldWidth, p.WorldHeight, p.Cutoff,
-            p.ForceScale, p.RepulsionFraction, p.DampingHalfLife, p.WallWidth, p.WallStrength);
-
-        internal ModelParameters ToParameters() => new()
-        {
-            WorldWidth = WorldWidth,
-            WorldHeight = WorldHeight,
-            Cutoff = Cutoff,
-            ForceScale = ForceScale,
-            RepulsionFraction = RepulsionFraction,
-            DampingHalfLife = DampingHalfLife,
-            WallWidth = WallWidth,
-            WallStrength = WallStrength
-        };
-    }
 }

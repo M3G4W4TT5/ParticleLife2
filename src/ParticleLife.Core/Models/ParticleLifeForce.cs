@@ -3,6 +3,53 @@ namespace ParticleLife.Core.Models;
 /// <summary>The dimensionless short-range repulsion and species-dependent attraction curve.</summary>
 public static class ParticleLifeForce
 {
+    /// <summary>Evaluates the directed per-pair curve using physical core and cutoff radii.</summary>
+    /// <param name="distance">Finite nonnegative separation r in reduced length units.</param>
+    /// <param name="attraction">Directed dimensionless coefficient in [-1,1].</param>
+    /// <param name="coreRadius">Finite core radius c, with 0 &lt;= c &lt; cutoff.</param>
+    /// <param name="cutoff">Positive finite outer radius R with a positive finite square.</param>
+    /// <returns>A dimensionless coefficient; multiply by force scale and the directed unit displacement.</returns>
+    /// <remarks>Below a positive core, g=r/c-1. From c to R, g is an outer triangle peaking
+    /// at (c+R)/2 with height attraction. A zero core removes the repulsion branch. At r=0 and
+    /// r&gt;=R, g=0. The branches preserve zero exactly at the core and cutoff. Global beta-mode
+    /// uses <see cref="RadialCoefficient"/> to retain its original arithmetic convention.</remarks>
+    /// <exception cref="ArgumentOutOfRangeException">A value is outside its supported range.</exception>
+    public static double RadialCoefficientAtDistance(double distance, double attraction, double coreRadius, double cutoff)
+    {
+        ModelParameters.RequirePositiveFinite(cutoff, nameof(cutoff));
+        ModelParameters.RequirePositiveFinite(cutoff * cutoff, nameof(cutoff));
+        if (!double.IsFinite(distance) || distance < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(distance));
+        }
+        if (!double.IsFinite(attraction) || attraction < -1 || attraction > 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(attraction));
+        }
+        if (!double.IsFinite(coreRadius) || coreRadius < 0 || coreRadius >= cutoff)
+        {
+            throw new ArgumentOutOfRangeException(nameof(coreRadius));
+        }
+        return EvaluatePairRangeValidated(distance, attraction, coreRadius, cutoff);
+    }
+
+    /// <summary>Uses separate triangle branches to preserve tiny endpoint differences.</summary>
+    internal static double EvaluatePairRangeValidated(double distance, double attraction, double core, double cutoff)
+    {
+        if (distance == 0 || distance >= cutoff)
+        {
+            return 0;
+        }
+        if (distance < core)
+        {
+            return distance / core - 1;
+        }
+        double width = cutoff - core;
+        double triangle = distance <= core + width / 2
+            ? 2 * ((distance - core) / width) : 2 * ((cutoff - distance) / width);
+        return attraction * triangle;
+    }
+
     /// <summary>Evaluates the Particle Life radial coefficient, not a force or potential energy.</summary>
     /// <param name="distanceRatio">Finite nonnegative separation q = r/R.</param>
     /// <param name="attraction">Directed dimensionless coefficient A[receiver,source] in [-1, 1].</param>

@@ -36,6 +36,7 @@ public sealed class ExperimentDefinition
         ArgumentException.ThrowIfNullOrWhiteSpace(generator.Version);
         ArgumentException.ThrowIfNullOrWhiteSpace(generator.Runtime);
         parameters.Validate();
+        matrix.ValidateFor(parameters);
         if (!Enum.IsDefined(backend))
         {
             throw new ArgumentOutOfRangeException(nameof(backend));
