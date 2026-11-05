@@ -14,6 +14,7 @@ internal sealed unsafe class OpenGlDrawApi : IDisposable
     internal const uint CurrentProgram = 0x8B8D, VertexArrayBinding = 0x85B5, TextureBindingBuffer = 0x8C2C;
     internal const uint ActiveTextureName = 0x84E0, TextureZero = 0x84C0;
     internal const uint Blend = 0x0BE2, DepthTest = 0x0B71, ScissorTest = 0x0C11, CullFace = 0x0B44, ProgramPointSize = 0x8642;
+    internal const uint PointSprite = 0x8861;
     internal const uint ViewportName = 0x0BA2, ScissorBox = 0x0C10;
     private readonly nint library;
     private readonly ProcAddress getProcAddress;
@@ -59,6 +60,13 @@ internal sealed unsafe class OpenGlDrawApi : IDisposable
     internal int MaximumViewportWidth { get; }
     internal int MaximumViewportHeight { get; }
 
+    /// <summary>Gets whether this non-core context needs the legacy point-sprite enable for gl_PointCoord.</summary>
+    /// <remarks>Only the explicit CORE_PROFILE_BIT rules out the legacy enable. The tested DesktopGL
+    /// NVIDIA context advertises OpenGL 4.6 but returns profile mask zero and retains point-sprite state;
+    /// absence of COMPATIBILITY_PROFILE_BIT therefore does not establish a core context. Explicit core
+    /// profiles generate point coordinates unconditionally and must never receive POINT_SPRITE.</remarks>
+    internal bool RequiresPointSpriteEnable { get; }
+
     /// <summary>Reports whether native cleanup is safe; a lost context must not replace the original failure.</summary>
     internal bool CanUseOwner => !disposed && Environment.CurrentManagedThreadId == ownerThread && getCurrentContext() == context;
 
@@ -89,6 +97,7 @@ internal sealed unsafe class OpenGlDrawApi : IDisposable
             GetInteger = Load<GetIntegerCall>("glGetIntegerv");
             GetFloat = Load<GetFloatCall>("glGetFloatv");
             GetError = Load<GetErrorCall>("glGetError");
+            RequiresPointSpriteEnable = (Integer(0x9126) & 0x00000001) == 0;
             GenBuffers = Load<GenObjectsCall>("glGenBuffers");
             GenVertexArrays = Load<GenObjectsCall>("glGenVertexArrays");
             GenTextures = Load<GenObjectsCall>("glGenTextures");

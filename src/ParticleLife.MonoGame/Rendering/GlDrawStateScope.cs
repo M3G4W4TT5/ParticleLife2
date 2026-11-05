@@ -4,13 +4,14 @@ namespace ParticleLife.MonoGame.Rendering;
 /// <remarks>The adapter changes only the state listed here. Its private VAO prevents changes to
 /// MonoGame's vertex attributes or element binding. Texture-buffer binding on unit zero is separate
 /// from its ordinary 2D texture binding. No framebuffer, SSBO, compute, depth range or colour mask
-/// is changed. A value-type scope avoids per-draw managed allocation.</remarks>
+/// is changed. Legacy point-sprite state is restored without querying its removed enum in explicit
+/// core contexts. A value-type scope avoids per-draw managed allocation.</remarks>
 internal readonly struct GlDrawStateScope : IDisposable
 {
     private readonly OpenGlDrawApi gl;
     private readonly int program, vertexArray, arrayBuffer, activeTexture, textureBuffer;
     private readonly int sourceRgb, destinationRgb, sourceAlpha, destinationAlpha, equationRgb, equationAlpha;
-    private readonly bool blend, depth, scissor, cull, pointSize;
+    private readonly bool blend, depth, scissor, cull, pointSize, pointSprite;
     internal GlRectangle Viewport { get; }
     private GlRectangle Scissor { get; }
 
@@ -38,6 +39,7 @@ internal readonly struct GlDrawStateScope : IDisposable
         scissor = gl.IsEnabled(OpenGlDrawApi.ScissorTest) != 0;
         cull = gl.IsEnabled(OpenGlDrawApi.CullFace) != 0;
         pointSize = gl.IsEnabled(OpenGlDrawApi.ProgramPointSize) != 0;
+        pointSprite = gl.RequiresPointSpriteEnable && gl.IsEnabled(OpenGlDrawApi.PointSprite) != 0;
     }
 
     public void Dispose()
@@ -57,6 +59,7 @@ internal readonly struct GlDrawStateScope : IDisposable
         Restore(OpenGlDrawApi.ScissorTest, scissor);
         Restore(OpenGlDrawApi.CullFace, cull);
         Restore(OpenGlDrawApi.ProgramPointSize, pointSize);
+        if (gl.RequiresPointSpriteEnable) { Restore(OpenGlDrawApi.PointSprite, pointSprite); }
     }
 
     private void Restore(uint capability, bool enabled)

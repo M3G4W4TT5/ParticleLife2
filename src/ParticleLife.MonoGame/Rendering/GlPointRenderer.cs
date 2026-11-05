@@ -185,6 +185,9 @@ internal sealed unsafe class GlPointRenderer : IDisposable
             gl.Disable(OpenGlDrawApi.DepthTest);
             gl.Disable(OpenGlDrawApi.CullFace);
             gl.Enable(OpenGlDrawApi.ProgramPointSize);
+            // Compatibility and unprofiled legacy contexts need point sprites for gl_PointCoord.
+            // Explicit core profiles generate it unconditionally and reject the legacy capability.
+            if (gl.RequiresPointSpriteEnable) { gl.Enable(OpenGlDrawApi.PointSprite); }
             gl.Enable(OpenGlDrawApi.Blend);
             gl.BlendEquationSeparate(0x8006, 0x8006);
             gl.BlendFuncSeparate(1, appearance.Visuals.Blend == ParticleBlend.Additive ? 1u : 0x0303u, 1, 0x0303);
