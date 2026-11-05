@@ -211,12 +211,19 @@ public sealed partial class ExperimentEditor
             Playback.AdoptReplay(completed, session.InitialExperiment);
             ClearTimeline();
             events.AddRange(session.Events);
+            recordedBytes = session.Events.Sum(EstimateActionBytes);
             AdvanceIdentityHighWater(session.InitialExperiment.InitialState.Ids);
             foreach (SessionEvent change in session.Events)
             {
                 if (change.ReplacementState is not null)
                 {
                     AdvanceIdentityHighWater(change.ReplacementState.Ids);
+                }
+                if (change.StateDelta is not null)
+                {
+                    AdvanceIdentityHighWater(change.StateDelta.Updates.Ids);
+                    AdvanceIdentityHighWater(change.StateDelta.Additions.Ids);
+                    AdvanceIdentityHighWater(change.StateDelta.RemovedIds);
                 }
             }
 

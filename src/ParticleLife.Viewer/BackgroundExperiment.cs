@@ -382,7 +382,8 @@ public sealed class BackgroundExperiment : IDisposable
             state.Count, state.Step, state.Time, editor.Playback.IsPaused, editor.Playback.LastExecution,
             editor.Playback.DirectFallbackSteps, editor.Playback.AccumulationFallbackSteps, editor.Playback.LastStatistics,
             editor.Playback.LatestDiagnostic, editor.Playback.DroppedPlaybackSeconds, editor.IsReplaying,
-            editor.ReplayCompletedStep, editor.ReplayTerminalStep, applied, error, stepsPerSecond, simulationSpeed);
+            editor.ReplayCompletedStep, editor.ReplayTerminalStep, applied, error, stepsPerSecond, simulationSpeed)
+        { Recording = editor.Recording };
     }
 
     /// <summary>Cancels queued work and joins the worker after its current completed boundary.</summary>
@@ -417,7 +418,11 @@ public sealed record EditorPublication(
     long DirectFallbackSteps, long AccumulationFallbackSteps, ForceEvaluationStatistics LastStatistics,
     DiagnosticSample? LatestDiagnostic, double DroppedPlaybackSeconds, bool IsReplaying,
     long ReplayCompletedStep, long ReplayTerminalStep, long AppliedCommand, string? Error,
-    double StepsPerSecond, double SimulationSpeed);
+    double StepsPerSecond, double SimulationSpeed)
+{
+    /// <summary>Gets storage policy and retained action/undo payload at this completed publication.</summary>
+    public RecordingStatus Recording { get; init; } = RecordingStatus.Empty;
+}
 
 /// <summary>One explicitly owned read lease over a reusable completed CPU render buffer.</summary>
 /// <remarks>Spans may only be read until disposal. Holding a lease never prevents numerical advancement.

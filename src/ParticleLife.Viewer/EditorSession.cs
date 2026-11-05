@@ -66,6 +66,8 @@ public sealed class EditorSession : IDisposable
     public bool CanRedo => Publication.CanRedo;
     /// <summary>Gets applied trajectory event count, excluding unapplied previews.</summary>
     public int SessionEventCount => Publication.SessionEventCount;
+    /// <summary>Gets completed recording and undo storage status without reading particle arrays.</summary>
+    public RecordingStatus Recording => Publication.Recording;
     /// <summary>Gets whether the worker is replaying an isolated temporary session.</summary>
     public bool IsReplaying => Publication.IsReplaying;
     /// <summary>Gets completed temporary replay steps.</summary>
@@ -361,7 +363,8 @@ public sealed class EditorSession : IDisposable
             editor.Playback.IsPaused, editor.Playback.LastExecution, editor.Playback.DirectFallbackSteps,
             editor.Playback.AccumulationFallbackSteps, editor.Playback.LastStatistics, editor.Playback.LatestDiagnostic,
             editor.Playback.DroppedPlaybackSeconds, editor.IsReplaying, editor.ReplayCompletedStep,
-            editor.ReplayTerminalStep, 0, null, 0, 0);
+            editor.ReplayTerminalStep, 0, null, 0, 0)
+        { Recording = editor.Recording };
     }
     /// <summary>Retains fields touched by any unapplied preview, including a drag returning to its starting value.</summary>
     private static int Changed(bool changed, int bit) => changed ? 1 << bit : 0;

@@ -115,6 +115,7 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(advanced);
         discoveries.Children.Add(new UiLabel(() => "Preset: future recipe. From here: exact state. Initial: reset baseline. Session: every applied edit.", 50));
         discoveries.Children.Add(Button(() => "Browse saved discoveries", OpenFiles, "Open named save/load workflows. Existing destinations are never overwritten."));
+        RecordingControls.AddTo(discoveries, editor, report);
         panel.Toolbar.Add(new UiRow(
             new UiButton(() => "Particles", () => SelectTab(0), "Live populations, independent generators and direct brushes.", selected: () => selectedTab == 0),
             new UiButton(() => "Interactions", () => SelectTab(1), "Forces and directed matrix editing.", selected: () => selectedTab == 1),
