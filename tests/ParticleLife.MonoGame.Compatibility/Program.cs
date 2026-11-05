@@ -320,7 +320,8 @@ presentedPanel.PrepareForOpen(pointerHeld: false);
 presentedPanel.Update(MouseAt(presentedPoint, pressed: true, wheel: -960), 1, []);
 Require(presentedActions == 2, "Keyboard opening discarded the first fresh pointer click.");
 
-// Reproduce the actual small-window overlap: Files at y218 sits above Save from here after opening.
+// A held Files press must not activate the newly opened compact library. Then exercise
+// its current keyboard Save pattern workflow, including scrolling a short modal.
 string modalDirectory = Path.GetFullPath(Path.Combine("artifacts", "modal-pointer-check", Guid.NewGuid().ToString("N")));
 using (PlaybackController modalPlayback = new(PresetGenerator.Create(PresetKind.Random, 4, 2, 31)))
 {
@@ -336,9 +337,24 @@ using (PlaybackController modalPlayback = new(PresetGenerator.Create(PresetKind.
     Require(Directory.GetFiles(modalDirectory, "*.json").Length == 0,
         "Holding the compact Files opening click accidentally saved an experiment.");
     modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
-    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave, pressed: true), []);
-    Require(Directory.GetFiles(modalDirectory, "*.json").Length == 2,
-        "A real subsequent Save from here click did not save the experiment and companion.");
+    for (int index = 0; index < 8; index++)
+    {
+        modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+            [UiInputEvent.KeyPress(Keys.Tab, false, false)]);
+    }
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+        [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
+    for (int index = 0; index < 5; index++)
+    {
+        modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+            [UiInputEvent.KeyPress(Keys.Tab, false, false)]);
+    }
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+        [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
+    Require(Directory.GetFiles(modalDirectory, "*.experiment.json").Length == 1
+        && Directory.GetFiles(modalDirectory, "*.viewer.json").Length == 1
+        && Directory.GetFiles(modalDirectory, "*.discovery.json").Length == 1,
+        "The compact library's keyboard Save pattern workflow did not save the experiment, companion and preview.");
 }
 
 // At high UI scale a small native pane can be only 80 logical pixels high.
