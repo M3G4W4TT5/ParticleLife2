@@ -41,7 +41,7 @@ Each phase ends with a usable result and focused verification. The order is driv
 | Phase | Current evidence and outstanding acceptance |
 | --- | --- |
 | P1 | Saved twenty geometry/population fixtures through 250k plus a 1M fixed-density stretch input; bounded CPU screens and timeout protection verified. Existing MonoGame context demonstrated compute/render buffer sharing, exact capture/restore and CPU-only startup. See [performance evidence](performance-p1.md) and [GPU boundary](gpu-integration.md). |
-| P2 | Background CPU ownership and completed publication under implementation; bulk renderer and measured CPU tuning pending. |
+| P2 | Background CPU ownership, bounded edit queues and reusable completed render leases are implemented. Native drawing uses bulk GL points with a MonoGame quad fallback. Explicit CPU workers through 64, larger population controls and density-preserving resize are implemented; measured alternatives and rejected SIMD are recorded in [P2 evidence](performance-p2.md). Automated ownership/render/worker checks pass; native responsiveness and graphics timing remain pending the consolidated review. |
 | P3 | Pending exploration controls, independent generators and brushes. |
 | P4 | Independent boundary/range core work in progress; integration, editor and persistence acceptance pending. |
 | P5 | Production GPU simulation and checkpoint/backend workflows pending; P1 prototype is not the production backend. |
