@@ -5,7 +5,8 @@ namespace ParticleLife.MonoGame.Editor;
 
 /// <summary>Owns keyboard focus, clipping and scrolling independently of widget drawing or simulation data.</summary>
 /// <remarks>Retains widgets and reuses layout lists. Text input never falls through to game shortcuts.
-/// Focus loss cancels pointer capture and ends a slider gesture before the host pauses.</remarks>
+/// Focus loss cancels pointer capture and ends a slider gesture before the host pauses. Middle/right
+/// presses outside the panel validate outgoing drafts before releasing focus for canvas navigation.</remarks>
 internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape = false)
 {
     private readonly List<UiWidget> layout = [];
@@ -17,6 +18,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
     private int previousWheel;
     private bool synchronizeWheel;
     private ButtonState previousButton;
+    private ButtonState previousMiddleButton, previousRightButton;
     private Point previousPointer;
     private float scroll;
     private float contentHeight;
@@ -73,10 +75,27 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         previousPointer = point;
         bool pressed = mouse.LeftButton == ButtonState.Pressed && previousButton == ButtonState.Released;
         bool released = mouse.LeftButton == ButtonState.Released && previousButton == ButtonState.Pressed;
+        bool navigationPressed = mouse.MiddleButton == ButtonState.Pressed && previousMiddleButton == ButtonState.Released
+            || mouse.RightButton == ButtonState.Pressed && previousRightButton == ButtonState.Released;
         int wheel = synchronizeWheel ? 0 : mouse.ScrollWheelValue - previousWheel;
         synchronizeWheel = false;
         previousWheel = mouse.ScrollWheelValue;
         previousButton = mouse.LeftButton;
+        previousMiddleButton = mouse.MiddleButton;
+        previousRightButton = mouse.RightButton;
+
+        if (navigationPressed && !Bounds.Contains(point))
+        {
+            // Match validating click-away, not explicit dismissal: invalid text keeps focus and
+            // blocks the host's pan gate. Successful blur ends any slider before camera movement.
+            Try(() =>
+            {
+                if (focused?.Focus(false) == false) { return; }
+                captured?.Release();
+                focused = captured = null;
+                draggingScroll = false;
+            });
+        }
 
         UiDropdown? popup = focused as UiDropdown;
         if (popup?.IsOpen != true)
