@@ -41,6 +41,14 @@ For current timing commands and measurement boundaries, use the [P7 CPU/GPU capa
 
 ### Interactive verification
 
+The narrow trail regression uses the production rendering pipeline with tiny offscreen targets. It checks RGBA decay at 0.35- and 8-second half-lives at 144 Hz, disappearance after twelve half-lives, paused history, camera clearing and release of disabled history targets. Run it outside performance measurements, with a fresh output directory:
+
+```sh
+dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- --trail-render-checks artifacts/trail-render-checks
+```
+
+Success prints `TRAIL_RENDERING_PASS` and saves JSON plus checkpoint PNGs. The in-process watchdog is sixty seconds; use a seventy-five-second process deadline when supervising graphics-driver failures. This check does not replace the native visual review of Luminous trails and their responsiveness.
+
 After the Release build, launch the actual native window:
 
 ```sh
