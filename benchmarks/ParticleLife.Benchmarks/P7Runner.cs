@@ -16,7 +16,7 @@ namespace ParticleLife.Benchmarks;
 /// with zero further evolution for matched CPU/GPU starts; disclose GPU precision conversion.</remarks>
 internal static class P7Runner
 {
-    private const int MinimumWarmupCalls = 8;
+    private const int MinimumWarmupCalls = 128;
     private const double MinimumWarmupCallSeconds = 0.5;
 
     internal static int Run(string inputPath, string reportPath, int workers, int evolutionSteps, int samples,
@@ -159,7 +159,8 @@ internal static class P7Runner
                 capture = SavePremeasurementSnapshot(simulation, experiment, snapshotPath, evolutionCompleted);
             }
             P2Runner.Series series = new(samples);
-            Action step = simulation.Step;
+            long[] callerAllocations = new long[samples], workerAllocations = new long[samples];
+            UniformGridForceEvaluator grid = (UniformGridForceEvaluator)simulation.Evaluator;
             object warmedMemory = Memory();
             long candidates = 0, accepted = 0;
             int fallbackSamples = 0;
@@ -168,7 +169,14 @@ internal static class P7Runner
             long began = Stopwatch.GetTimestamp();
             for (int index = 0; index < samples; index++)
             {
-                series.Measure(index, step);
+                long processBefore = GC.GetTotalAllocatedBytes(true);
+                long callerBefore = GC.GetAllocatedBytesForCurrentThread();
+                long stepBegan = Stopwatch.GetTimestamp();
+                simulation.Step();
+                double elapsedMilliseconds = Stopwatch.GetElapsedTime(stepBegan).TotalMilliseconds;
+                callerAllocations[index] = GC.GetAllocatedBytesForCurrentThread() - callerBefore;
+                workerAllocations[index] = grid.LastWorkerAllocatedBytes;
+                series.Record(index, elapsedMilliseconds, GC.GetTotalAllocatedBytes(true) - processBefore);
                 measuredCompleted++;
                 candidates += simulation.LastStatistics.CandidatePairs;
                 accepted += simulation.LastStatistics.AcceptedPairs;
@@ -210,7 +218,7 @@ internal static class P7Runner
                 minimumWarmupCallSeconds = MinimumWarmupCallSeconds,
                 warmupCallSecondsExcludingProgress = warmupCallSeconds,
                 warmupWallSecondsIncludingProgress = warmupWallSeconds,
-                warmupPolicy = "At least eight identical-input calls and 0.5 seconds of reset/step work, each reset beforehand, followed by one final reset BEFORE global evolution. The child deadline also bounds warmup. No reset occurs after global evolution, capture or between measured samples. Zero evolution explicitly measures continued steps from the saved input for matched CPU/GPU comparisons.",
+                warmupPolicy = "At least 128 identical-input calls and 0.5 seconds of reset/step work, each reset beforehand, followed by one final reset BEFORE global evolution. The larger call floor is intended to reduce fresh-process warmup sensitivity; it does not prove runtime or hardware timing has stabilized. The child deadline also bounds warmup. No reset occurs after global evolution, capture or between measured samples. Zero evolution explicitly measures continued steps from the saved input for matched CPU/GPU comparisons.",
                 evolutionSteps = evolutionCompleted,
                 evolutionWallSecondsIncludingProgress = evolutionWallSeconds,
                 initialState,
@@ -223,6 +231,15 @@ internal static class P7Runner
                 measurementEndStep = completedStep,
                 measuredSimulationTime = completedSimulationTime,
                 steps = stepSeries,
+                stepAllocationAttribution = new
+                {
+                    callerAllocatedBytes = callerAllocations.Sum(),
+                    backgroundWorkerAllocatedBytes = workerAllocations.Sum(),
+                    callerPlusWorkerAllocatedBytes = callerAllocations.Sum() + workerAllocations.Sum(),
+                    callerAllocations,
+                    workerAllocations,
+                    policy = "Caller allocation is measured around the complete Step on its owning thread; persistent worker allocation comes from each completed force callback. Counters and reporting are outside step timing. The unchanged steps.allocations process-wide counter also includes unrelated process activity; a positive process delta alone does not identify a solver allocation. Attribution describes this run only."
+                },
                 candidates,
                 accepted,
                 fallbackSamples,
