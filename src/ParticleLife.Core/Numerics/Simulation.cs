@@ -262,6 +262,13 @@ public sealed class Simulation : IDisposable
         ForceEvaluationStatistics statistics = evaluator.Evaluate(input, forces.AsSpan(0, count));
         SemiImplicitEuler.Integrate(input, forces.AsSpan(0, count), TimeStep, dampingFactor,
             outputPositions.AsSpan(0, count), outputVelocities.AsSpan(0, count));
+        if (Parameters.Boundary is BoundaryKind.Periodic or BoundaryKind.Reflecting)
+        {
+            for (int index = 0; index < count; index++)
+            {
+                WorldBoundary.Map(ref outputPositions[index], ref outputVelocities[index], Parameters);
+            }
+        }
         (positions, outputPositions) = (outputPositions, positions);
         (velocities, outputVelocities) = (outputVelocities, velocities);
         time = nextTime;

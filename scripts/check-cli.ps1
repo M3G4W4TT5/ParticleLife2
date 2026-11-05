@@ -176,8 +176,8 @@ foreach ($preset in @('random', 'chains', 'snakes')) {
     Invoke-Cli -Arguments @('create', '--preset', $preset, '--particles', "$population", '--species', "$species",
         '--seed', "$seed", '--output', $experimentPath)
     $experiment = Read-Json $experimentPath
-    Assert-That ($experiment.schemaVersion -eq 2 -and $experiment.neighbourSearchVersion -ceq 'uniform-grid/1') "$preset did not save grid as the intended search."
-    Assert-That ($experiment.modelVersion -ceq 'particle-life/1' -and $experiment.integratorVersion -ceq 'damped-semi-implicit-euler/1') "$preset search optimization changed its physical model or integrator identity."
+    Assert-That ($experiment.schemaVersion -eq 3 -and $experiment.neighbourSearchVersion -ceq 'uniform-grid/1') "$preset did not save grid as the intended search."
+    Assert-That ($experiment.modelVersion -ceq 'particle-life/2' -and $experiment.integratorVersion -ceq 'damped-semi-implicit-euler/1') "$preset did not save the current model and integrator identity."
     Invoke-Cli -Arguments @('validate', $experimentPath)
     Invoke-Cli -Arguments @('run', $experimentPath, '--steps', '20', '--sample-every', '0', '--output', $gridReportPath)
     Invoke-Cli -Arguments @('run', $experimentPath, '--steps', '20', '--sample-every', '0', '--backend', 'direct', '--output', $overrideReportPath)

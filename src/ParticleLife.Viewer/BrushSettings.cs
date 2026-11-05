@@ -1,4 +1,5 @@
 using ParticleLife.Core.State;
+using ParticleLife.Core.Models;
 
 namespace ParticleLife.Viewer;
 
@@ -69,7 +70,18 @@ public sealed record BrushSettings
     /// <returns>Whether the point lies inside or on the footprint.</returns>
     public bool Contains(Vector2d position, Vector2d centre)
     {
-        double x = (position.X - centre.X) / Radius, y = (position.Y - centre.Y) / Radius;
+        return ContainsDisplacement(position - centre);
+    }
+
+    /// <summary>Tests the footprint using the world's directed displacement, including periodic seams.</summary>
+    /// <param name="position">Particle position.</param><param name="centre">Brush centre.</param>
+    /// <param name="parameters">Validated explicit world geometry.</param><returns>Whether the point lies in the footprint.</returns>
+    public bool Contains(Vector2d position, Vector2d centre, ModelParameters parameters) =>
+        ContainsDisplacement(WorldBoundary.Displacement(centre, position, parameters));
+
+    private bool ContainsDisplacement(Vector2d displacement)
+    {
+        double x = displacement.X / Radius, y = displacement.Y / Radius;
         return Shape == BrushShape.Square ? Math.Abs(x) <= 1 && Math.Abs(y) <= 1 : x * x + y * y <= 1;
     }
 }

@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ParticleLife.Core.Models;
-using ParticleLife.Core.Numerics;
+using ParticleLife.Core.Experiments;
 
 namespace ParticleLife.Viewer;
 
@@ -10,8 +9,8 @@ namespace ParticleLife.Viewer;
 /// versions, invalid populations and enum strings fail before any running editor can be changed.</remarks>
 public static class PresetFile
 {
-    /// <summary>Gets the supported preset schema version.</summary>
-    public const int SchemaVersion = 1;
+    /// <summary>Gets the written preset schema version; legacy schema 1 remains readable.</summary>
+    public const int SchemaVersion = 2;
 
     /// <summary>Serializes exact current rules and a reusable generation recipe.</summary>
     /// <param name="preset">Validated immutable preset.</param>
@@ -20,7 +19,7 @@ public static class PresetFile
     {
         ArgumentNullException.ThrowIfNull(preset);
         return JsonSerializer.Serialize(new PresetData("particle-life-preset", SchemaVersion, preset.Name,
-            ConfigurationData.From(preset.Configuration), preset.Populations.ToArray(), GenerationData.From(preset.Generation),
+            ConfigurationFile.Encode(preset.Configuration), preset.Populations.ToArray(), GenerationData.From(preset.Generation),
             AppearanceData.From(preset.Appearance), PlaybackData.From(preset.Playback)), EditorJson.Options);
     }
 
@@ -31,12 +30,12 @@ public static class PresetFile
     {
         PresetData data = JsonSerializer.Deserialize<PresetData>(json, EditorJson.Options)
             ?? throw new JsonException("A preset must be a JSON object.");
-        if (data.DocumentKind != "particle-life-preset" || data.SchemaVersion != SchemaVersion)
+        if (data.DocumentKind != "particle-life-preset" || data.SchemaVersion is not (1 or SchemaVersion))
         {
             throw new NotSupportedException("Unsupported preset document kind or schema version.");
         }
 
-        return new PresetDefinition(data.Name, data.Configuration.ToConfiguration(), data.Populations,
+        return new PresetDefinition(data.Name, ConfigurationFile.Decode(data.Configuration, legacy: data.SchemaVersion == 1), data.Populations,
             data.Generation.ToSettings(), data.Appearance.ToSettings(), data.Playback.ToSettings());
     }
 
@@ -50,7 +49,7 @@ public static class PresetFile
     /// <param name="preset">Validated preset.</param>
     public static void SaveNew(string path, PresetDefinition preset) => ExclusiveFileStorage.Save(path, Serialize(preset));
 
-    private sealed record PresetData(string DocumentKind, int SchemaVersion, string Name, ConfigurationData Configuration,
+    private sealed record PresetData(string DocumentKind, int SchemaVersion, string Name, JsonElement Configuration,
         int[] Populations, GenerationData Generation, AppearanceData Appearance, PlaybackData Playback);
 }
 
@@ -66,44 +65,6 @@ internal static class EditorJson
         RespectRequiredConstructorParameters = true
     };
 }
-
-internal sealed record ConfigurationData(ParameterData Parameters, MatrixData Matrix, double TimeStep,
-    string NeighbourSearchVersion, int WorkerCount)
-{
-    internal static ConfigurationData From(SimulationConfiguration configuration) => new(ParameterData.From(configuration.Parameters),
-        new MatrixData(configuration.Matrix.SpeciesCount, configuration.Matrix.Values.ToArray()), configuration.TimeStep,
-        Core.Experiments.ExperimentFile.GetNeighbourSearchVersion(configuration.Backend), configuration.WorkerCount);
-
-    internal SimulationConfiguration ToConfiguration() => new(Parameters.ToParameters(), new InteractionMatrix(Matrix.SpeciesCount, Matrix.Values),
-        TimeStep, NeighbourSearchVersion switch
-        {
-            "direct/1" => ForceBackend.Direct,
-            "uniform-grid/1" => ForceBackend.UniformGrid,
-            _ => throw new NotSupportedException("Unsupported preset neighbour-search convention.")
-        }, WorkerCount);
-}
-
-internal sealed record ParameterData(double WorldWidth, double WorldHeight, double Cutoff, double ForceScale,
-    double RepulsionFraction, double? DampingHalfLife, double WallWidth, double WallStrength)
-{
-    internal static ParameterData From(ModelParameters parameters) => new(parameters.WorldWidth, parameters.WorldHeight,
-        parameters.Cutoff, parameters.ForceScale, parameters.RepulsionFraction, parameters.DampingHalfLife,
-        parameters.WallWidth, parameters.WallStrength);
-
-    internal ModelParameters ToParameters() => new()
-    {
-        WorldWidth = WorldWidth,
-        WorldHeight = WorldHeight,
-        Cutoff = Cutoff,
-        ForceScale = ForceScale,
-        RepulsionFraction = RepulsionFraction,
-        DampingHalfLife = DampingHalfLife,
-        WallWidth = WallWidth,
-        WallStrength = WallStrength
-    };
-}
-
-internal sealed record MatrixData(int SpeciesCount, double[] Values);
 
 internal sealed record GenerationData(int Seed, string Placement, string Velocity, double Speed, double DirectionRadians)
 {

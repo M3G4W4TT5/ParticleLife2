@@ -130,7 +130,23 @@ public sealed partial class ExperimentEditor
             throw new ArgumentException("Use Apply population to change species and matrix dimensions together.", nameof(configuration));
         }
 
-        Apply(CaptureValues() with { Configuration = configuration }, null, false, label);
+        ModelParameters previous = Configuration.Parameters;
+        ModelParameters next = configuration.Parameters;
+        bool mapWorld = next.Boundary is BoundaryKind.Periodic or BoundaryKind.Reflecting
+            && (previous.Boundary != next.Boundary || previous.WorldWidth != next.WorldWidth || previous.WorldHeight != next.WorldHeight);
+        ParticleSnapshot? before = mapWorld ? Snapshot() : null;
+        ParticleSnapshot? mapped = null;
+        if (before is not null)
+        {
+            Vector2d[] positions = before.Positions.ToArray();
+            Vector2d[] velocities = before.Velocities.ToArray();
+            for (int index = 0; index < before.Count; index++)
+            {
+                WorldBoundary.Map(ref positions[index], ref velocities[index], next);
+            }
+            mapped = new(before.Ids, positions, velocities, before.Species, before.Time, before.Step);
+        }
+        Apply(CaptureValues() with { Configuration = configuration }, mapped, mapWorld, label, before);
     }
 
     /// <summary>Changes one directed coefficient, optionally linking its reverse as an explicit edit choice.</summary>
@@ -149,7 +165,7 @@ public sealed partial class ExperimentEditor
             values[source * matrix.SpeciesCount + receiver] = value;
         }
 
-        ApplyConfiguration(WithMatrix(new InteractionMatrix(matrix.SpeciesCount, values)), "Edit directed coefficient");
+        ApplyConfiguration(WithMatrix(matrix.WithCoefficients(values)), "Edit directed coefficient");
     }
 
     /// <summary>Applies a matrix template live while preserving every particle, the clock and reset baseline.</summary>
@@ -158,12 +174,13 @@ public sealed partial class ExperimentEditor
     /// <exception cref="ArgumentException">The template does not support the current species count; no edit is applied.</exception>
     public void ApplyMatrixTemplate(PresetKind kind, int seed)
     {
-        Apply(CaptureValues() with { Configuration = WithMatrix(CreateMatrix(kind, Configuration.Matrix.SpeciesCount, seed)) },
+        InteractionMatrix generated = CreateMatrix(kind, Configuration.Matrix.SpeciesCount, seed);
+        Apply(CaptureValues() with { Configuration = WithMatrix(Configuration.Matrix.WithCoefficients(generated.Values)) },
             null, false, $"Apply {kind} matrix", generator: Metadata($"viewer-{kind}-matrix", seed));
     }
 
     /// <summary>Sets every species coefficient to zero while retaining species-independent core repulsion.</summary>
-    public void ResetMatrix() => ApplyConfiguration(WithMatrix(new InteractionMatrix(Configuration.Matrix.SpeciesCount,
+    public void ResetMatrix() => ApplyConfiguration(WithMatrix(Configuration.Matrix.WithCoefficients(
         new double[Configuration.Matrix.Values.Length])), "Zero matrix");
 
     /// <summary>Changes future generation settings without changing active particles or scientific history.</summary>
@@ -205,7 +222,8 @@ public sealed partial class ExperimentEditor
     /// <param name="speciesCount">Positive new species count.</param>
     /// <param name="counts">Desired nonnegative count for each new species.</param>
     /// <param name="preserveDensity">When true, scale both world extents by sqrt(new population / old population).
-    /// Both populations must be nonzero. Surviving absolute positions and velocities remain unchanged.</param>
+    /// Both populations must be nonzero. Soft/open survivors retain absolute motion; periodic/reflecting
+    /// worlds explicitly map retained motion into the resized geometry.</param>
     /// <remarks>Removed species map by oldSpecies modulo newSpeciesCount. In storage order, the first
     /// requested particles of each remapped species survive with exact identity, position and velocity.
     /// Shortfalls are appended in species order using the current generation recipe and never-reused
@@ -277,12 +295,25 @@ public sealed partial class ExperimentEditor
             }
         }
 
-        InteractionMatrix matrix = ResizeMatrix(Configuration.Matrix, speciesCount);
+        InteractionMatrix matrix = ResizeMatrix(Configuration.Matrix, speciesCount, populationParameters);
+        HashSet<long>? remapped = null;
+        if (populationParameters.Boundary is BoundaryKind.Periodic or BoundaryKind.Reflecting
+            && (populationParameters.WorldWidth != Configuration.Parameters.WorldWidth || populationParameters.WorldHeight != Configuration.Parameters.WorldHeight))
+        {
+            remapped = [];
+            for (int index = 0; index < retained.Count; index++)
+            {
+                Vector2d originalPosition = positions[index], originalVelocity = velocities[index];
+                WorldBoundary.Map(ref positions[index], ref velocities[index], populationParameters);
+                if (positions[index] != originalPosition || velocities[index] != originalVelocity) { remapped.Add(ids[index]); }
+            }
+        }
         ParticleSnapshot after = new(ids, positions, velocities, speciesValues, before.Time, before.Step);
         SimulationConfiguration populationConfiguration = new(populationParameters, matrix,
             Configuration.TimeStep, Configuration.Backend, Configuration.WorkerCount);
         Apply(CaptureValues() with { Configuration = populationConfiguration, Populations = (int[])counts.Clone() },
-            after, false, "Apply population", before, additions > 0 ? Metadata($"viewer-{Generation.Placement}-{Generation.Velocity}", Generation.Seed) : null);
+            after, false, "Apply population", before, additions > 0 ? Metadata($"viewer-{Generation.Placement}-{Generation.Velocity}", Generation.Seed) : null,
+            restoreIdentities: remapped);
     }
 
     /// <summary>Returns an even deterministic distribution, assigning the remainder to low species indices.</summary>
@@ -456,7 +487,8 @@ public sealed partial class ExperimentEditor
     }
 
     private void Apply(EditorValues values, ParticleSnapshot? state, bool restoreMotion, string label,
-        ParticleSnapshot? beforeState = null, GeneratorMetadata? generator = null, bool separateAction = false)
+        ParticleSnapshot? beforeState = null, GeneratorMetadata? generator = null, bool separateAction = false,
+        HashSet<long>? restoreIdentities = null)
     {
         EnsureNotReplaying();
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
@@ -503,7 +535,7 @@ public sealed partial class ExperimentEditor
         else if (gestureBefore is null)
         {
             AddHistory(new UndoEntry(label, before, values, structural ? beforeState : null,
-                structural ? state : null, restoreMotion));
+                structural ? state : null, restoreMotion, restoreIdentities));
         }
         else
         {
@@ -668,7 +700,7 @@ public sealed partial class ExperimentEditor
         }
     }
 
-    private static InteractionMatrix ResizeMatrix(InteractionMatrix previous, int speciesCount)
+    private static InteractionMatrix ResizeMatrix(InteractionMatrix previous, int speciesCount, ModelParameters parameters)
     {
         if (previous.SpeciesCount == speciesCount)
         {
@@ -685,7 +717,26 @@ public sealed partial class ExperimentEditor
             }
         }
 
-        return new InteractionMatrix(speciesCount, values);
+        PairInteractionRanges? ranges = null;
+        if (previous.Ranges is PairInteractionRanges oldRanges)
+        {
+            double[] cores = new double[values.Length];
+            double[] cutoffs = new double[values.Length];
+            Array.Fill(cores, parameters.RepulsionFraction * parameters.Cutoff);
+            Array.Fill(cutoffs, parameters.Cutoff);
+            for (int receiver = 0; receiver < retained; receiver++)
+            {
+                for (int source = 0; source < retained; source++)
+                {
+                    int oldIndex = receiver * previous.SpeciesCount + source;
+                    int newIndex = receiver * speciesCount + source;
+                    cores[newIndex] = oldRanges.CoreRadii[oldIndex];
+                    cutoffs[newIndex] = oldRanges.CutoffRadii[oldIndex];
+                }
+            }
+            ranges = new(speciesCount, cores, cutoffs);
+        }
+        return new InteractionMatrix(speciesCount, values, ranges);
     }
 
     private static InteractionMatrix CreateMatrix(PresetKind kind, int speciesCount, int seed) =>
@@ -732,7 +783,9 @@ public sealed partial class ExperimentEditor
         ModelParameters parameters, GenerationSettings generation, int species = 0, int speciesCount = 1)
     {
         Vector2d position = ParticleGeneration.Position(random, index, count, species, speciesCount, parameters, generation);
-        return (position, ParticleGeneration.Velocity(random, position, parameters, generation));
+        Vector2d velocity = ParticleGeneration.Velocity(random, position, parameters, generation);
+        WorldBoundary.Map(ref position, ref velocity, parameters);
+        return (position, velocity);
     }
 
     private static GeneratorMetadata Metadata(string name, int? seed) => new(name, "1", seed, RuntimeInformation.FrameworkDescription);

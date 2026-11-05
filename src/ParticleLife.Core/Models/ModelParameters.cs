@@ -14,6 +14,9 @@ namespace ParticleLife.Core.Models;
 /// </remarks>
 public sealed record ModelParameters
 {
+    /// <summary>Gets the explicit world boundary rule; legacy files use soft walls.</summary>
+    public BoundaryKind Boundary { get; init; } = BoundaryKind.SoftWall;
+
     /// <summary>Gets the positive finite width of the nominal world in L.</summary>
     public double WorldWidth { get; init; } = 1;
 
@@ -43,8 +46,16 @@ public sealed record ModelParameters
     /// <exception cref="ArgumentOutOfRangeException">A parameter is non-finite or outside its documented range.</exception>
     public void Validate()
     {
+        if (!Enum.IsDefined(Boundary))
+        {
+            throw new ArgumentOutOfRangeException(nameof(Boundary));
+        }
         RequirePositiveFinite(WorldWidth, nameof(WorldWidth));
         RequirePositiveFinite(WorldHeight, nameof(WorldHeight));
+        if (Boundary == BoundaryKind.Reflecting && (!double.IsFinite(2 * WorldWidth) || !double.IsFinite(2 * WorldHeight)))
+        {
+            throw new ArgumentOutOfRangeException(nameof(WorldWidth), "Reflecting extents must have finite doubled lengths.");
+        }
         RequirePositiveFinite(Cutoff, nameof(Cutoff));
         RequirePositiveFinite(Cutoff * Cutoff, nameof(Cutoff));
         RequireNonnegativeFinite(ForceScale, nameof(ForceScale));
