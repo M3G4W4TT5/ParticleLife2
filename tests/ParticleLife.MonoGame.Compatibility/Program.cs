@@ -25,6 +25,12 @@ if (args.Length > 0 && args[0] == "--replay-completion-checks")
     return;
 }
 
+if (args.Length > 0 && args[0] == "--nested-section-checks")
+{
+    NestedSectionChecks.Run();
+    return;
+}
+
 // Compile and managed-assembly smoke check only: no window or native graphics device.
 Vector2d position = new(0.25, 0.75);
 Vector2 displayPosition = new((float)position.X, (float)position.Y);
@@ -32,6 +38,7 @@ Console.WriteLine($"Core net10.0 / MonoGame {typeof(Game).Assembly.GetName().Ver
 RenderingChecks.Run();
 GuidanceChecks.Run();
 GpuMeasurementChecks.Run();
+NestedSectionChecks.Run();
 
 // Exercise the real native numeric widget against the actual editor without creating a Game,
 // SDL window, texture or graphics device. These checks complement native interaction checks.

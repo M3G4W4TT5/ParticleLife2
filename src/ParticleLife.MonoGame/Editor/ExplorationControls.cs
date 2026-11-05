@@ -199,7 +199,7 @@ internal sealed class ExplorationControls
             0, 0, 31, "Active species assigned by add and paint tools.", integer: true));
         Tools.Children.Add(Number("Affected species", () => brush.SpeciesFilter, value => brush = brush with { SpeciesFilter = Integer(value) },
             -1, -1, 31, "-1 affects every species. Another active index filters move, paint, erase and force tools.", integer: true));
-        Tools.Children.Add(new UiLabel(() => "One stroke is one undo; each applied sample remains in replay. Full actual sample states currently grow session memory with population and stroke length.", 66));
+        Tools.Children.Add(new UiLabel(() => "One stroke is one undo; each applied sample remains in replay. Local edits use compact identity deltas. Check recording status for history and session storage limits.", 66));
     }
 }
 
