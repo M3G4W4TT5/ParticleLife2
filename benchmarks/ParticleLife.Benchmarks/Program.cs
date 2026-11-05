@@ -3,6 +3,18 @@ using ParticleLife.Benchmarks;
 
 try
 {
+    if (args.Length > 0 && args[0] == "prepare-p4-production")
+    {
+        if (args.Length != 3) { throw new ArgumentException("Use prepare-p4-production source-profile-input-directory fresh-output-directory."); }
+        P4RangeProfile.PrepareProductionComparison(args[1], args[2]);
+        return 0;
+    }
+    if (args.Length > 0 && args[0] == "profile-p4-ranges")
+    {
+        if (args.Length is < 2 or > 3) { throw new ArgumentException("Use profile-p4-ranges fresh-output-directory [5..30 samples]."); }
+        P4RangeProfile.Run(args[1], args.Length == 3 ? int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 5);
+        return 0;
+    }
     if (args.Length > 0 && args[0] == "prepare-p2")
     {
         if (args.Length != 3)

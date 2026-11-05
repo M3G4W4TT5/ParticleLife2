@@ -76,6 +76,7 @@ internal static class P2Runner
             {
                 schemaVersion = 1,
                 environment = LatencyRunner.CaptureEnvironment("P2 CPU binary64 uniform grid", workers),
+                implementationVersion = ExperimentFile.GetForceAlgorithmVersion(ForceBackend.UniformGrid),
                 inputFile = Path.GetFullPath(inputPath),
                 inputSha256 = P1Inputs.HashFile(inputPath),
                 experiment.Name,

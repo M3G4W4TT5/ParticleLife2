@@ -2,7 +2,7 @@
 
 Particle Life 2 is a creative sandbox for making and exploring emergent particle behaviour. The priorities are interesting patterns, many more particles, responsive controls and an enjoyable way to discover, save and revisit results. Reproducibility supports that experience; scientific validation is not the product's purpose.
 
-Direction updated **5 November 2026**. M1–M4, M4.1 and the live experiment editor provide the implemented CPU foundation. P1's saved workload tooling and bounded GPU/render interoperability prototype are implemented; P2–P7 are in progress and P8 remains deferred. The active roadmap below specifies the complete update, not a claim that its remaining features already exist. The historical M5 release backlog is incorporated into P7.
+Direction updated **5 November 2026**. M1–M4, M4.1 and the live experiment editor provide the implemented CPU foundation. P1's saved workload tooling and bounded GPU/render interoperability prototype are implemented. P2–P4 features are implemented with native acceptance pending the consolidated review; P5–P7 remain in progress and P8 remains deferred. The active roadmap below specifies the complete update, not a claim that its remaining features already exist. The historical M5 release backlog is incorporated into P7.
 
 ## Scope and priorities
 
@@ -43,7 +43,7 @@ Each phase ends with a usable result and focused verification. The order is driv
 | P1 | Saved twenty geometry/population fixtures through 250k plus a 1M fixed-density stretch input; bounded CPU screens and timeout protection verified. Existing MonoGame context demonstrated compute/render buffer sharing, exact capture/restore and CPU-only startup. See [performance evidence](performance-p1.md) and [GPU boundary](gpu-integration.md). |
 | P2 | Background CPU ownership, bounded edit queues and reusable completed render leases are implemented. Native drawing uses bulk GL points with a MonoGame quad fallback. Explicit CPU workers through 64, larger population controls and density-preserving resize are implemented; measured alternatives and rejected SIMD are recorded in [P2 evidence](performance-p2.md). Automated ownership/render/worker checks pass; native responsiveness and graphics timing remain pending the consolidated review. |
 | P3 | Six control pages, expandable advanced execution, camera navigation/size modes, matrix selection/bulk/clipboard, population bars, independent generators/palettes and grouped direct brush edits are implemented. Focused behavior, replay, persistence and managed native-widget checks pass. Bulk-renderer integration retains camera and brush geometry; native acceptance remains pending the consolidated review. |
-| P4 | Independent boundary/range core work in progress; integration, editor and persistence acceptance pending. |
+| P4 | Soft/open/reflecting/periodic CPU worlds, directed radii, versioned legacy-compatible formats, selected/bulk controls, physical force/radius diagrams and mapped brush/density undo are implemented. Reference, replay, format, editor, worker/allocation and graphics-free checks pass. Matched CPU evidence retains coarse receiver-row rectangles and rejects quarter cells; see [model/editor behavior](world-boundaries-and-ranges.md) and [range performance](performance-p4-ranges.md). Native cases remain pending the consolidated review. |
 | P5 | Resident float32 OpenGL simulation, shared-buffer rendering, ordered CPU/GPU transfer, explicit captures/checkpoints, failure retention and graphics-free capture restore/re-simulation are implemented. Focused ownership/persistence/CLI checks and eighteen production hardware fixtures pass on the recorded RTX 5080 Laptop GPU. See [GPU evidence](gpu-integration.md#p5-production-implementation-and-verification). Integration with P6 visual/library tools, measured capacity and native interaction acceptance remain pending. |
 | P6 | Discovery and visual tools pending. |
 | P7 | Integrated tuning, packaging, final verification and consolidated review pending. |
@@ -92,6 +92,8 @@ Exit: users can create, perturb and revise a pattern directly, then undo or repl
 - Version model/configuration/save formats as required. Preserve old soft-wall experiments unchanged. Specify what live world/boundary changes do to coordinates and record any wrapping or remapping as an explicit edit. Add selective randomization of rules, radii or both, and migrate presets and replay with these controls.
 
 Exit: all boundary choices and directed ranges work on CPU, with focused reference/geometry checks, useful editor controls and reliable save/load/replay. The GPU model contract can now follow a working 2D implementation.
+
+P4 retains maximum-cutoff cells and uses conservative row rectangles only for nonperiodic pair tables with different receiver-row maxima. The rectangle preserves accepted contribution order and unbounded occupancy; global, equal-row and periodic selection remain unchanged. The matched [evaluation](performance-p4-ranges.md) includes static/evolving, dense/sparse, mild heterogeneity, cutoff transitions and worker controls. Its quarter-cell alternative was rejected for sparse regressions. Reproduction commands and measured binary/input hashes are in that report; native visual acceptance is a separate pending gate.
 
 ### P5 Selectable GPU simulation
 

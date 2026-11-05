@@ -50,7 +50,7 @@ public static class ExperimentEditing
         }
 
         return new ExperimentDefinition(experiment.Name, experiment.Parameters,
-            new InteractionMatrix(experiment.Matrix.SpeciesCount, values), experiment.InitialState,
+            experiment.Matrix.WithCoefficients(values), experiment.InitialState,
             experiment.TimeStep, Metadata("viewer-random-matrix", seed), experiment.Backend, experiment.WorkerCount);
     }
 

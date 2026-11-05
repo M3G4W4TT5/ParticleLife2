@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using ParticleLife.Core.Experiments;
+using ParticleLife.Core.Models;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 using ParticleLife.MonoGame.Editor;
@@ -843,21 +844,33 @@ internal sealed class ParticleLifeGame : Game
         if (!surface.BrushEnabled || surface.IsModal || editor.Appearance.ShowHelp || !worldBounds.Contains(mouse.Position)) { return; }
         double extent = transform.WorldLengthToPixels(surface.Brush.Radius);
         if (!double.IsFinite(extent) || extent <= 0 || extent > 1e5) { return; }
-        Vector2 centre = new(mouse.X, mouse.Y);
+        ModelParameters parameters = editor.Publication.Configuration.Parameters;
+        bool periodic = parameters.Boundary == BoundaryKind.Periodic;
+        Vector2d pointer = transform.ToWorld(new Vector2d(mouse.X, mouse.Y));
+        if (periodic) { pointer = new(WorldBoundary.Wrap(pointer.X, parameters.WorldWidth), WorldBoundary.Wrap(pointer.Y, parameters.WorldHeight)); }
         Color tint = brushing ? UiCanvas.Accent : UiCanvas.Ink * 0.6f;
         batch.Begin(samplerState: SamplerState.LinearClamp, rasterizerState: clipped);
-        if (surface.Brush.Shape == BrushShape.Square)
+        for (int y = periodic ? -1 : 0; y <= (periodic ? 1 : 0); y++)
         {
-            canvas.RoundedBorder(new Rectangle((int)(mouse.X - extent), (int)(mouse.Y - extent), Math.Max(1, (int)(extent * 2)), Math.Max(1, (int)(extent * 2))), tint, 0);
-        }
-        else
-        {
-            Vector2 previous = centre + new Vector2((float)extent, 0);
-            for (int i = 1; i <= 48; i++)
+            for (int x = periodic ? -1 : 0; x <= (periodic ? 1 : 0); x++)
             {
-                float angle = i * MathF.Tau / 48;
-                Vector2 next = centre + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (float)extent;
-                canvas.Line(previous, next, tint); previous = next;
+                Vector2d mapped = transform.ToScreen(new Vector2d(pointer.X + x * parameters.WorldWidth, pointer.Y + y * parameters.WorldHeight));
+                if (!mapped.IsFinite || Math.Abs(mapped.X) > 1e7 || Math.Abs(mapped.Y) > 1e7) { continue; }
+                Vector2 centre = new((float)mapped.X, (float)mapped.Y);
+                if (surface.Brush.Shape == BrushShape.Square)
+                {
+                    canvas.RoundedBorder(new Rectangle((int)(mapped.X - extent), (int)(mapped.Y - extent), Math.Max(1, (int)(extent * 2)), Math.Max(1, (int)(extent * 2))), tint, 0);
+                }
+                else
+                {
+                    Vector2 previous = centre + new Vector2((float)extent, 0);
+                    for (int i = 1; i <= 48; i++)
+                    {
+                        float angle = i * MathF.Tau / 48;
+                        Vector2 next = centre + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (float)extent;
+                        canvas.Line(previous, next, tint); previous = next;
+                    }
+                }
             }
         }
         batch.End();

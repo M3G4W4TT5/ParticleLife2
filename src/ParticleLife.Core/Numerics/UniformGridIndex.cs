@@ -5,7 +5,7 @@ namespace ParticleLife.Core.Numerics;
 
 /// <summary>Maps full signed integer cell coordinates to contiguous, reusable particle ranges.</summary>
 /// <remarks>
-/// <para>For nonperiodic worlds, cell width h is the smallest power of two at least as large as the maximum cutoff R, so R &lt;= h &lt; 2R.
+/// <para>By default, nonperiodic cell width h is the smallest power of two at least as large as the maximum cutoff R, so R &lt;= h &lt; 2R.
 /// Mapping uses floor(ScaleB(position, -log2(h))), avoiding rounded division at cell faces.
 /// Scaling by a power of two is exact unless it underflows or overflows. Underflowed negative values
 /// map to -1, their exact floor; positive underflow maps to zero. Values with magnitude at least 2^50
@@ -14,10 +14,15 @@ namespace ParticleLife.Core.Numerics;
 /// <para>Every point separated by less than R lies in the receiver cell or one of its eight adjacent
 /// cells. Since h is exactly representable, an exact component separation at least h cannot round
 /// below h on subtraction. Thus direct acceptance of a rounded component below R also implies a
-/// true separation below h and is covered by this search. Nonperiodic queries visit nine distinct keys once.
+/// true separation below h and is covered by this search. Default nonperiodic queries visit nine distinct keys once.
 /// Dictionary hashing accelerates lookup but full coordinate equality determines cell identity,
 /// including under hash collisions. Counting and a stable scatter produce one contiguous range per
 /// occupied cell. Each range preserves ascending source storage order; physical state is never reordered.</para>
+/// <para>Nonperiodic heterogeneous receiver rows can restrict that same nine-cell search to a
+/// conservative row-radius rectangle. Fractional cell coordinates and the radius are rounded
+/// outward before selecting neighbour columns/rows. This skips only cells that fail the pair
+/// kernel's component cutoff, including subnormal distances; no circular/squared-distance
+/// approximation can remove a neighbour, and retained cells keep their original query order.</para>
 /// <para>Periodic worlds instead tile each axis with equal cells at least R wide. Up to five cells
 /// per axis include a conservative extra ring for floating-point division at cell faces. A wrapped
 /// query visits at most the number of cells on that axis, so small grids never duplicate a source.
@@ -89,7 +94,7 @@ internal sealed class UniformGridIndex
         }
 
         cellExponent = nextExponent;
-        CellWidth = Math.ScaleB(1, nextExponent);
+        CellWidth = Math.ScaleB(1, cellExponent);
         cells.Clear();
         count = 0;
     }
@@ -184,6 +189,12 @@ internal sealed class UniformGridIndex
         return new RangeEnumerator(this, particleCells[receiver]);
     }
 
+    /// <summary>Visits a conservative nonperiodic receiver-row rectangle within the original nine cells.</summary>
+    /// <remarks>Radius is the largest cutoff in this receiver's row and does not exceed cell width.
+    /// Columns/rows are removed only when every source fails the pair kernel's component cutoff.</remarks>
+    internal RangeEnumerator CandidateRanges(int receiver, Vector2d position, double radius) =>
+        new(this, particleCells[receiver], position, radius);
+
     /// <summary>Uses exact binary scaling and signed floor, returning false before unsafe conversion.</summary>
     internal bool TryMap(double position, out long coordinate)
     {
@@ -212,6 +223,8 @@ internal sealed class UniformGridIndex
         private int cellOffset;
         private readonly int visitWidth;
         private readonly int visitHeight;
+        private readonly int reachX;
+        private readonly int reachY;
 
         internal RangeEnumerator(UniformGridIndex index, CellCoordinate center)
         {
@@ -220,6 +233,26 @@ internal sealed class UniformGridIndex
             cellOffset = 0;
             visitWidth = index.periodic ? (int)Math.Min(5, index.columns) : 3;
             visitHeight = index.periodic ? (int)Math.Min(5, index.rows) : 3;
+            reachX = reachY = index.periodic ? 2 : 1;
+            Current = default;
+        }
+
+        /// <summary>Resolves coarse component interval bounds once per receiver, without per-cell geometry tests.</summary>
+        /// <remarks>Power-of-two scaling is exact except subnormal underflow. The negative-underflow
+        /// cell maps to -1, giving a safe fraction of one. One outward ULP on each interval/radius
+        /// covers arithmetic rounding. Because h >= the maximum cutoff, the original nine-cell
+        /// proof still applies; selected neighbouring columns/rows form a contiguous rectangle.</remarks>
+        internal RangeEnumerator(UniformGridIndex index, CellCoordinate center, Vector2d position, double radius)
+        {
+            this.index = index; this.center = center; cellOffset = 0;
+            double x = Math.ScaleB(position.X, -index.cellExponent) - center.X;
+            double y = Math.ScaleB(position.Y, -index.cellExponent) - center.Y;
+            double upperRadius = Math.BitIncrement(Math.ScaleB(radius, -index.cellExponent));
+            bool left = Math.BitDecrement(x) < upperRadius, right = Math.BitDecrement(1 - x) < upperRadius;
+            bool top = Math.BitDecrement(y) < upperRadius, bottom = Math.BitDecrement(1 - y) < upperRadius;
+            reachX = left ? 1 : 0; reachY = top ? 1 : 0;
+            visitWidth = 1 + reachX + (right ? 1 : 0);
+            visitHeight = 1 + reachY + (bottom ? 1 : 0);
             Current = default;
         }
 
@@ -229,8 +262,8 @@ internal sealed class UniformGridIndex
         {
             while (cellOffset < visitWidth * visitHeight)
             {
-                long x = center.X + cellOffset % visitWidth - (index.periodic ? 2 : 1);
-                long y = center.Y + cellOffset / visitWidth - (index.periodic ? 2 : 1);
+                long x = center.X + cellOffset % visitWidth - reachX;
+                long y = center.Y + cellOffset / visitWidth - reachY;
                 if (index.periodic)
                 {
                     x = (x % index.columns + index.columns) % index.columns;
@@ -247,6 +280,7 @@ internal sealed class UniformGridIndex
 
             return false;
         }
+
     }
 
     /// <summary>Visits every candidate source once in ascending within-cell storage order.</summary>

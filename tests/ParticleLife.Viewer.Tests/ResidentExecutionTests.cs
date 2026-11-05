@@ -59,7 +59,11 @@ public sealed class ResidentExecutionTests
         session.ApplyConfiguration(new(session.Configuration.Parameters with { ForceScale = 2 }, session.Configuration.Matrix, session.Configuration.TimeStep));
         session.SetAppearance(session.Appearance with { Camera = new() { Zoom = 2 } });
         session.SetPlayback(session.Playback.Settings with { Speed = 2 });
+        session.EnablePairRanges(true);
+        session.SetSelectedPairRanges([0], 0.025, 0.125);
+        session.RandomizeInteractionSelection([0], InteractionRandomization.Rules, 73, 0.1, 0.2);
         await PumpUntil(session, () => !session.HasPendingCommands);
+        Assert.Equal(0.125, session.Publication.Configuration.Matrix.Ranges!.CutoffRadii[0]);
         Assert.Equal(observations, resident.ObservationCalls);
         Assert.Equal(0, resident.FullStateReadbacks);
         Assert.Equal(0, resident.CaptureRequests);

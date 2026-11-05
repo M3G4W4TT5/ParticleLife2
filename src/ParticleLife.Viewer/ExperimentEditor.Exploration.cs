@@ -10,7 +10,7 @@ public sealed partial class ExperimentEditor
     /// <param name="seed">Optional random-generation provenance seed.</param>
     public void ApplyMatrixCoefficients(ReadOnlySpan<double> coefficients, string label = "Edit matrix coefficients", int? seed = null)
     {
-        InteractionMatrix matrix = new(Configuration.Matrix.SpeciesCount, coefficients);
+        InteractionMatrix matrix = Configuration.Matrix.WithCoefficients(coefficients);
         Apply(CaptureValues() with { Configuration = WithMatrix(matrix) }, null, false, label,
             generator: seed is null ? null : Metadata("viewer-bulk-matrix", seed));
     }
@@ -40,6 +40,7 @@ public sealed partial class ExperimentEditor
                     Configuration.Matrix.SpeciesCount, Configuration.Parameters, Generation);
             }
             else { newVelocities[i] = ParticleGeneration.Velocity(random, before.Positions[i], Configuration.Parameters, Generation); }
+            WorldBoundary.Map(ref newPositions[i], ref newVelocities[i], Configuration.Parameters);
         }
         string component = positions ? "positions" : "velocities";
         Apply(CaptureValues(), new ParticleSnapshot(before.Ids, newPositions, newVelocities, before.Species, before.Time, before.Step),

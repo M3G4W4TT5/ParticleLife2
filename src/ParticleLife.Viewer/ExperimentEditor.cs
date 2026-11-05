@@ -223,7 +223,8 @@ public sealed partial class ExperimentEditor
     /// <param name="speciesCount">Positive new species count.</param>
     /// <param name="counts">Desired nonnegative count for each new species.</param>
     /// <param name="preserveDensity">When true, scale both world extents by sqrt(new population / old population).
-    /// Both populations must be nonzero. Surviving absolute positions and velocities remain unchanged.</param>
+    /// Both populations must be nonzero. Soft/open survivors retain absolute motion; periodic/reflecting
+    /// worlds explicitly map retained motion into the resized geometry.</param>
     /// <remarks>Removed species map by oldSpecies modulo newSpeciesCount. In storage order, the first
     /// requested particles of each remapped species survive with exact identity, position and velocity.
     /// Shortfalls are appended in species order using the current generation recipe and never-reused
@@ -295,12 +296,25 @@ public sealed partial class ExperimentEditor
             }
         }
 
-        InteractionMatrix matrix = ResizeMatrix(Configuration.Matrix, speciesCount, Configuration.Parameters);
+        InteractionMatrix matrix = ResizeMatrix(Configuration.Matrix, speciesCount, populationParameters);
+        HashSet<long>? remapped = null;
+        if (populationParameters.Boundary is BoundaryKind.Periodic or BoundaryKind.Reflecting
+            && (populationParameters.WorldWidth != Configuration.Parameters.WorldWidth || populationParameters.WorldHeight != Configuration.Parameters.WorldHeight))
+        {
+            remapped = [];
+            for (int index = 0; index < retained.Count; index++)
+            {
+                Vector2d originalPosition = positions[index], originalVelocity = velocities[index];
+                WorldBoundary.Map(ref positions[index], ref velocities[index], populationParameters);
+                if (positions[index] != originalPosition || velocities[index] != originalVelocity) { remapped.Add(ids[index]); }
+            }
+        }
         ParticleSnapshot after = new(ids, positions, velocities, speciesValues, before.Time, before.Step);
         SimulationConfiguration populationConfiguration = new(populationParameters, matrix,
             Configuration.TimeStep, Configuration.Backend, Configuration.WorkerCount);
         Apply(CaptureValues() with { Configuration = populationConfiguration, Populations = (int[])counts.Clone() },
-            after, false, "Apply population", before, additions > 0 ? Metadata($"viewer-{Generation.Placement}-{Generation.Velocity}", Generation.Seed) : null);
+            after, false, "Apply population", before, additions > 0 ? Metadata($"viewer-{Generation.Placement}-{Generation.Velocity}", Generation.Seed) : null,
+            restoreIdentities: remapped);
     }
 
     /// <summary>Returns an even deterministic distribution, assigning the remainder to low species indices.</summary>
@@ -474,7 +488,8 @@ public sealed partial class ExperimentEditor
     }
 
     private void Apply(EditorValues values, ParticleSnapshot? state, bool restoreMotion, string label,
-        ParticleSnapshot? beforeState = null, GeneratorMetadata? generator = null, bool separateAction = false)
+        ParticleSnapshot? beforeState = null, GeneratorMetadata? generator = null, bool separateAction = false,
+        HashSet<long>? restoreIdentities = null)
     {
         EnsureNotReplaying();
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
@@ -522,7 +537,7 @@ public sealed partial class ExperimentEditor
         else if (gestureBefore is null)
         {
             AddHistory(new UndoEntry(label, before, values, structural ? beforeState : null,
-                structural ? state : null, restoreMotion));
+                structural ? state : null, restoreMotion, restoreIdentities));
         }
         else
         {
@@ -773,7 +788,9 @@ public sealed partial class ExperimentEditor
         ModelParameters parameters, GenerationSettings generation, int species = 0, int speciesCount = 1)
     {
         Vector2d position = ParticleGeneration.Position(random, index, count, species, speciesCount, parameters, generation);
-        return (position, ParticleGeneration.Velocity(random, position, parameters, generation));
+        Vector2d velocity = ParticleGeneration.Velocity(random, position, parameters, generation);
+        WorldBoundary.Map(ref position, ref velocity, parameters);
+        return (position, velocity);
     }
 
     private static GeneratorMetadata Metadata(string name, int? seed) => new(name, "1", seed, RuntimeInformation.FrameworkDescription);

@@ -21,6 +21,7 @@ public sealed partial class EditorSession : IDisposable
     private PlaybackSettings? requestedPlayback;
     private int configurationFields, generationFields, appearanceFields, playbackFields;
     private bool[]? matrixFields;
+    private bool[]? coreFields, cutoffFields;
     private Task? configurationTask, generationTask, appearanceTask, playbackTask;
     private bool? requestedPause;
     private Task? pauseTask;
@@ -137,7 +138,10 @@ public sealed partial class EditorSession : IDisposable
     public void ApplyConfiguration(SimulationConfiguration configuration, string label = "Edit settings")
     {
         SimulationConfiguration before = Configuration;
-        if (!ContinuesPreview("configuration", configurationTask)) { configurationFields = 0; matrixFields = null; }
+        if (!ContinuesPreview("configuration", configurationTask))
+        {
+            configurationFields = 0; matrixFields = null; coreFields = null; cutoffFields = null;
+        }
         ModelParameters previous = before.Parameters;
         ModelParameters desired = configuration.Parameters;
         configurationFields |= Changed(previous.WorldWidth != desired.WorldWidth, 0)
@@ -145,7 +149,9 @@ public sealed partial class EditorSession : IDisposable
             | Changed(previous.ForceScale != desired.ForceScale, 3) | Changed(previous.RepulsionFraction != desired.RepulsionFraction, 4)
             | Changed(previous.DampingHalfLife != desired.DampingHalfLife, 5) | Changed(previous.WallWidth != desired.WallWidth, 6)
             | Changed(previous.WallStrength != desired.WallStrength, 7) | Changed(before.TimeStep != configuration.TimeStep, 8)
-            | Changed(before.Backend != configuration.Backend, 9) | Changed(before.WorkerCount != configuration.WorkerCount, 10);
+            | Changed(before.Backend != configuration.Backend, 9) | Changed(before.WorkerCount != configuration.WorkerCount, 10)
+            | Changed(previous.Boundary != desired.Boundary, 11)
+            | Changed((before.Matrix.Ranges is null) != (configuration.Matrix.Ranges is null), 12);
         if (!ReferenceEquals(before.Matrix, configuration.Matrix))
         {
             if (before.Matrix.SpeciesCount != configuration.Matrix.SpeciesCount)
@@ -157,14 +163,25 @@ public sealed partial class EditorSession : IDisposable
             {
                 matrixFields[i] |= before.Matrix.Values[i] != configuration.Matrix.Values[i];
             }
+            if (configuration.Matrix.Ranges is PairInteractionRanges ranges)
+            {
+                coreFields ??= new bool[matrixFields.Length];
+                cutoffFields ??= new bool[matrixFields.Length];
+                for (int i = 0; i < matrixFields.Length; i++)
+                {
+                    coreFields[i] |= before.Matrix.Ranges is null || before.Matrix.Ranges.CoreRadii[i] != ranges.CoreRadii[i];
+                    cutoffFields[i] |= before.Matrix.Ranges is null || before.Matrix.Ranges.CutoffRadii[i] != ranges.CutoffRadii[i];
+                }
+            }
         }
         requestedConfiguration = configuration;
         int fields = configurationFields;
         bool[]? matrixChanges = matrixFields is null ? null : (bool[])matrixFields.Clone();
+        bool[]? coreChanges = coreFields is null ? null : (bool[])coreFields.Clone();
+        bool[]? cutoffChanges = cutoffFields is null ? null : (bool[])cutoffFields.Clone();
         configurationTask = Run(label, editor => editor.ApplyConfiguration(
-            MergeConfiguration(editor.Configuration, configuration, fields, matrixChanges), label), previewKey: "configuration",
-            requiresCapture: desired.Boundary is BoundaryKind.Periodic or BoundaryKind.Reflecting
-                && (previous.Boundary != desired.Boundary || Has(fields, 0) || Has(fields, 1)));
+            MergeConfiguration(editor.Configuration, configuration, fields, matrixChanges, coreChanges, cutoffChanges), label), previewKey: "configuration",
+            requiresCapture: Has(fields, 0) || Has(fields, 1) || Has(fields, 11));
     }
     /// <summary>Queues one directed coefficient and optionally its reverse, preserving unrelated matrix edits.</summary>
     /// <param name="receiver">Receiver row.</param><param name="source">Source column.</param>
@@ -175,8 +192,75 @@ public sealed partial class EditorSession : IDisposable
         double[] values = current.Matrix.Values.ToArray();
         values[receiver * current.Matrix.SpeciesCount + source] = value;
         if (linkSymmetry) { values[source * current.Matrix.SpeciesCount + receiver] = value; }
-        ApplyConfiguration(new SimulationConfiguration(current.Parameters, new InteractionMatrix(current.Matrix.SpeciesCount, values),
+        ApplyConfiguration(new SimulationConfiguration(current.Parameters, current.Matrix.WithCoefficients(values),
             current.TimeStep, current.Backend, current.WorkerCount), "Edit directed coefficient");
+    }
+    /// <summary>Queues an explicit global/pair mode change using the owner's current actual rules.</summary>
+    /// <param name="enabled">True enables individual radii; false restores global controls.</param>
+    public void EnablePairRanges(bool enabled) => Run("Change radius mode", editor => editor.EnablePairRanges(enabled), requiresCapture: false);
+    /// <summary>Queues one responsive directed radius draft while retaining unrelated cells.</summary>
+    /// <param name="receiver">Receiver row.</param><param name="source">Source column.</param>
+    /// <param name="core">Nonnegative core smaller than cutoff.</param><param name="cutoff">Positive supported outer radius.</param>
+    /// <param name="linkReverse">Whether the transposed pair receives the same values.</param>
+    public void SetPairRange(int receiver, int source, double core, double cutoff, bool linkReverse = false)
+    {
+        SimulationConfiguration current = Configuration;
+        InteractionMatrix matrix = current.Matrix;
+        _ = matrix[receiver, source];
+        PairInteractionRanges ranges = matrix.Ranges ?? PairInteractionRanges.FromGlobal(matrix.SpeciesCount, current.Parameters);
+        double[] cores = ranges.CoreRadii.ToArray(), cutoffs = ranges.CutoffRadii.ToArray();
+        int cell = receiver * matrix.SpeciesCount + source;
+        cores[cell] = core; cutoffs[cell] = cutoff;
+        if (linkReverse)
+        {
+            int reverse = source * matrix.SpeciesCount + receiver;
+            cores[reverse] = core; cutoffs[reverse] = cutoff;
+        }
+        ApplyConfiguration(new(current.Parameters, matrix.WithRanges(new(matrix.SpeciesCount, cores, cutoffs)),
+            current.TimeStep, current.Backend, current.WorkerCount), "Edit directed radii");
+    }
+    /// <summary>Queues a single selected-radius operation, copying UI selection before returning.</summary>
+    /// <param name="cells">Flattened directed cell indices.</param><param name="core">Core radius.</param>
+    /// <param name="cutoff">Outer radius.</param><param name="linkReverse">Also changes reverse pairs.</param>
+    public void SetSelectedPairRanges(ReadOnlySpan<int> cells, double core, double cutoff, bool linkReverse = false)
+    {
+        MatrixCell[] selection = CaptureInteractionCells(cells);
+        Run("Set selected pair radii", editor => editor.SetSelectedPairRanges(ResolveInteractionCells(selection, editor.Configuration.Matrix), core, cutoff, linkReverse), requiresCapture: false);
+    }
+    /// <summary>Queues actual selected rule/radius generation with its independent component choice.</summary>
+    /// <param name="cells">Flattened directed cell indices.</param><param name="components">Quantities to generate.</param>
+    /// <param name="seed">Provenance seed.</param><param name="minimumCutoff">Smallest generated cutoff.</param>
+    /// <param name="maximumCutoff">Largest generated cutoff.</param><param name="maximumCoreFraction">Largest core/cutoff ratio.</param>
+    /// <param name="linkReverse">Generates the same values for reversed selected pairs.</param>
+    public void RandomizeInteractionSelection(ReadOnlySpan<int> cells, InteractionRandomization components, int seed,
+        double minimumCutoff, double maximumCutoff, double maximumCoreFraction = 0.6, bool linkReverse = false)
+    {
+        MatrixCell[] selection = CaptureInteractionCells(cells);
+        Run("Randomize interactions", editor => editor.RandomizeInteractionSelection(ResolveInteractionCells(selection, editor.Configuration.Matrix), components, seed,
+            minimumCutoff, maximumCutoff, maximumCoreFraction, linkReverse), requiresCapture: false);
+    }
+
+    private MatrixCell[] CaptureInteractionCells(ReadOnlySpan<int> cells)
+    {
+        int dimension = Configuration.Matrix.SpeciesCount;
+        MatrixCell[] result = new MatrixCell[cells.Length];
+        for (int i = 0; i < cells.Length; i++)
+        {
+            if ((uint)cells[i] >= (uint)(dimension * dimension)) { throw new ArgumentOutOfRangeException(nameof(cells)); }
+            result[i] = new(cells[i] / dimension, cells[i] % dimension);
+        }
+        return result;
+    }
+
+    private static int[] ResolveInteractionCells(MatrixCell[] cells, InteractionMatrix matrix)
+    {
+        int[] result = new int[cells.Length];
+        for (int i = 0; i < result.Length; i++)
+        {
+            _ = matrix[cells[i].Receiver, cells[i].Source];
+            result[i] = cells[i].Receiver * matrix.SpeciesCount + cells[i].Source;
+        }
+        return result;
     }
     /// <summary>Queues an explicit matrix template barrier.</summary>
     /// <param name="kind">Template kind.</param><param name="seed">Recorded generation seed.</param>
@@ -395,7 +479,7 @@ public sealed partial class EditorSession : IDisposable
     private static bool Has(int fields, int bit) => (fields & (1 << bit)) != 0;
 
     private static SimulationConfiguration MergeConfiguration(SimulationConfiguration current,
-        SimulationConfiguration requested, int fields, bool[]? matrixChanges)
+        SimulationConfiguration requested, int fields, bool[]? matrixChanges, bool[]? coreChanges, bool[]? cutoffChanges)
     {
         ModelParameters target = requested.Parameters;
         ModelParameters merged = current.Parameters with
@@ -407,7 +491,8 @@ public sealed partial class EditorSession : IDisposable
             RepulsionFraction = Has(fields, 4) ? target.RepulsionFraction : current.Parameters.RepulsionFraction,
             DampingHalfLife = Has(fields, 5) ? target.DampingHalfLife : current.Parameters.DampingHalfLife,
             WallWidth = Has(fields, 6) ? target.WallWidth : current.Parameters.WallWidth,
-            WallStrength = Has(fields, 7) ? target.WallStrength : current.Parameters.WallStrength
+            WallStrength = Has(fields, 7) ? target.WallStrength : current.Parameters.WallStrength,
+            Boundary = Has(fields, 11) ? target.Boundary : current.Parameters.Boundary
         };
         InteractionMatrix matrix = current.Matrix;
         if (matrixChanges is not null)
@@ -421,7 +506,27 @@ public sealed partial class EditorSession : IDisposable
             {
                 if (matrixChanges[i]) { values[i] = requested.Matrix.Values[i]; }
             }
-            matrix = new InteractionMatrix(current.Matrix.SpeciesCount, values);
+            matrix = current.Matrix.WithCoefficients(values);
+        }
+        if (Has(fields, 12) && requested.Matrix.Ranges is null)
+        {
+            matrix = matrix.WithRanges(null);
+        }
+        else if (requested.Matrix.Ranges is PairInteractionRanges desired
+            && (Has(fields, 12) || coreChanges is not null || cutoffChanges is not null))
+        {
+            if (desired.SpeciesCount != matrix.SpeciesCount)
+            {
+                throw new InvalidOperationException("Species changed before this radius draft could apply. Review the completed matrix and retry.");
+            }
+            PairInteractionRanges currentRanges = matrix.Ranges ?? PairInteractionRanges.FromGlobal(matrix.SpeciesCount, merged);
+            double[] cores = currentRanges.CoreRadii.ToArray(), cutoffs = currentRanges.CutoffRadii.ToArray();
+            for (int i = 0; i < cores.Length; i++)
+            {
+                if (coreChanges?[i] == true) { cores[i] = desired.CoreRadii[i]; }
+                if (cutoffChanges?[i] == true) { cutoffs[i] = desired.CutoffRadii[i]; }
+            }
+            matrix = matrix.WithRanges(new(matrix.SpeciesCount, cores, cutoffs));
         }
         return new SimulationConfiguration(merged, matrix,
             Has(fields, 8) ? requested.TimeStep : current.TimeStep,
