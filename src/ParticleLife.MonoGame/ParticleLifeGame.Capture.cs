@@ -11,38 +11,54 @@ internal sealed partial class ParticleLifeGame
     private RenderTarget2D? mediaTarget;
     private byte[] mediaReadback = [];
     private AnimationCapture? animation;
+    private string? animationFailure;
     private bool animationFinishing;
     private double animationEnd, nextAnimationFrame, capturePeakMilliseconds;
     private int animationFps, cadenceSkipped;
 
     /// <summary>Reads pixels only for a deliberate PNG/GIF request, after rendering the completed canvas.</summary>
+    /// <remarks>Start requests and PNG production have independent error scopes and cannot finish an
+    /// existing GIF. A GIF readback failure finishes its accepted frames and labels a published prefix
+    /// as partial; encoder/publication failures retain their error instead of reporting a saved file.</remarks>
     private void ProcessMediaCapture()
     {
         VisualToolsControls tools = surface.VisualTools;
         if (animation is null && !tools.AnimationRequested && !tools.ScreenshotRequested && !tools.StopAnimationRequested) { return; }
         double now = TimestampSeconds;
+        bool requestFailed = false;
         try
         {
             if (animation is not null && animation.Completion.IsCompleted)
             {
                 animation.Completion.GetAwaiter().GetResult();
-                tools.CaptureStatus = $"Saved {Path.GetFileName(animation.Path)}; {animation.Width} x {animation.Height}, "
+                string outcome = animationFailure is null ? "Saved" : "Saved partial GIF";
+                tools.CaptureStatus = $"{outcome} {Path.GetFileName(animation.Path)}; {animation.Width} x {animation.Height}, "
                     + $"{animation.WrittenFrames} frames, {animation.SkippedFrames + cadenceSkipped} skipped. "
-                    + $"Peak readback/copy {capturePeakMilliseconds:F2} ms. Frame delays retain elapsed presentation time.";
+                    + $"Peak readback/copy {capturePeakMilliseconds:F2} ms. Frame delays retain elapsed presentation time."
+                    + (animationFailure is null ? string.Empty : $" Recording stopped: {animationFailure}");
                 SetMessage(tools.CaptureStatus);
-                animation = null; animationFinishing = false;
+                animation = null; animationFinishing = false; animationFailure = null;
             }
             if (tools.AnimationRequested)
             {
                 tools.AnimationRequested = false;
-                if (animation is not null) { throw new InvalidOperationException("Finish the current GIF before starting another."); }
-                (int width, int height) = CaptureDimensions(tools.CaptureWidth);
-                if ((long)width * height * tools.CaptureFramesPerSecond * tools.CaptureSeconds > 80_000_000)
-                { throw new InvalidOperationException("This GIF exceeds the 80 million pixel recording budget. Choose a smaller width, lower frame rate or shorter duration."); }
-                animation = new AnimationCapture(NewMediaPath("gif"), width, height);
-                animationFps = tools.CaptureFramesPerSecond;
-                animationEnd = now + tools.CaptureSeconds;
-                nextAnimationFrame = now; animationFinishing = false; cadenceSkipped = 0; capturePeakMilliseconds = 0;
+                try
+                {
+                    if (animation is not null) { throw new InvalidOperationException("Finish the current GIF before starting another. The current recording is unchanged."); }
+                    (int width, int height) = CaptureDimensions(tools.CaptureWidth);
+                    if ((long)width * height * tools.CaptureFramesPerSecond * tools.CaptureSeconds > 80_000_000)
+                    { throw new InvalidOperationException("This GIF exceeds the 80 million pixel recording budget. Choose a smaller width, lower frame rate or shorter duration."); }
+                    animation = new AnimationCapture(NewMediaPath("gif"), width, height);
+                    animationFps = tools.CaptureFramesPerSecond;
+                    animationEnd = now + tools.CaptureSeconds;
+                    nextAnimationFrame = now; animationFinishing = false; animationFailure = null;
+                    cadenceSkipped = 0; capturePeakMilliseconds = 0;
+                }
+                catch (Exception exception) when (ViewerErrors.IsExpected(exception))
+                {
+                    requestFailed = true;
+                    ReportCaptureError("GIF request rejected: " + exception.Message);
+                }
             }
             if (animation is not null && !animationFinishing && (tools.StopAnimationRequested || now >= animationEnd))
             {
@@ -52,13 +68,21 @@ internal sealed partial class ParticleLifeGame
             if (tools.ScreenshotRequested)
             {
                 tools.ScreenshotRequested = false;
-                (int width, int height) = CaptureDimensions(tools.CaptureWidth);
-                long started = Stopwatch.GetTimestamp();
-                DrawMediaCanvas(width, height);
-                string path = NewMediaPath("png");
-                MediaFile.SaveNew(path, stream => mediaTarget!.SaveAsPng(stream, width, height));
-                tools.CaptureStatus = $"Saved {Path.GetFileName(path)} ({width} x {height}); capture/PNG write {Stopwatch.GetElapsedTime(started).TotalMilliseconds:F1} ms.";
-                SetMessage(tools.CaptureStatus);
+                try
+                {
+                    (int width, int height) = CaptureDimensions(tools.CaptureWidth);
+                    long started = Stopwatch.GetTimestamp();
+                    DrawMediaCanvas(width, height);
+                    string path = NewMediaPath("png");
+                    MediaFile.SaveNew(path, stream => mediaTarget!.SaveAsPng(stream, width, height));
+                    tools.CaptureStatus = $"Saved {Path.GetFileName(path)} ({width} x {height}); capture/PNG write {Stopwatch.GetElapsedTime(started).TotalMilliseconds:F1} ms.";
+                    SetMessage(tools.CaptureStatus);
+                }
+                catch (Exception exception) when (ViewerErrors.IsExpected(exception))
+                {
+                    requestFailed = true;
+                    ReportCaptureError("PNG capture failed: " + exception.Message);
+                }
             }
             if (animation is not null && !animationFinishing && now >= nextAnimationFrame)
             {
@@ -72,21 +96,33 @@ internal sealed partial class ParticleLifeGame
                 animation.TryAddFrame(mediaReadback, now);
                 capturePeakMilliseconds = Math.Max(capturePeakMilliseconds, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             }
-            if (animation is not null)
+            if (animation is not null && !requestFailed)
             {
-                tools.CaptureStatus = $"GIF {(animationFinishing ? "finishing" : "recording")}: {animation.Width} x {animation.Height}, "
+                string phase = animationFailure is not null ? "stopped; finishing partial recording" : animationFinishing ? "finishing" : "recording";
+                tools.CaptureStatus = $"GIF {phase}: {animation.Width} x {animation.Height}, "
                     + $"{animation.WrittenFrames} frames, {animation.SkippedFrames + cadenceSkipped} skipped; "
                     + $"peak readback/copy {capturePeakMilliseconds:F2} ms. Fixed numerical timestep retained.";
             }
         }
         catch (Exception exception) when (ViewerErrors.IsExpected(exception))
         {
-            tools.CaptureStatus = "Capture error: " + exception.Message;
-            SetMessage(tools.CaptureStatus);
-            if (animation?.Completion.IsCompleted == true) { animation = null; animationFinishing = false; }
-            else if (animation is not null) { animation.Finish(now); animationFinishing = true; }
+            string failure = "GIF capture failed: " + exception.Message;
+            Console.Error.WriteLine(failure);
+            ReportCaptureError(failure);
+            if (animation?.Completion.IsCompleted == true) { animation = null; animationFinishing = false; animationFailure = null; }
+            else if (animation is not null)
+            {
+                animationFailure ??= exception.Message;
+                animation.Finish(Math.Min(now, animationEnd)); animationFinishing = true;
+            }
         }
         finally { GraphicsDevice.SetRenderTarget(scene); }
+
+        void ReportCaptureError(string message)
+        {
+            tools.CaptureStatus = message;
+            SetMessage(message);
+        }
     }
 
     private (int Width, int Height) CaptureDimensions(int requestedWidth)
