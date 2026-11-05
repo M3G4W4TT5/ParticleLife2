@@ -29,6 +29,9 @@ internal sealed class ParticleLifeGame : Game
     private SpriteBatch batch = null!;
     private Texture2D pixel = null!;
     private Texture2D particle = null!;
+    private Texture2D? splash;
+    private double splashElapsed;
+    private bool splashPresented;
     private RenderTarget2D? scene;
     private RenderTarget2D? softenedScene;
     private BitmapFont font = null!;
@@ -85,6 +88,12 @@ internal sealed class ParticleLifeGame : Game
         pixel = new Texture2D(GraphicsDevice, 1, 1);
         pixel.SetData(new[] { Color.White });
         particle = CreateParticleTexture();
+        using (Stream stream = typeof(ParticleLifeGame).Assembly.GetManifestResourceStream(
+            "ParticleLife.MonoGame.Assets.Branding.splash.png")
+            ?? throw new InvalidOperationException("The startup artwork is missing."))
+        {
+            splash = Texture2D.FromStream(GraphicsDevice, stream);
+        }
         font = new BitmapFont(GraphicsDevice);
         canvas = new UiCanvas(batch, pixel, font);
         clipped = new RasterizerState { CullMode = CullMode.None, ScissorTestEnable = true };
@@ -141,6 +150,11 @@ internal sealed class ParticleLifeGame : Game
         }
         bool skipPlayback = !wasActive;
         wasActive = true;
+        if (UpdateSplash(skipPlayback ? 0 : elapsed, mouse))
+        {
+            base.Update(gameTime);
+            return;
+        }
         inspectorProgress = AdvanceReveal(inspectorProgress, editor.Appearance.ShowEditor, elapsed);
         statsProgress = AdvanceReveal(statsProgress, statsExpanded, elapsed);
         PollKeyboard();
@@ -265,6 +279,37 @@ internal sealed class ParticleLifeGame : Game
             previousTimestamp = Stopwatch.GetTimestamp();
         }
         base.Update(gameTime);
+    }
+
+    /// <summary>Consumes startup frames without advancing the experiment or delivering editor input.</summary>
+    /// <remarks>The splash lasts 2.5 active wall seconds after its first draw and may be dismissed
+    /// with a fresh key or left click. Its final frame is consumed too: the dismissal cannot trigger
+    /// an editor action. The left button must be released before exposing widgets, whose own
+    /// click history has not observed the splash. The next playback frame sees only its own elapsed time. Focus loss
+    /// continues to use the normal pause policy. The GPU texture is released when no longer needed.</remarks>
+    private bool UpdateSplash(double elapsed, MouseState mouse)
+    {
+        if (splash is null)
+        {
+            return false;
+        }
+        PollKeyboard();
+        bool clicked = mouse.LeftButton == ButtonState.Released && previousMouseButton == ButtonState.Pressed;
+        bool dismiss = splashPresented && (clicked || input.Any(entry => !entry.IsText));
+        if (splashPresented)
+        {
+            splashElapsed += elapsed;
+        }
+        input.Clear();
+        previousMouseButton = mouse.LeftButton;
+        if ((dismiss || splashElapsed >= 2.5) && mouse.LeftButton == ButtonState.Released)
+        {
+            splash.Dispose();
+            splash = null;
+            messageUntil = TimestampSeconds + 5;
+            previousTimestamp = Stopwatch.GetTimestamp();
+        }
+        return true;
     }
 
     private bool HandleShortcut(Keys key, bool control)
@@ -456,6 +501,20 @@ internal sealed class ParticleLifeGame : Game
         long started = Stopwatch.GetTimestamp();
         int width = GraphicsDevice.Viewport.Width;
         int height = GraphicsDevice.Viewport.Height;
+        if (splash is not null)
+        {
+            GraphicsDevice.Clear(new Color(3, 40, 57));
+            float scale = Math.Min((float)width / splash.Width, (float)height / splash.Height);
+            int drawWidth = Math.Max(1, (int)(splash.Width * scale));
+            int drawHeight = Math.Max(1, (int)(splash.Height * scale));
+            Rectangle bounds = new((width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+            batch.Begin(blendState: BlendState.Opaque, samplerState: SamplerState.PointClamp);
+            batch.Draw(splash, bounds, Color.White);
+            batch.End();
+            splashPresented = true;
+            base.Draw(gameTime);
+            return;
+        }
         GraphicsDevice.Clear(UiCanvas.Background);
         if (width < 420 || height < 340)
         {
@@ -915,6 +974,7 @@ internal sealed class ParticleLifeGame : Game
             scene?.Dispose();
             softenedScene?.Dispose();
             font?.Dispose();
+            splash?.Dispose();
             particle?.Dispose();
             pixel?.Dispose();
             clipped?.Dispose();

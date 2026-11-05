@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+    <ApplicationIcon>Assets/Branding/Icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="ParticleLife.MonoGame.Compatibility" />
@@ -9,6 +10,8 @@
     <ProjectReference Include="../ParticleLife.Viewer/ParticleLife.Viewer.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Assets/Branding/splash.png" />
+    <EmbeddedResource Include="Assets/Branding/Icon.bmp" LogicalName="Icon.bmp" />
     <EmbeddedResource Include="Assets/Fonts/plex-sans-atlas.png" />
     <EmbeddedResource Include="Assets/Fonts/plex-sans-metrics.json" />
     <None Update="Assets/Fonts/OFL.txt" CopyToOutputDirectory="PreserveNewest" />
