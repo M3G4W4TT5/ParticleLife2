@@ -4,16 +4,16 @@ using ParticleLife.Core.Numerics;
 
 namespace ParticleLife.Viewer;
 
-/// <summary>Connects UI drafts and ordered commands to a sequential or background CPU editor.</summary>
+/// <summary>Connects UI drafts and ordered commands to a sequential, background CPU or resident GPU editor.</summary>
 /// <remarks>Use on one UI thread. The background constructor transfers editor ownership; getters
 /// read completed publications. Requested settings are shown immediately while pending, while
 /// <see cref="Publication"/> always reports actual applied settings. Operations and their failures
 /// complete through <see cref="Pump"/> on the UI thread. The sequential adapter preserves graphics-free
 /// widget checks and does not take ownership of the supplied playback controller.</remarks>
-public sealed class EditorSession : IDisposable
+public sealed partial class EditorSession : IDisposable
 {
-    private readonly ExperimentEditor? sequential;
-    private readonly BackgroundExperiment? background;
+    private ExperimentEditor? sequential;
+    private BackgroundExperiment? background;
     private readonly List<PendingOperation> pending = [];
     private SimulationConfiguration? requestedConfiguration;
     private GenerationSettings? requestedGeneration;
@@ -21,6 +21,7 @@ public sealed class EditorSession : IDisposable
     private PlaybackSettings? requestedPlayback;
     private int configurationFields, generationFields, appearanceFields, playbackFields;
     private bool[]? matrixFields;
+    private bool[]? coreFields, cutoffFields;
     private Task? configurationTask, generationTask, appearanceTask, playbackTask;
     private bool? requestedPause;
     private Task? pauseTask;
@@ -41,13 +42,13 @@ public sealed class EditorSession : IDisposable
     /// <summary>Gets nonblocking playback commands and completed scalar status.</summary>
     public SessionPlayback Playback { get; }
     /// <summary>Gets actual completed settings and metadata, without reading mutable simulation arrays.</summary>
-    public EditorPublication Publication => background?.Publication ?? CaptureSequential();
+    public EditorPublication Publication => residentOwner?.Publication ?? background?.Publication ?? CaptureSequential();
     /// <summary>Gets whether numerical work is scheduled off the UI thread.</summary>
     public bool IsBackground => background is not null;
     /// <summary>Gets queued or executing work, including a dense numerical step.</summary>
-    public bool IsBusy => background?.IsBusy ?? false;
+    public bool IsBusy => IsSwitchingExecution || residentOwner?.IsBusy == true || background?.IsBusy == true;
     /// <summary>Gets the number of unapplied queued commands.</summary>
-    public int PendingCommands => background?.PendingCommands ?? 0;
+    public int PendingCommands => deferredCommands.Count + (residentOwner?.PendingCommands ?? background?.PendingCommands ?? 0);
     /// <summary>Gets whether any UI command has not yet completed.</summary>
     public bool HasPendingCommands => pending.Any(operation => !operation.Task.IsCompleted);
     /// <summary>Gets the latest requested configuration while pending, otherwise the applied configuration.</summary>
@@ -82,17 +83,19 @@ public sealed class EditorSession : IDisposable
     /// <param name="operation">Operation executed only by the editor owner at a completed boundary.</param>
     /// <param name="completed">Optional UI-thread callback, never invoked for rejected or cancelled actions.</param>
     /// <param name="previewKey">Optional consecutive unapplied preview coalescing key.</param>
+    /// <param name="requiresCapture">True for unknown or structural operations; false only for operations
+    /// whose implementation uses metadata/rules/presentation without reading resident particles.</param>
     /// <returns>Actual completion, cancellation or failure.</returns>
-    public Task Run(string label, Action<ExperimentEditor> operation, Action? completed = null, string? previewKey = null)
+    public Task Run(string label, Action<ExperimentEditor> operation, Action? completed = null, string? previewKey = null, bool requiresCapture = true)
     {
-        if (sequential is not null)
+        if (sequential is not null && !IsSwitchingExecution)
         {
             operation(sequential);
             lastPreviewKey = previewKey;
             completed?.Invoke();
             return Task.CompletedTask;
         }
-        Task task = background!.Submit(label, operation, previewKey);
+        Task task = SubmitOwned(label, operation, previewKey, requiresCapture);
         lastPreviewKey = previewKey;
         pending.Add(new PendingOperation(task, completed));
         requestedRevision++;
@@ -102,6 +105,9 @@ public sealed class EditorSession : IDisposable
     /// <summary>Delivers completed callbacks and failures without waiting for any pending operation.</summary>
     public void Pump()
     {
+        PumpExecutionTransfer();
+        residentOwner?.Pump();
+        CompleteCpuTransfer();
         for (int i = 0; i < pending.Count;)
         {
             PendingOperation operation = pending[i];
@@ -117,20 +123,27 @@ public sealed class EditorSession : IDisposable
         {
             while (background.TryTakeNumericalFailure(out string? failure)) { Failed?.Invoke(failure!); }
         }
+        if (residentOwner is not null)
+        {
+            while (residentOwner.TryTakeFailure(out string? failure)) { Failed?.Invoke(failure!); }
+        }
     }
 
     /// <summary>Begins an undo gesture; its queue position is a preview-coalescing barrier.</summary>
     /// <param name="label">Human-readable gesture description.</param>
-    public void BeginGesture(string label) => Run("Begin gesture", editor => editor.BeginGesture(label));
+    public void BeginGesture(string label) => Run("Begin gesture", editor => editor.BeginGesture(label), requiresCapture: false);
     /// <summary>Ends an undo gesture after all prior previews have actually been applied.</summary>
-    public void EndGesture() => Run("End gesture", editor => editor.EndGesture());
+    public void EndGesture() => Run("End gesture", editor => editor.EndGesture(), requiresCapture: false);
     /// <summary>Queues a rule edit, preserving unrelated settings resolved by earlier owner commands.</summary>
     /// <param name="configuration">Desired values relative to the currently displayed configuration.</param>
     /// <param name="label">Undo and replay description.</param>
     public void ApplyConfiguration(SimulationConfiguration configuration, string label = "Edit settings")
     {
         SimulationConfiguration before = Configuration;
-        if (!ContinuesPreview("configuration", configurationTask)) { configurationFields = 0; matrixFields = null; }
+        if (!ContinuesPreview("configuration", configurationTask))
+        {
+            configurationFields = 0; matrixFields = null; coreFields = null; cutoffFields = null;
+        }
         ModelParameters previous = before.Parameters;
         ModelParameters desired = configuration.Parameters;
         configurationFields |= Changed(previous.WorldWidth != desired.WorldWidth, 0)
@@ -138,7 +151,9 @@ public sealed class EditorSession : IDisposable
             | Changed(previous.ForceScale != desired.ForceScale, 3) | Changed(previous.RepulsionFraction != desired.RepulsionFraction, 4)
             | Changed(previous.DampingHalfLife != desired.DampingHalfLife, 5) | Changed(previous.WallWidth != desired.WallWidth, 6)
             | Changed(previous.WallStrength != desired.WallStrength, 7) | Changed(before.TimeStep != configuration.TimeStep, 8)
-            | Changed(before.Backend != configuration.Backend, 9) | Changed(before.WorkerCount != configuration.WorkerCount, 10);
+            | Changed(before.Backend != configuration.Backend, 9) | Changed(before.WorkerCount != configuration.WorkerCount, 10)
+            | Changed(previous.Boundary != desired.Boundary, 11)
+            | Changed((before.Matrix.Ranges is null) != (configuration.Matrix.Ranges is null), 12);
         if (!ReferenceEquals(before.Matrix, configuration.Matrix))
         {
             if (before.Matrix.SpeciesCount != configuration.Matrix.SpeciesCount)
@@ -150,12 +165,25 @@ public sealed class EditorSession : IDisposable
             {
                 matrixFields[i] |= before.Matrix.Values[i] != configuration.Matrix.Values[i];
             }
+            if (configuration.Matrix.Ranges is PairInteractionRanges ranges)
+            {
+                coreFields ??= new bool[matrixFields.Length];
+                cutoffFields ??= new bool[matrixFields.Length];
+                for (int i = 0; i < matrixFields.Length; i++)
+                {
+                    coreFields[i] |= before.Matrix.Ranges is null || before.Matrix.Ranges.CoreRadii[i] != ranges.CoreRadii[i];
+                    cutoffFields[i] |= before.Matrix.Ranges is null || before.Matrix.Ranges.CutoffRadii[i] != ranges.CutoffRadii[i];
+                }
+            }
         }
         requestedConfiguration = configuration;
         int fields = configurationFields;
         bool[]? matrixChanges = matrixFields is null ? null : (bool[])matrixFields.Clone();
+        bool[]? coreChanges = coreFields is null ? null : (bool[])coreFields.Clone();
+        bool[]? cutoffChanges = cutoffFields is null ? null : (bool[])cutoffFields.Clone();
         configurationTask = Run(label, editor => editor.ApplyConfiguration(
-            MergeConfiguration(editor.Configuration, configuration, fields, matrixChanges), label), previewKey: "configuration");
+            MergeConfiguration(editor.Configuration, configuration, fields, matrixChanges, coreChanges, cutoffChanges), label), previewKey: "configuration",
+            requiresCapture: Has(fields, 0) || Has(fields, 1) || Has(fields, 11));
     }
     /// <summary>Queues one directed coefficient and optionally its reverse, preserving unrelated matrix edits.</summary>
     /// <param name="receiver">Receiver row.</param><param name="source">Source column.</param>
@@ -166,14 +194,81 @@ public sealed class EditorSession : IDisposable
         double[] values = current.Matrix.Values.ToArray();
         values[receiver * current.Matrix.SpeciesCount + source] = value;
         if (linkSymmetry) { values[source * current.Matrix.SpeciesCount + receiver] = value; }
-        ApplyConfiguration(new SimulationConfiguration(current.Parameters, new InteractionMatrix(current.Matrix.SpeciesCount, values),
+        ApplyConfiguration(new SimulationConfiguration(current.Parameters, current.Matrix.WithCoefficients(values),
             current.TimeStep, current.Backend, current.WorkerCount), "Edit directed coefficient");
+    }
+    /// <summary>Queues an explicit global/pair mode change using the owner's current actual rules.</summary>
+    /// <param name="enabled">True enables individual radii; false restores global controls.</param>
+    public void EnablePairRanges(bool enabled) => Run("Change radius mode", editor => editor.EnablePairRanges(enabled), requiresCapture: false);
+    /// <summary>Queues one responsive directed radius draft while retaining unrelated cells.</summary>
+    /// <param name="receiver">Receiver row.</param><param name="source">Source column.</param>
+    /// <param name="core">Nonnegative core smaller than cutoff.</param><param name="cutoff">Positive supported outer radius.</param>
+    /// <param name="linkReverse">Whether the transposed pair receives the same values.</param>
+    public void SetPairRange(int receiver, int source, double core, double cutoff, bool linkReverse = false)
+    {
+        SimulationConfiguration current = Configuration;
+        InteractionMatrix matrix = current.Matrix;
+        _ = matrix[receiver, source];
+        PairInteractionRanges ranges = matrix.Ranges ?? PairInteractionRanges.FromGlobal(matrix.SpeciesCount, current.Parameters);
+        double[] cores = ranges.CoreRadii.ToArray(), cutoffs = ranges.CutoffRadii.ToArray();
+        int cell = receiver * matrix.SpeciesCount + source;
+        cores[cell] = core; cutoffs[cell] = cutoff;
+        if (linkReverse)
+        {
+            int reverse = source * matrix.SpeciesCount + receiver;
+            cores[reverse] = core; cutoffs[reverse] = cutoff;
+        }
+        ApplyConfiguration(new(current.Parameters, matrix.WithRanges(new(matrix.SpeciesCount, cores, cutoffs)),
+            current.TimeStep, current.Backend, current.WorkerCount), "Edit directed radii");
+    }
+    /// <summary>Queues a single selected-radius operation, copying UI selection before returning.</summary>
+    /// <param name="cells">Flattened directed cell indices.</param><param name="core">Core radius.</param>
+    /// <param name="cutoff">Outer radius.</param><param name="linkReverse">Also changes reverse pairs.</param>
+    public void SetSelectedPairRanges(ReadOnlySpan<int> cells, double core, double cutoff, bool linkReverse = false)
+    {
+        MatrixCell[] selection = CaptureInteractionCells(cells);
+        Run("Set selected pair radii", editor => editor.SetSelectedPairRanges(ResolveInteractionCells(selection, editor.Configuration.Matrix), core, cutoff, linkReverse), requiresCapture: false);
+    }
+    /// <summary>Queues actual selected rule/radius generation with its independent component choice.</summary>
+    /// <param name="cells">Flattened directed cell indices.</param><param name="components">Quantities to generate.</param>
+    /// <param name="seed">Provenance seed.</param><param name="minimumCutoff">Smallest generated cutoff.</param>
+    /// <param name="maximumCutoff">Largest generated cutoff.</param><param name="maximumCoreFraction">Largest core/cutoff ratio.</param>
+    /// <param name="linkReverse">Generates the same values for reversed selected pairs.</param>
+    public void RandomizeInteractionSelection(ReadOnlySpan<int> cells, InteractionRandomization components, int seed,
+        double minimumCutoff, double maximumCutoff, double maximumCoreFraction = 0.6, bool linkReverse = false)
+    {
+        MatrixCell[] selection = CaptureInteractionCells(cells);
+        Run("Randomize interactions", editor => editor.RandomizeInteractionSelection(ResolveInteractionCells(selection, editor.Configuration.Matrix), components, seed,
+            minimumCutoff, maximumCutoff, maximumCoreFraction, linkReverse), requiresCapture: false);
+    }
+
+    private MatrixCell[] CaptureInteractionCells(ReadOnlySpan<int> cells)
+    {
+        int dimension = Configuration.Matrix.SpeciesCount;
+        MatrixCell[] result = new MatrixCell[cells.Length];
+        for (int i = 0; i < cells.Length; i++)
+        {
+            if ((uint)cells[i] >= (uint)(dimension * dimension)) { throw new ArgumentOutOfRangeException(nameof(cells)); }
+            result[i] = new(cells[i] / dimension, cells[i] % dimension);
+        }
+        return result;
+    }
+
+    private static int[] ResolveInteractionCells(MatrixCell[] cells, InteractionMatrix matrix)
+    {
+        int[] result = new int[cells.Length];
+        for (int i = 0; i < result.Length; i++)
+        {
+            _ = matrix[cells[i].Receiver, cells[i].Source];
+            result[i] = cells[i].Receiver * matrix.SpeciesCount + cells[i].Source;
+        }
+        return result;
     }
     /// <summary>Queues an explicit matrix template barrier.</summary>
     /// <param name="kind">Template kind.</param><param name="seed">Recorded generation seed.</param>
-    public void ApplyMatrixTemplate(PresetKind kind, int seed) => Run("Apply matrix", editor => editor.ApplyMatrixTemplate(kind, seed));
+    public void ApplyMatrixTemplate(PresetKind kind, int seed) => Run("Apply matrix", editor => editor.ApplyMatrixTemplate(kind, seed), requiresCapture: false);
     /// <summary>Queues an explicit zero-matrix operation.</summary>
-    public void ResetMatrix() => Run("Zero matrix", editor => editor.ResetMatrix());
+    public void ResetMatrix() => Run("Zero matrix", editor => editor.ResetMatrix(), requiresCapture: false);
     /// <summary>Queues a validated generation draft.</summary><param name="settings">Complete recipe.</param>
     public void SetGeneration(GenerationSettings settings)
     {
@@ -192,7 +287,7 @@ public sealed class EditorSession : IDisposable
             Velocity = Has(fields, 2) ? settings.Velocity : editor.Generation.Velocity,
             Speed = Has(fields, 3) ? settings.Speed : editor.Generation.Speed,
             DirectionRadians = Has(fields, 4) ? settings.DirectionRadians : editor.Generation.DirectionRadians
-        }), previewKey: "generation");
+        }), previewKey: "generation", requiresCapture: false);
     }
     /// <summary>Queues appearance while displaying it immediately.</summary><param name="settings">Complete appearance.</param>
     public void SetAppearance(AppearanceSettings settings)
@@ -227,7 +322,7 @@ public sealed class EditorSession : IDisposable
                 WorldParticleRadius = Has(fields, 9) ? settings.WorldParticleRadius : current.WorldParticleRadius,
                 Visuals = Has(fields, 10) ? settings.Visuals : current.Visuals
             });
-        }, previewKey: "appearance");
+        }, previewKey: "appearance", requiresCapture: false);
     }
     /// <summary>Queues playback controls, independent of numerical timestep.</summary><param name="settings">Complete playback policy.</param>
     public void SetPlayback(PlaybackSettings settings)
@@ -250,13 +345,13 @@ public sealed class EditorSession : IDisposable
                 DiagnosticEverySteps = Has(fields, 2) ? settings.DiagnosticEverySteps : current.DiagnosticEverySteps,
                 DiagnosticRadius = Has(fields, 3) ? settings.DiagnosticRadius : current.DiagnosticRadius
             });
-        }, previewKey: "playback");
+        }, previewKey: "playback", requiresCapture: false);
     }
     /// <summary>Queues future population counts without generating particles.</summary><param name="counts">Species counts.</param>
     public void SetPopulationRecipe(ReadOnlySpan<int> counts)
     {
         int[] copy = counts.ToArray();
-        Run("Population recipe", editor => editor.SetPopulationRecipe(copy));
+        Run("Population recipe", editor => editor.SetPopulationRecipe(copy), requiresCapture: false);
     }
     /// <summary>Queues a structural population operation with owned count data.</summary>
     /// <param name="speciesCount">Positive species count.</param><param name="counts">Counts per species.</param>
@@ -307,6 +402,7 @@ public sealed class EditorSession : IDisposable
     public void CancelSessionReplay()
     {
         if (background is not null) { background.CancelReplay(); }
+        else if (residentOwner is not null) { residentOwner.Editor.CancelSessionReplay(); residentOwner.RequestPause(); }
         else { sequential!.CancelSessionReplay(); }
         lastPreviewKey = null;
     }
@@ -315,9 +411,20 @@ public sealed class EditorSession : IDisposable
     public bool AdvanceSessionReplay(int maxSteps = 8) => sequential?.AdvanceSessionReplay(maxSteps) ?? !IsReplaying;
     /// <summary>Leases the newest CPU render copy without observing worker-owned state.</summary>
     /// <returns>A complete render lease, or null in sequential compatibility mode.</returns>
-    public RenderFrameLease? AcquireRenderFrame() => background?.AcquireRenderFrame();
+    public RenderFrameLease? AcquireRenderFrame() => IsSwitchingExecution ? null : background?.AcquireRenderFrame();
     /// <summary>Releases the background owner at shutdown; sequential controller ownership stays with its caller.</summary>
-    public void Dispose() => background?.Dispose();
+    public void Dispose()
+    {
+        residentOwner?.Dispose();
+        background?.Dispose();
+        if (cpuDetach?.IsCompletedSuccessfully == true && transferWasBackground)
+        {
+            cpuDetach.Result.Playback.Dispose();
+        }
+        foreach (DeferredCommand command in deferredCommands) { command.Completion.TrySetCanceled(); }
+        deferredCommands.Clear();
+        switchCompletion?.TrySetCanceled();
+    }
 
     internal PlaybackSettings PlaybackDraft => IsPending(playbackTask) ? requestedPlayback! : Publication.Playback;
     internal bool PausedDraft => requestedPause ?? Publication.IsPaused;
@@ -325,6 +432,7 @@ public sealed class EditorSession : IDisposable
     {
         requestedPause = paused;
         if (paused && background is not null) { background.RequestPause(); }
+        if (paused) { residentOwner?.RequestPause(); }
         pauseTask = Run(paused ? "Pause" : "Resume", editor =>
         {
             background?.DiscardElapsedDemand();
@@ -332,7 +440,7 @@ public sealed class EditorSession : IDisposable
         }, () =>
         {
             if (!IsPending(pauseTask)) { requestedPause = null; }
-        });
+        }, requiresCapture: false);
     }
     internal void SingleStep()
     {
@@ -342,11 +450,13 @@ public sealed class EditorSession : IDisposable
         {
             background?.DiscardElapsedDemand();
             editor.Playback.SingleStep();
-        }, () => requestedPause = null);
+        }, () => requestedPause = null, requiresCapture: false);
     }
     internal void AdvanceFrame(double seconds)
     {
+        if (IsSwitchingExecution) { return; }
         if (background is not null) { background.AdvanceFrame(seconds); }
+        else if (residentOwner is not null) { residentOwner.AdvanceFrame(seconds); }
         else { sequential!.Playback.AdvanceFrame(seconds); }
     }
     private static bool IsPending(Task? task) => task is not null && !task.IsCompleted;
@@ -361,19 +471,22 @@ public sealed class EditorSession : IDisposable
         return new EditorPublication(editor.Configuration, editor.Generation, editor.Appearance,
             PlaybackSettings.Capture(editor.Playback), editor.Populations.ToArray(), editor.GetCurrentPopulations(),
             editor.Revision, editor.CanUndo, editor.CanRedo, editor.SessionEventCount, editor.Playback.Experiment.Name,
-            editor.Playback.Observe().Count, editor.Playback.Observe().Step, editor.Playback.Observe().Time,
+            editor.Playback.Boundary.Count, editor.Playback.Boundary.Step, editor.Playback.Boundary.Time,
             editor.Playback.IsPaused, editor.Playback.LastExecution, editor.Playback.DirectFallbackSteps,
             editor.Playback.AccumulationFallbackSteps, editor.Playback.LastStatistics, editor.Playback.LatestDiagnostic,
             editor.Playback.DroppedPlaybackSeconds, editor.IsReplaying, editor.ReplayCompletedStep,
             editor.ReplayTerminalStep, 0, null, 0, 0)
-        { Recording = editor.Recording, BaselineVersion = editor.BaselineVersion };
+        {
+            Recording = editor.Recording, BaselineVersion = editor.BaselineVersion,
+            Execution = editor.Playback.Execution, CaptureRecording = editor.CaptureRecording
+        };
     }
     /// <summary>Retains fields touched by any unapplied preview, including a drag returning to its starting value.</summary>
     private static int Changed(bool changed, int bit) => changed ? 1 << bit : 0;
     private static bool Has(int fields, int bit) => (fields & (1 << bit)) != 0;
 
     private static SimulationConfiguration MergeConfiguration(SimulationConfiguration current,
-        SimulationConfiguration requested, int fields, bool[]? matrixChanges)
+        SimulationConfiguration requested, int fields, bool[]? matrixChanges, bool[]? coreChanges, bool[]? cutoffChanges)
     {
         ModelParameters target = requested.Parameters;
         ModelParameters merged = current.Parameters with
@@ -385,7 +498,8 @@ public sealed class EditorSession : IDisposable
             RepulsionFraction = Has(fields, 4) ? target.RepulsionFraction : current.Parameters.RepulsionFraction,
             DampingHalfLife = Has(fields, 5) ? target.DampingHalfLife : current.Parameters.DampingHalfLife,
             WallWidth = Has(fields, 6) ? target.WallWidth : current.Parameters.WallWidth,
-            WallStrength = Has(fields, 7) ? target.WallStrength : current.Parameters.WallStrength
+            WallStrength = Has(fields, 7) ? target.WallStrength : current.Parameters.WallStrength,
+            Boundary = Has(fields, 11) ? target.Boundary : current.Parameters.Boundary
         };
         InteractionMatrix matrix = current.Matrix;
         if (matrixChanges is not null)
@@ -399,7 +513,27 @@ public sealed class EditorSession : IDisposable
             {
                 if (matrixChanges[i]) { values[i] = requested.Matrix.Values[i]; }
             }
-            matrix = new InteractionMatrix(current.Matrix.SpeciesCount, values);
+            matrix = current.Matrix.WithCoefficients(values);
+        }
+        if (Has(fields, 12) && requested.Matrix.Ranges is null)
+        {
+            matrix = matrix.WithRanges(null);
+        }
+        else if (requested.Matrix.Ranges is PairInteractionRanges desired
+            && (Has(fields, 12) || coreChanges is not null || cutoffChanges is not null))
+        {
+            if (desired.SpeciesCount != matrix.SpeciesCount)
+            {
+                throw new InvalidOperationException("Species changed before this radius draft could apply. Review the completed matrix and retry.");
+            }
+            PairInteractionRanges currentRanges = matrix.Ranges ?? PairInteractionRanges.FromGlobal(matrix.SpeciesCount, merged);
+            double[] cores = currentRanges.CoreRadii.ToArray(), cutoffs = currentRanges.CutoffRadii.ToArray();
+            for (int i = 0; i < cores.Length; i++)
+            {
+                if (coreChanges?[i] == true) { cores[i] = desired.CoreRadii[i]; }
+                if (cutoffChanges?[i] == true) { cutoffs[i] = desired.CutoffRadii[i]; }
+            }
+            matrix = matrix.WithRanges(new(matrix.SpeciesCount, cores, cutoffs));
         }
         return new SimulationConfiguration(merged, matrix,
             Has(fields, 8) ? requested.TimeStep : current.TimeStep,
@@ -409,7 +543,7 @@ public sealed class EditorSession : IDisposable
     private sealed record PendingOperation(Task Task, Action? Completed);
 }
 
-/// <summary>Nonblocking playback controls paired with published scalar CPU status.</summary>
+/// <summary>Nonblocking playback controls paired with published scalar execution status.</summary>
 public sealed class SessionPlayback
 {
     private readonly EditorSession session;

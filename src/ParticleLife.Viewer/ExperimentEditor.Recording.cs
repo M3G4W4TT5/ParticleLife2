@@ -73,7 +73,7 @@ public sealed partial class ExperimentEditor
         ParticleStateDelta? delta = state is not null && beforeState is not null
             ? ParticleStateDelta.TryCreate(beforeState, state) : null;
         if (delta is not null && delta.PayloadBytes + 128 >= 44L * state!.Count) { delta = null; }
-        SessionEvent change = new(Playback.Observe().Step, configuration, delta is null ? state : null, label, generator, delta);
+        SessionEvent change = new(Playback.Boundary.Step, configuration, delta is null ? state : null, label, generator, delta);
         long required = EstimateActionBytes(change);
         if (required > actionLimitBytes - recordedBytes)
         {

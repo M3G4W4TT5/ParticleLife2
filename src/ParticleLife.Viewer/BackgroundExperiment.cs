@@ -2,6 +2,7 @@ using System.Diagnostics;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
+using ParticleLife.Core.Execution;
 
 namespace ParticleLife.Viewer;
 
@@ -33,6 +34,8 @@ public sealed class BackgroundExperiment : IDisposable
     private int cancelReplayRequested;
     private bool stopping;
     private bool disposed;
+    private bool detaching, detached;
+    private TaskCompletionSource<ExperimentEditor>? detachCompletion;
     private int busy;
     private long countsRevision = -1;
     private long membershipRevision = -1;
@@ -79,6 +82,7 @@ public sealed class BackgroundExperiment : IDisposable
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(stopping, this);
+            if (detaching) { throw new InvalidOperationException("The CPU owner is handing off at its ordered boundary."); }
             if (previewKey is not null && commands.Last?.Value is Command previous && previous.PreviewKey == previewKey)
             {
                 commands.RemoveLast();
@@ -102,6 +106,28 @@ public sealed class BackgroundExperiment : IDisposable
         Interlocked.Exchange(ref pauseRequested, 1);
         lock (gate) { elapsed = 0; }
         wake.Set();
+    }
+
+    /// <summary>Queues an ownership barrier after all earlier edits and returns the actual editor without disposing it.</summary>
+    /// <returns>Ownership only after the worker has stopped touching the editor; no UI-thread join is required.</returns>
+    /// <remarks>Subsequent commands must be retained by the caller for the destination owner. Construction
+    /// failure can reattach this same editor, preserving its actual baseline, history, clock and pending order.</remarks>
+    internal Task<ExperimentEditor> DetachAsync()
+    {
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(stopping, this);
+            if (detaching) { throw new InvalidOperationException("An ownership handoff is already pending."); }
+            detaching = true;
+            detachCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            commands.AddLast(new Command(++submitted, "Transfer CPU ownership", _ =>
+            {
+                editor.Playback.SetPaused(true);
+                lock (gate) { detached = true; stopping = true; elapsed = 0; }
+            }, null));
+            wake.Set();
+            return detachCompletion.Task;
+        }
     }
 
     /// <summary>Requests cancellation of temporary replay at the next completed replay boundary.</summary>
@@ -256,12 +282,14 @@ public sealed class BackgroundExperiment : IDisposable
         finally
         {
             editor.CancelSessionReplay();
-            editor.Playback.Dispose();
+            if (!detached) { editor.Playback.Dispose(); }
             lock (gate)
             {
                 foreach (Command pending in commands) { pending.Completion.TrySetCanceled(); }
                 commands.Clear();
             }
+            if (detached) { detachCompletion!.TrySetResult(editor); }
+            else { detachCompletion?.TrySetException(new InvalidOperationException("The CPU owner stopped before its transfer boundary.")); }
         }
     }
 
@@ -383,7 +411,10 @@ public sealed class BackgroundExperiment : IDisposable
             editor.Playback.DirectFallbackSteps, editor.Playback.AccumulationFallbackSteps, editor.Playback.LastStatistics,
             editor.Playback.LatestDiagnostic, editor.Playback.DroppedPlaybackSeconds, editor.IsReplaying,
             editor.ReplayCompletedStep, editor.ReplayTerminalStep, applied, error, stepsPerSecond, simulationSpeed)
-        { Recording = editor.Recording, BaselineVersion = editor.BaselineVersion };
+        {
+            Recording = editor.Recording, BaselineVersion = editor.BaselineVersion,
+            Execution = editor.Playback.Execution, CaptureRecording = editor.CaptureRecording
+        };
     }
 
     /// <summary>Cancels queued work and joins the worker after its current completed boundary.</summary>
@@ -424,6 +455,18 @@ public sealed record EditorPublication(
     public RecordingStatus Recording { get; init; } = RecordingStatus.Empty;
     /// <summary>Gets the baseline epoch of this completed publication, independent of frame sequence.</summary>
     public long BaselineVersion { get; init; }
+    /// <summary>Gets actual hardware and precision; CPU search settings remain in Configuration.</summary>
+    public ExecutionProvenance Execution { get; init; } = ExecutionProvenance.Cpu(Configuration);
+    /// <summary>Gets explicit capture cadence, storage and latest recoverable boundary.</summary>
+    public CaptureRecordingStatus? CaptureRecording { get; init; }
+    /// <summary>Gets the latest small GPU reduction, independently of optional CPU connectivity diagnostics.</summary>
+    public ResidentSummary? ResidentSummary { get; init; }
+    /// <summary>Gets actual full-state device readbacks since this resident owner was constructed.</summary>
+    public long FullStateReadbacks { get; init; }
+    /// <summary>Gets actual small device-status/reduction bytes read.</summary>
+    public long MetadataReadbackBytes { get; init; }
+    /// <summary>Gets whether device execution failed and requires explicit recovery or model intervention.</summary>
+    public bool DeviceFaulted { get; init; }
 }
 
 /// <summary>One explicitly owned read lease over a reusable completed CPU render buffer.</summary>
