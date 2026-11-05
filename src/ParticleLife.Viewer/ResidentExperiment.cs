@@ -221,6 +221,8 @@ internal sealed class ResidentExperiment : IDisposable
             Editor.IsReplaying, Editor.ReplayCompletedStep, Editor.ReplayTerminalStep, applied, error, stepsPerSecond, simulationSpeed)
         {
             Execution = Editor.Playback.Execution,
+            Recording = Editor.Recording,
+            BaselineVersion = Editor.BaselineVersion,
             CaptureRecording = Editor.CaptureRecording,
             ResidentSummary = Editor.Playback.Resident?.LatestSummary,
             FullStateReadbacks = Editor.Playback.Resident?.FullStateReadbacks ?? 0,

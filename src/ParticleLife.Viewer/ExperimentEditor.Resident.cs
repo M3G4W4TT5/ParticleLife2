@@ -74,6 +74,7 @@ public sealed partial class ExperimentEditor
         Playback.AdoptReplay(candidate, session.Actions.InitialExperiment);
         ClearTimeline();
         events.AddRange(session.Actions.Events);
+        recordedBytes = session.Actions.Events.Sum(EstimateActionBytes);
         AdvanceRecordedIdentities(session.Actions);
         captures.AddRange(restoredCaptures);
         captureBytes = restoredBytes;
@@ -92,10 +93,15 @@ public sealed partial class ExperimentEditor
             ExecutionProvenance.Cpu(capture.Configuration), capture.AppliedEventCount, "transfer"), required: true)!;
         Playback.ReturnToCpu(capture.State, capture.Configuration);
         if (events.Count > capture.AppliedEventCount) { events.RemoveRange(capture.AppliedEventCount, events.Count - capture.AppliedEventCount); }
+        recordedBytes = events.Sum(EstimateActionBytes);
         history.Clear();
+        retainedUndoBytes = 0;
+        evictedUndoActions = 0;
         historyPosition = 0;
         gestureBefore = null;
+        gestureChanged = false;
         brushStroke = null;
+        BaselineVersion++;
         Playback.SetPaused(true);
         populations = GetCurrentPopulations();
         captureNotice = $"Recovered captured step {capture.State.Step}; uncaptured continuation was discarded.";
@@ -116,10 +122,12 @@ public sealed partial class ExperimentEditor
         ExecutionProvenance source = Playback.Execution;
         ParticleSnapshot actual = SnapshotOf(candidate.ObserveCaptured());
         bool converted = !SameState(actual, Playback.Observe());
+        SessionEvent? conversion = converted ? PrepareRecordedEvent(Configuration, actual, Snapshot(),
+            "Convert particle state to GPU float32") : null;
         SimulationCapture destination = new(Configuration, actual, candidate.Execution, events.Count + (converted ? 1 : 0), "transfer");
         RecordedCapture packed = PrepareCapture(destination, required: true)!;
         Playback.AdoptResident(candidate);
-        if (converted) { events.Add(new(Playback.Boundary.Step, Configuration, actual, "Convert particle state to GPU float32")); }
+        if (conversion is not null) { AppendRecordedEvent(conversion); }
         AddCapture(packed);
         executionTransitions.Add(new(actual.Step, actual.Time, events.Count, source, candidate.Execution, converted));
         Revision++;
@@ -172,7 +180,10 @@ public sealed partial class ExperimentEditor
         ParticleSnapshot actual = Snapshot();
         if (!SameState(actual, Playback.Experiment.InitialState.Observe()))
         {
-            events.Add(new(actual.Step, Configuration, actual, "Convert initial particle state to GPU float32"));
+            // A fresh baseline must retain its actual precision conversion even when a previously
+            // selected recording limit is smaller. Its accounted payload blocks later physical edits;
+            // neither the baseline nor an already-applied conversion is silently omitted.
+            AppendRecordedEvent(new(actual.Step, Configuration, actual, "Convert initial particle state to GPU float32"));
         }
         StoreCapture(new(Configuration, actual, resident.Execution, events.Count, "transfer"), required: true);
     }

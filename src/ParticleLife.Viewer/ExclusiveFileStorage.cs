@@ -13,6 +13,27 @@ namespace ParticleLife.Viewer;
 /// for readers or a protocol for unrelated applications that ignore the reservations.</remarks>
 internal static class ExclusiveFileStorage
 {
+    /// <summary>Publishes one binary artifact after its producer completes; an existing destination is protected.</summary>
+    internal static void SaveBinary(string path, Action<Stream> write)
+    {
+        string fullPath = Path.GetFullPath(path);
+        string directory = Path.GetDirectoryName(fullPath)!;
+        Directory.CreateDirectory(directory);
+        using Reservation reservation = new(fullPath);
+        if (File.Exists(fullPath)) { throw new IOException("The destination already exists: " + fullPath); }
+        string temporaryPath = Path.Combine(directory, ".particle-life-" + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            using (FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                write(stream);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, fullPath, overwrite: false);
+        }
+        finally { TryDelete(temporaryPath); }
+    }
+
     internal static void Save(string path, string content, string? companionContent = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

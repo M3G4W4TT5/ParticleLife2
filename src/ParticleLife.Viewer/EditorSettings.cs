@@ -105,6 +105,9 @@ public sealed record AppearanceSettings
     /// <summary>Gets the saved camera target; smoothing is presentation-only.</summary>
     public CameraSettings Camera { get; init; } = new();
 
+    /// <summary>Gets optional rendering effects and sampled observations; none change particle motion.</summary>
+    public VisualSettings Visuals { get; init; } = new();
+
     /// <summary>Gets whether sampled diagnostics are visible; visibility does not enable sampling.</summary>
     public bool ShowDiagnostics { get; init; } = true;
 
@@ -160,6 +163,7 @@ public sealed record AppearanceSettings
             ParticleSizeMode = ParticleSizeMode,
             WorldParticleRadius = WorldParticleRadius,
             Camera = Camera,
+            Visuals = Visuals,
             ShowDiagnostics = ShowDiagnostics,
             ShowHelp = ShowHelp,
             ShowOverlay = ShowOverlay,
@@ -181,6 +185,8 @@ public sealed record AppearanceSettings
         }
         ArgumentNullException.ThrowIfNull(Camera);
         Camera.Validate();
+        ArgumentNullException.ThrowIfNull(Visuals);
+        Visuals.Validate();
 
         if (!double.IsFinite(UiScale) || UiScale < 0.5 || UiScale > 3)
         {

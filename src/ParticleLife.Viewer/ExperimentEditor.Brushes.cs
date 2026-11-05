@@ -11,8 +11,8 @@ public sealed partial class ExperimentEditor
     /// <summary>Begins one direct-tool undo gesture and captures its immutable settings and starting point.</summary>
     /// <param name="settings">Validated live tool settings.</param><param name="point">Finite actual world point.</param>
     /// <remarks>Each applied sample still produces its own completed-boundary structural session event.
-    /// Current storage uses full actual snapshots per applied sample: memory grows with population times
-    /// applied samples and is not silently truncated. This intentionally precedes compact session storage.</remarks>
+    /// Sparse actual edits use identity deltas; undo retains compressed independent checkpoints.
+    /// Recording limits reject a new physical sample before it changes state, never truncate history.</remarks>
     public void BeginBrushStroke(BrushSettings settings, Vector2d point)
     {
         EnsureNotReplaying();
