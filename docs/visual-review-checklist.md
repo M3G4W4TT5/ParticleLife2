@@ -1,6 +1,6 @@
 # Particle Life 2 consolidated visual review
 
-Status: **planned; not run**. This checklist belongs to the P1–P7 update. Features listed here are planned and are not claims about the current app.
+Status: **consolidated review pending**. This checklist belongs to the P1–P7 update. Individual implementation and hardware evidence below does not mark the end-to-end cases passed.
 
 Collect and refine cases during implementation. Run the full review once the integrated 2D features are ready, following [the implementation assignment](implementation-prompt.md#consolidated-visual-review). Perform earlier visual checks only to resolve a concrete implementation blocker. After the consolidated review, repeat affected cases following fixes instead of restarting every case.
 
@@ -46,4 +46,10 @@ Give each case an exact setup and repeatable actions before execution. Use Pendi
 
 ## Findings and follow-up checks
 
-No review findings yet. Record case ID, observed issue, responsible fix, fix commit and focused recheck result here. Keep blocked/manual cases explicit; do not mark the review complete until required cases are resolved or the user has agreed to a stated exception.
+No consolidated review findings yet. Record case ID, observed issue, responsible fix, fix commit and focused recheck result here. Keep blocked/manual cases explicit; do not mark the review complete until required cases are resolved or the user has agreed to a stated exception.
+
+### Necessary early P1 interoperability check
+
+The isolated `prototypes/GpuInterop` smoke was run on 5 November 2026 to resolve whether a compute buffer can be drawn by the existing MonoGame context. It used 4,096 points and 120 fixed translation steps on the NVIDIA RTX 5080 Laptop GPU / OpenGL 4.6. All original and restored particle-centre pixel checks passed, the exact capture hashes matched, and normal frames performed no particle readback. Sol inspected the saved framebuffer and observed the coloured grid plus magenta/cyan MonoGame markers. Build, CPU-only startup (no native graphics modules) and formatting checks passed. This is functional interoperability evidence, not the full P5 simulation or a performance limit.
+
+Evidence lives under the P1 worktree's ignored `artifacts/implementation/p1-gpu-smoke-1/` and `p1-gpu-checks/`; details and commands are in [the GPU report](gpu-integration.md). Direct live CUA observation was attempted during the bounded post-pass window but the tool returned `Computer Use app approval timed out`. This part remains **Pending** for the final native review; saved framebuffer inspection does not establish keyboard or live-window interaction. No V01–V22 case is marked passed by this early check.

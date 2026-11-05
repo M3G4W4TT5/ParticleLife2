@@ -51,6 +51,12 @@ public sealed class PlaybackController : IDisposable
     /// <summary>Gets the currently active rules and execution settings, independent of the reset baseline.</summary>
     public SimulationConfiguration Configuration => simulation.Configuration;
 
+    /// <summary>Identifies completed particle or configuration changes without including appearance-only edits.</summary>
+    internal long PublicationVersion { get; private set; }
+
+    /// <summary>Identifies structural membership/species replacements, independently of ordinary numerical motion.</summary>
+    internal long MembershipVersion { get; private set; }
+
     /// <summary>Gets actual search and fallback metadata from the last successful step, or null after reset/replacement.</summary>
     public ForceExecution? LastExecution => simulation.LastExecution;
 
@@ -180,6 +186,8 @@ public sealed class PlaybackController : IDisposable
 
         double previousTimeStep = Configuration.TimeStep;
         simulation.Reconfigure(configuration, replacementState);
+        PublicationVersion++;
+        if (replacementState is not null) { MembershipVersion++; }
         if (previousTimeStep != Configuration.TimeStep)
         {
             PendingPlaybackSeconds = 0;
@@ -223,6 +231,8 @@ public sealed class PlaybackController : IDisposable
         Simulation previous = simulation;
         simulation = replacement;
         Experiment = experiment;
+        PublicationVersion++;
+        MembershipVersion++;
         ClearPlayback();
         previous.Dispose();
     }
@@ -251,6 +261,8 @@ public sealed class PlaybackController : IDisposable
         Simulation previous = simulation;
         simulation = replacement;
         Experiment = initialExperiment;
+        PublicationVersion++;
+        MembershipVersion++;
         IsPaused = true;
         ClearPlayback();
         previous.Dispose();
@@ -271,6 +283,19 @@ public sealed class PlaybackController : IDisposable
     /// <exception cref="ArithmeticException">A numerical step fails; the last completed state is preserved.</exception>
     public int AdvanceFrame(double elapsedSeconds)
     {
+        AccumulatePlayback(elapsedSeconds);
+        int completed = 0;
+        while (completed < MaxStepsPerFrame && AdvancePendingStep())
+        {
+            completed++;
+        }
+        DiscardWholePlaybackSteps();
+        return completed;
+    }
+
+    /// <summary>Accumulates one presentation interval without performing numerical work.</summary>
+    internal void AccumulatePlayback(double elapsedSeconds)
+    {
         ObjectDisposedException.ThrowIf(disposed, this);
         if (!double.IsFinite(elapsedSeconds) || elapsedSeconds < 0)
         {
@@ -279,7 +304,7 @@ public sealed class PlaybackController : IDisposable
 
         if (IsPaused)
         {
-            return 0;
+            return;
         }
 
         double pending = PendingPlaybackSeconds + elapsedSeconds * playbackSpeed;
@@ -289,15 +314,19 @@ public sealed class PlaybackController : IDisposable
         }
 
         PendingPlaybackSeconds = pending;
-        int completed = 0;
+    }
+
+    /// <summary>Completes at most one pending step, allowing the owner to service commands at every boundary.</summary>
+    internal bool AdvancePendingStep()
+    {
+        if (IsPaused || PendingPlaybackSeconds < Configuration.TimeStep)
+        {
+            return false;
+        }
         try
         {
-            while (completed < MaxStepsPerFrame && PendingPlaybackSeconds >= Configuration.TimeStep)
-            {
-                CompleteStep();
-                PendingPlaybackSeconds -= Configuration.TimeStep;
-                completed++;
-            }
+            CompleteStep();
+            PendingPlaybackSeconds -= Configuration.TimeStep;
         }
         catch (ArithmeticException)
         {
@@ -305,7 +334,12 @@ public sealed class PlaybackController : IDisposable
             PendingPlaybackSeconds = 0;
             throw;
         }
+        return true;
+    }
 
+    /// <summary>Drops excess whole-step wall-time demand after one bounded scheduling turn.</summary>
+    internal void DiscardWholePlaybackSteps()
+    {
         if (PendingPlaybackSeconds >= Configuration.TimeStep)
         {
             double remainder = PendingPlaybackSeconds % Configuration.TimeStep;
@@ -313,7 +347,6 @@ public sealed class PlaybackController : IDisposable
             PendingPlaybackSeconds = remainder;
         }
 
-        return completed;
     }
 
     /// <summary>Releases the owned simulation and joins its persistent force workers, if configured.</summary>
@@ -334,6 +367,7 @@ public sealed class PlaybackController : IDisposable
     private void CompleteStep()
     {
         simulation.Step();
+        PublicationVersion++;
         ParticleStateView state = simulation.Observe();
         if (diagnosticEverySteps > 0 && state.Step % diagnosticEverySteps == 0)
         {

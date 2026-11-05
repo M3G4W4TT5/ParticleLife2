@@ -14,7 +14,7 @@ namespace ParticleLife.MonoGame.Editor;
 /// undo payloads and replay events. Draw never edits a model or retains a state observation.</remarks>
 internal sealed class LiveExperimentEditor
 {
-    private readonly ExperimentEditor editor;
+    private readonly EditorSession editor;
     private readonly UiPanel panel;
     private readonly Action<string> report;
     private readonly Action printTimings;
@@ -39,6 +39,8 @@ internal sealed class LiveExperimentEditor
     private string recipePopulationSummary = string.Empty;
     private int selectedTab;
     private ButtonState currentMouseButton;
+    private bool observedReplay;
+    private bool replayCancelPending;
     private readonly UiSection recipes;
     private readonly UiSection interactions;
     private readonly UiSection forces;
@@ -57,6 +59,11 @@ internal sealed class LiveExperimentEditor
     internal Rectangle BrowserBody => browser.Body;
 
     internal LiveExperimentEditor(ExperimentEditor editor, string saveDirectory, Action<string> report, Action printTimings)
+        : this(new EditorSession(editor), saveDirectory, report, printTimings)
+    {
+    }
+
+    internal LiveExperimentEditor(EditorSession editor, string saveDirectory, Action<string> report, Action printTimings)
     {
         this.editor = editor;
         this.report = report;
@@ -163,12 +170,15 @@ internal sealed class LiveExperimentEditor
     /// <summary>Starts the selected complete recipe through the same controller used by headless checks.</summary>
     internal void StartSelectedRecipe()
     {
-        editor.NewRecipe(selectedRecipe);
-        ClearDrafts();
-        matrix.Synchronize();
+        PresetKind kind = selectedRecipe;
+        PresetInfo recipe = PresetCatalog.Get(kind);
+        ReportCommand("New recipe", owner => owner.NewRecipe(kind),
+            $"Started {recipe.Name}{(recipe.IsExperimental ? " (experimental)" : "")}: {recipe.DefaultParticleCount} particles, {recipe.DefaultSpeciesCount} species. New baseline at time/step zero.", () =>
+            {
+                ClearDrafts();
+                matrix.Synchronize();
+            });
         SuppressPlayback = true;
-        PresetInfo recipe = PresetCatalog.Get(selectedRecipe);
-        report($"Started {recipe.Name}{(recipe.IsExperimental ? " (experimental)" : "")}: {recipe.DefaultParticleCount} particles, {recipe.DefaultSpeciesCount} species. New baseline at time/step zero.");
     }
 
     /// <summary>Applies the selected matrix without adopting its population or other recommended settings.</summary>
@@ -252,10 +262,22 @@ internal sealed class LiveExperimentEditor
             "Coupled draft layer width; must be at most min(width,height)/2 when Apply world is pressed.", log: true, gesture: false));
         population.Children.Add(Button(() => worldDraft ? "Apply world *" : "Apply world", () =>
         {
-            ParametersChange(Parameters with { WorldWidth = width, WorldHeight = height, WallWidth = wallWidth });
-            worldDraft = false;
+            double requestedWidth = width, requestedHeight = height, requestedWallWidth = wallWidth;
+            (Parameters with { WorldWidth = requestedWidth, WorldHeight = requestedHeight, WallWidth = requestedWallWidth }).Validate();
+            ReportCommand("Apply world", owner =>
+            {
+                SimulationConfiguration current = owner.Configuration;
+                owner.ApplyConfiguration(new SimulationConfiguration(current.Parameters with
+                {
+                    WorldWidth = requestedWidth,
+                    WorldHeight = requestedHeight,
+                    WallWidth = requestedWallWidth
+                }, current.Matrix, current.TimeStep, current.Backend, current.WorkerCount), "Edit world");
+            }, "World rectangle changed; absolute positions, velocities and clock retained.", () =>
+            {
+                if (width == requestedWidth && height == requestedHeight && wallWidth == requestedWallWidth) { worldDraft = false; }
+            });
             SuppressPlayback = true;
-            report("World rectangle changed; absolute positions, velocities and clock retained.");
         }, "Atomically apply these three world/wall drafts. Invalid combinations leave every live parameter unchanged."));
         population.Children.Add(new UiLabel(() => "Population draft: survivors keep their identities and motion.", 32));
         population.Children.Add(Number("Total particles", () => populations.Sum(), value => Distribute(Integer(value), populationSpecies),
@@ -284,15 +306,20 @@ internal sealed class LiveExperimentEditor
         }, 0, 0, 2000, "Exact count for the selected draft species; the total updates accordingly. Zero particles and empty species are supported.", integer: true, gesture: false));
         population.Children.Add(Button(() => populationDraft ? "Apply to live population *" : "Apply to live population", () =>
         {
-            editor.ApplyPopulation(populationSpecies, populations);
-            populationDraft = false;
+            int speciesCount = populationSpecies;
+            int[] requested = (int[])populations.Clone();
+            ReportCommand("Apply population", owner => owner.ApplyPopulation(speciesCount, requested),
+                "Population applied: surviving identities/state retained; actual additions recorded in the session.", () =>
+                {
+                    if (populationSpecies == speciesCount && populations.AsSpan().SequenceEqual(requested)) { populationDraft = false; }
+                });
             SuppressPlayback = true;
-            report("Population applied: surviving identities/state retained; actual additions recorded in the session.");
         }, "Apply all targets atomically; additions use the recipe. Undo keeps current motion for survivors and restores removed particles from saved state, at the current clock."));
         population.Children.Add(Button(() => "Use counts for generation", () =>
         {
-            editor.SetPopulationRecipe(populations);
-            report("Generation count recipe saved. Current particles are unchanged.");
+            int[] requested = (int[])populations.Clone();
+            ReportCommand("Generation counts", owner => owner.SetPopulationRecipe(requested),
+                "Generation count recipe saved. Current particles are unchanged.");
         }, "Change only future generation counts. Recipe species count must match the active matrix; apply species changes explicitly first."));
         population.Children.Add(Button(() => "Discard unapplied drafts", () =>
         {
@@ -325,9 +352,8 @@ internal sealed class LiveExperimentEditor
             "Finite angle in radians for common-direction initial velocities. Slider spans -pi..pi; exact angles may be typed."));
         generation.Children.Add(Button(() => "Resample live particles", () =>
         {
-            editor.ResampleParticles();
+            Resample();
             SuppressPlayback = true;
-            report("Resampled positions/velocities using the recipe; identities, rules and clock retained.");
         }, "Explicitly generate new positions and velocities for existing particles. Preserve identities, species, matrix, time and steps; record the actual new values."));
         generation.Children.Add(new UiLabel(() => "New experiment: regenerates all particles; sets a new reset baseline at time/step zero.", 44));
         generation.Children.Add(new UiRow(
@@ -342,7 +368,7 @@ internal sealed class LiveExperimentEditor
             value => ConfigurationChange(timeStep: value), 1.0 / 144, 0.0001, 0.1,
             "Finite positive fixed integration timestep. Applies to future increments; elapsed simulation time is not recomputed. Clears fractional playback backlog.", log: true));
         simulation.Children.Add(Number("Playback speed [x]", () => editor.Playback.PlaybackSpeed,
-            value => { editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with { Speed = value }); SuppressPlayback = true; }, 1, 0.05, 8,
+            value => { editor.SetPlayback(editor.Playback.Settings with { Speed = value }); SuppressPlayback = true; }, 1, 0.05, 8,
             "Wall-clock speed only; does not alter dt or equations. Changing speed clears pending playback time.", log: true));
         simulation.Children.Add(new UiDropdown("Backend", ["Direct reference", "Uniform grid"],
             () => editor.Configuration.Backend == ForceBackend.Direct ? 0 : 1,
@@ -352,7 +378,7 @@ internal sealed class LiveExperimentEditor
             value => ConfigurationChange(workers: Integer(value)), 1, 1, 8,
             "Explicit worker count including caller, 1..8. Direct requires exactly one; invalid combinations are rejected atomically.", integer: true));
         simulation.Children.Add(Number("Max steps / frame", () => editor.Playback.MaxStepsPerFrame,
-            value => editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with { MaxStepsPerFrame = Integer(value) }), 8, 1, 32,
+            value => editor.SetPlayback(editor.Playback.Settings with { MaxStepsPerFrame = Integer(value) }), 8, 1, 32,
             "Positive catch-up cap. Remaining whole-step playback time is dropped and displayed. It does not bound the cost of one numerical step.", integer: true));
         simulation.Children.Add(new UiToggle("Sample diagnostics", () => editor.Playback.DiagnosticEverySteps > 0,
             SetDiagnosticsEnabled, "Independent measurements after completed steps. Turning them off changes no numerical force or trajectory."));
@@ -360,12 +386,15 @@ internal sealed class LiveExperimentEditor
             value => SetDiagnosticCadence(Integer(value)), 144, 0, 1440,
             "Nonnegative completed-step cadence. Zero disables samples. Editing clears stale measurements; wall-clock frame rate is irrelevant.", integer: true));
         simulation.Children.Add(new UiToggle("Connectivity follows cutoff", () => editor.Playback.DiagnosticRadius is null,
-            value => editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with { DiagnosticRadius = value ? null : Parameters.Cutoff }),
+            value => editor.SetPlayback(editor.Playback.Settings with { DiagnosticRadius = value ? null : Parameters.Cutoff }),
             "When enabled, connectivity measurements use the current interaction cutoff. A separate radius changes diagnostics only."));
         simulation.Children.Add(Number("Connectivity R [L]", () => editor.Playback.DiagnosticRadius ?? Parameters.Cutoff,
-            value => editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with { DiagnosticRadius = value }), 0.1, 0.001, 2,
+            value => editor.SetPlayback(editor.Playback.Settings with { DiagnosticRadius = value }), 0.1, 0.001, 2,
             "Finite positive diagnostic connection length. Entering a value selects an independent radius and clears previous samples.", log: true));
-        simulation.Children.Add(new UiLabel(() => $"Requested {editor.Configuration.Backend}/{editor.Configuration.WorkerCount}; actual {editor.Playback.LastExecution?.ActualBackend.ToString() ?? "UNSTEPPED"}/{editor.Playback.LastExecution?.ActualWorkerCount.ToString() ?? "-"}. Fallback {editor.Playback.LastExecution?.FallbackReason.ToString() ?? "NONE"}.", 62));
+        simulation.Children.Add(new UiLabel(() => $"Requested {editor.Configuration.Backend}/{editor.Configuration.WorkerCount}; applied {editor.Publication.Configuration.Backend}/{editor.Publication.Configuration.WorkerCount}; actual {editor.Playback.LastExecution?.ActualBackend.ToString() ?? "UNSTEPPED"}/{editor.Playback.LastExecution?.ActualWorkerCount.ToString() ?? "-"}. Fallback {editor.Playback.LastExecution?.FallbackReason.ToString() ?? "NONE"}.", 78));
+        simulation.Children.Add(new UiLabel(() => editor.HasPendingCommands
+            ? $"Queued: {editor.PendingCommands} commands. Apply after the current completed boundary."
+            : editor.IsBusy ? "CPU step in progress; controls remain available." : "Completed boundary ready.", 42, UiCanvas.Accent));
         simulation.Children.Add(Button(() => "Print viewer timings", printTimings,
             "Print the latest approximately one-second FPS, controller update, editor input/update and render submission timings to the launch console. Present is excluded."));
     }
@@ -534,6 +563,23 @@ internal sealed class LiveExperimentEditor
     internal void Update(Rectangle bounds, Rectangle modalBounds, float scale, MouseState mouse,
         IReadOnlyList<UiInputEvent> input)
     {
+        editor.Pump();
+        if (editor.IsBackground)
+        {
+            bool replaying = editor.IsReplaying;
+            if (observedReplay && !replaying)
+            {
+                string status = editor.Publication.Error is not null
+                    ? "Replay failed: " + editor.Publication.Error + ". Previous completed experiment retained."
+                    : replayCancelPending ? "Replay cancelled. Previous completed experiment retained, paused."
+                    : "Replay completed at the recorded terminal boundary, paused.";
+                browser.SetStatus(status);
+                report(status);
+                if (!replayCancelPending && editor.Publication.Error is null) { ClearDrafts(); }
+                replayCancelPending = false;
+            }
+            observedReplay = replaying;
+        }
         currentMouseButton = mouse.LeftButton;
         SuppressPlayback = false;
         ConsumedKeyboard = false;
@@ -547,8 +593,11 @@ internal sealed class LiveExperimentEditor
             if (input.Any(entry => !entry.IsText && entry.Key == Keys.Escape))
             {
                 editor.CancelSessionReplay();
-                browser.SetStatus("Replay cancelled. The previous completed experiment is retained, paused.");
-                report("Session replay cancelled; previous completed experiment retained, paused.");
+                replayCancelPending = editor.IsBackground;
+                string status = editor.IsBackground ? "Replay cancellation queued; waiting for the current step to finish."
+                    : "Replay cancelled. Previous completed experiment retained, paused.";
+                browser.SetStatus(status);
+                report(status);
             }
             else
             {
@@ -609,27 +658,30 @@ internal sealed class LiveExperimentEditor
 
     internal void Reset()
     {
-        editor.Reset();
-        populationDraft = worldDraft = false;
+        ReportCommand("Reset experiment", owner => owner.Reset(),
+            "Reset experiment: exact baseline state and rules restored at time/step zero; fresh replay timeline.", ClearDrafts);
         SuppressPlayback = true;
-        report("Reset experiment: exact baseline state and rules restored at time/step zero; fresh replay timeline.");
     }
 
     internal void ReloadExperiment(string path, ForceBackend? backendOverride, int? workerOverride, int? diagnosticEveryStepsOverride = null)
     {
-        editor.LoadExperiment(path, backendOverride, workerOverride, diagnosticEveryStepsOverride);
-        ClearDrafts();
+        editor.Run("Reload experiment", owner => owner.LoadExperiment(path, backendOverride, workerOverride, diagnosticEveryStepsOverride), () =>
+        {
+            ClearDrafts();
+            report(backendOverride is not null || workerOverride is not null
+                ? "Reloaded startup experiment with explicit execution overrides, paused."
+                : "Reloaded startup experiment with its saved execution settings, paused.");
+        });
         SuppressPlayback = true;
-        report(backendOverride is not null || workerOverride is not null
-            ? "Reloaded startup experiment with explicit execution overrides, paused."
-            : "Reloaded startup experiment with its saved execution settings, paused.");
+        if (editor.IsBackground) { report("Reload queued; the current experiment is retained until loading succeeds."); }
     }
 
     internal void Template(PresetKind kind)
     {
-        editor.ApplyMatrixTemplate(kind, editor.Generation.Seed);
+        int seed = editor.Generation.Seed;
         PresetInfo recipe = PresetCatalog.Get(kind);
-        report($"{recipe.Name}{(recipe.IsExperimental ? " (experimental)" : "")} matrix applied live. Particles, velocities, time and completed steps retained.");
+        ReportCommand("Apply matrix", owner => owner.ApplyMatrixTemplate(kind, seed),
+            $"{recipe.Name}{(recipe.IsExperimental ? " (experimental)" : "")} matrix applied live. Particles, velocities, time and completed steps retained.");
     }
 
     /// <summary>Uses the same undoable diagnostic operation for the shortcut and the native toggle.</summary>
@@ -644,7 +696,7 @@ internal sealed class LiveExperimentEditor
     internal void SetDiagnosticCadence(int cadence)
     {
         int previous = editor.Playback.DiagnosticEverySteps;
-        editor.SetPlayback(PlaybackSettings.Capture(editor.Playback) with
+        editor.SetPlayback(editor.Playback.Settings with
         {
             DiagnosticEverySteps = cadence
         });
@@ -657,16 +709,24 @@ internal sealed class LiveExperimentEditor
     internal void RandomizeMatrix()
     {
         int seed = RandomNumberGenerator.GetInt32(int.MaxValue);
-        editor.ApplyMatrixTemplate(PresetKind.Random, seed);
-        report($"Randomized matrix live with recorded seed {seed}. Particles and clock retained; the generation recipe is unchanged.");
+        ReportCommand("Randomize matrix", owner => owner.ApplyMatrixTemplate(PresetKind.Random, seed),
+            $"Randomized matrix live with recorded seed {seed}. Particles and clock retained; the generation recipe is unchanged.");
     }
 
     private void NewExperiment(PresetKind kind)
     {
-        editor.NewExperiment(kind, $"{kind} experiment");
-        populationDraft = worldDraft = false;
+        ReportCommand("New experiment", owner => owner.NewExperiment(kind, $"{kind} experiment"),
+            $"New {kind} experiment generated. New baseline at time/step zero.", ClearDrafts);
         SuppressPlayback = true;
-        report($"New {kind} experiment generated. New baseline at time/step zero.");
+    }
+
+    internal void Resample() => ReportCommand("Resample", owner => owner.ResampleParticles(),
+        "Resampled positions/velocities using the recipe; identities, rules and clock retained.");
+
+    private void ReportCommand(string label, Action<ExperimentEditor> operation, string completed, Action? after = null)
+    {
+        if (editor.IsBackground) { report($"{label} queued; waiting for a completed simulation boundary."); }
+        editor.Run(label, operation, () => { after?.Invoke(); report(completed); });
     }
 
     private void Error(string message) => report("Edit rejected: " + message);

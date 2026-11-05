@@ -7,7 +7,7 @@ namespace ParticleLife.MonoGame.Editor;
 /// <summary>Explicit local file workflows; typed names use exclusive creation and failures retain active state.</summary>
 internal sealed class ExperimentFileBrowser
 {
-    private readonly ExperimentEditor editor;
+    private readonly EditorSession editor;
     private readonly Action<string> report;
     private readonly Action suppressPlayback;
     private readonly Action baselineChanged;
@@ -22,13 +22,14 @@ internal sealed class ExperimentFileBrowser
     internal void Arrange(Rectangle bounds) => panel.Arrange(bounds);
     internal void SetStatus(string text) => result = text;
 
-    internal ExperimentFileBrowser(ExperimentEditor editor, string directory, Action<string> report, Action suppressPlayback, Action baselineChanged)
+    internal ExperimentFileBrowser(EditorSession editor, string directory, Action<string> report, Action suppressPlayback, Action baselineChanged)
     {
         this.editor = editor;
         this.directory = directory;
         this.report = report;
         this.suppressPlayback = suppressPlayback;
         this.baselineChanged = baselineChanged;
+        editor.Failed += Error;
         panel = new UiPanel(Error, dismissOnEscape: true);
         panel.Toolbar.Add(new UiRow(
             new UiButton(() => "Close", Close, "Return to the experiment without loading or saving."),
@@ -101,19 +102,19 @@ internal sealed class ExperimentFileBrowser
                 name = value;
             }, "Choose a useful name. Files are exclusively created; an existing name fails safely. Append a new name to save again."));
             panel.Content.Add(new UiRow(
-                SaveButton("Save preset", "preset", editor.SavePreset),
-                SaveButton("Save from here", "experiment", editor.SaveCurrent)));
+                SaveButton("Save preset", "preset", (owner, path, title) => owner.SavePreset(path, title)),
+                SaveButton("Save from here", "experiment", (owner, path, title) => owner.SaveCurrent(path, title))));
             panel.Content.Add(new UiRow(
-                SaveButton("Save initial", "initial", editor.SaveInitial),
-                SaveButton("Save session", "session", editor.SaveSession)));
+                SaveButton("Save initial", "initial", (owner, path, title) => owner.SaveInitial(path, title)),
+                SaveButton("Save session", "session", (owner, path, title) => owner.SaveSession(path, title))));
             panel.Content.Add(new UiLabel(() => result, 42, UiCanvas.Accent));
             panel.Content.Add(new UiLabel(() => selected is null ? "Select a JSON file below" : $"Selected: {Path.GetFileName(selected)}", 24));
             panel.Content.Add(new UiRow(
-                LoadButton("Load experiment", path => editor.LoadExperiment(path), "Exact saved initial values become a new baseline at time/step zero, paused."),
-                LoadButton("Replay session", path => editor.BeginSessionReplay(path), "Run recorded step-boundary changes through the shared replay engine to its saved terminal boundary, then pause.", startsReplay: true)));
+                LoadButton("Load experiment", (owner, path) => owner.LoadExperiment(path), "Exact saved initial values become a new baseline at time/step zero, paused."),
+                LoadButton("Replay session", (owner, path) => owner.BeginSessionReplay(path), "Run recorded step-boundary changes through the shared replay engine to its saved terminal boundary, then pause.", startsReplay: true)));
             panel.Content.Add(new UiRow(
-                LoadButton("Preset live", path => editor.ApplyPreset(path, false), "Apply compatible rules and recipe while retaining particles and the clock. Generation is a separate action.", live: true),
-                LoadButton("Preset new", path => editor.ApplyPreset(path, true), "Generate a new population explicitly from the preset; establish a new baseline at time/step zero.")));
+                LoadButton("Preset live", (owner, path) => owner.ApplyPreset(path, false), "Apply compatible rules and recipe while retaining particles and the clock. Generation is a separate action.", live: true),
+                LoadButton("Preset new", (owner, path) => owner.ApplyPreset(path, true), "Generate a new population explicitly from the preset; establish a new baseline at time/step zero.")));
             panel.Content.Add(new UiLabel(() => "Preset: recipe. From here: exact state. Session: initial state and changes.", 36));
             foreach (string folder in folders)
             {
@@ -140,17 +141,25 @@ internal sealed class ExperimentFileBrowser
         }
     }
 
-    private UiButton SaveButton(string caption, string suffix, Action<string, string> save) => new(() => caption, () =>
+    private UiButton SaveButton(string caption, string suffix, Action<ExperimentEditor, string, string> save) => new(() => caption, () =>
     {
         ValidateName(name);
         string path = Path.Combine(directory, $"{name}.{suffix}.json");
-        save(path, name);
-        selected = path;
-        result = $"Saved {Path.GetFileName(path)}. The experiment and clock are unchanged.";
-        report($"Saved {caption[5..].ToLowerInvariant()}: {path}");
+        string title = name;
+        if (editor.IsBackground)
+        {
+            result = $"Queued {caption.ToLowerInvariant()}; waiting for a completed boundary.";
+            report(result);
+        }
+        editor.Run(caption, owner => save(owner, path, title), () =>
+        {
+            selected = path;
+            result = $"Saved {Path.GetFileName(path)}. The experiment and clock are unchanged.";
+            report($"Saved {caption[5..].ToLowerInvariant()}: {path}");
+            Refresh();
+        });
         suppressPlayback();
         panel.ClearFocus();
-        Refresh();
     }, caption switch
     {
         "Save preset" => "Reusable current rules, matrix, generation recipe, execution and appearance. It does not reproduce an evolved pattern.",
@@ -159,23 +168,28 @@ internal sealed class ExperimentFileBrowser
         _ => "Exact starting experiment plus every applied trajectory change and terminal boundary. Headless replay uses simulation steps."
     });
 
-    private UiButton LoadButton(string label, Action<string> load, string help, bool startsReplay = false, bool live = false) => new(() => label, () =>
+    private UiButton LoadButton(string label, Action<ExperimentEditor, string> load, string help, bool startsReplay = false, bool live = false) => new(() => label, () =>
     {
         if (selected is null)
         {
             return;
         }
-        load(selected);
-        suppressPlayback();
-        if (!startsReplay && !live)
+        string path = selected;
+        if (editor.IsBackground)
         {
-            baselineChanged();
+            result = $"Queued {label.ToLowerInvariant()}; the current completed experiment is retained.";
+            report(result);
         }
-        result = $"{label}: {Path.GetFileName(selected)}. " + (startsReplay
-            ? "Replay started; Esc cancels."
-            : live ? "Applied live; particle state, clock and playback status retained."
-            : "Loaded paused; close this window to inspect.");
-        report(result);
+        editor.Run(label, owner => load(owner, path), () =>
+        {
+            if ((!startsReplay && !live) || (startsReplay && !editor.IsReplaying)) { baselineChanged(); }
+            result = $"{label}: {Path.GetFileName(path)}. " + (startsReplay
+                ? editor.IsReplaying ? "Replay started; Esc cancels." : "Replay complete at the terminal boundary, paused."
+                : live ? "Applied live; particle state, clock and playback status retained."
+                : "Loaded paused; close this window to inspect.");
+            report(result);
+        });
+        suppressPlayback();
     }, help, () => selected is not null);
 
     private static void ValidateName(string value)
