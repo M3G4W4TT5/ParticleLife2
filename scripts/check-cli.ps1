@@ -309,7 +309,7 @@ Assert-That ($serialOverride.execution.savedWorkerCount -eq 4 -and $serialOverri
 Assert-That ((ConvertTo-CanonicalJson $parallel.finalState) -ceq (ConvertTo-CanonicalJson $serialOverride.finalState)) 'Worker scheduling changed receiver sums.'
 Assert-That ($parallel.diagnostics.algorithmVersion -eq 'spatial-components/1') 'CLI did not use reusable diagnostics.'
 Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--workers', '0') -ExpectedExit 1
-Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--workers', '9') -ExpectedExit 1
+Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--workers', '65') -ExpectedExit 1
 Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--backend', 'direct', '--workers', '4') -ExpectedExit 1
 
 # Finite velocity components can have an overflowing diagnostic Hypot while a small dt still integrates.

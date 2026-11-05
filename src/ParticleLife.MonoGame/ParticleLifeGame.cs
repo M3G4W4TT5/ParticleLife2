@@ -56,6 +56,12 @@ internal sealed class ParticleLifeGame : Game
     private float statsProgress = 1;
     private bool resizingInspector;
     private double messageUntil;
+    private CameraSettings displayedCamera;
+    private MouseState previousCanvasMouse;
+    private bool panning;
+    private bool brushing;
+    private Vector2d lastBrushPoint;
+    private double brushSampleElapsed;
 
     internal ParticleLifeGame(ExperimentEditor editor, ViewerOptions options, string message)
     {
@@ -63,11 +69,16 @@ internal sealed class ParticleLifeGame : Game
         this.message = message;
         messageUntil = TimestampSeconds + 5;
         this.editor = new EditorSession(editor, runInBackground: true);
+        displayedCamera = this.editor.Appearance.Camera;
         try
         {
             inspectorProgress = this.editor.Appearance.ShowEditor ? 1 : 0;
             controller = this.editor.Playback;
-            this.editor.Failed += failure => SetMessage($"Operation failed: {failure}. Last completed state retained.");
+            this.editor.Failed += failure =>
+            {
+                EndCanvasGesture();
+                SetMessage($"Operation failed: {failure}. Last completed state retained.");
+            };
             surface = new LiveExperimentEditor(this.editor, options.SaveDirectory, SetMessage, PrintTimings);
             legend = new HelpLegend(CloseLegend, SetMessage);
             graphics = new GraphicsDeviceManager(this)
@@ -116,6 +127,7 @@ internal sealed class ParticleLifeGame : Game
             $"startup override: {options.BackendOverride?.ToString() ?? "none"}; integrator: {ExperimentFile.IntegratorVersion}; model: {ExperimentFile.ModelVersion}.");
         Console.WriteLine($"FILES / S opens named save/load workflows under {options.SaveDirectory}. E toggles editor; F9 prints timings.");
         previousTimestamp = Stopwatch.GetTimestamp();
+        previousCanvasMouse = Mouse.GetState();
         wasActive = IsActive;
         base.LoadContent();
     }
@@ -151,6 +163,7 @@ internal sealed class ParticleLifeGame : Game
                 surface.LoseFocus();
                 legend.LoseFocus();
                 resizingInspector = false;
+                EndCanvasGesture();
                 controller.SetPaused(true);
                 heldKeys.Clear();
                 SetMessage("Focus lost - paused. Resume explicitly when ready.");
@@ -158,6 +171,7 @@ internal sealed class ParticleLifeGame : Game
             input.Clear();
             wasActive = false;
             previousMouseButton = mouse.LeftButton;
+            previousCanvasMouse = mouse;
             base.Update(gameTime);
             return;
         }
@@ -165,11 +179,13 @@ internal sealed class ParticleLifeGame : Game
         wasActive = true;
         if (UpdateSplash(skipPlayback ? 0 : elapsed, mouse))
         {
+            previousCanvasMouse = mouse;
             base.Update(gameTime);
             return;
         }
         inspectorProgress = AdvanceReveal(inspectorProgress, editor.Appearance.ShowEditor, elapsed);
         statsProgress = AdvanceReveal(statsProgress, statsExpanded, elapsed);
+        UpdateDisplayedCamera(elapsed);
         PollKeyboard();
         if (input.Any(entry => !entry.IsText && entry.Key == Keys.F9))
         {
@@ -192,7 +208,9 @@ internal sealed class ParticleLifeGame : Game
             else
             {
                 // Let the editor validate an outgoing draft before header actions may mutate state.
-                surface.Update(editorBounds, modalBounds, uiScale, mouse, input);
+                surface.Update(editorBounds, modalBounds, uiScale, mouse, input,
+                    heldKeys.Contains(Keys.LeftControl) || heldKeys.Contains(Keys.RightControl),
+                    heldKeys.Contains(Keys.LeftShift) || heldKeys.Contains(Keys.RightShift));
                 skipPlayback |= surface.SuppressPlayback;
                 if (editor.Appearance.ShowHelp)
                 {
@@ -242,6 +260,16 @@ internal sealed class ParticleLifeGame : Game
             controller.SetPaused(true);
             SetMessage($"Editor error: {exception.Message}. Current completed state retained; paused.");
             skipPlayback = true;
+        }
+        try
+        {
+            UpdateCanvasControls(mouse, elapsed, !headerClick && !surface.IsModal && !editor.Appearance.ShowHelp
+                && !surface.CapturesKeyboard && !resizingInspector);
+        }
+        catch (Exception exception) when (ViewerErrors.IsExpected(exception))
+        {
+            EndCanvasGesture();
+            SetMessage("Canvas edit rejected: " + exception.Message);
         }
         editorTotal += Stopwatch.GetElapsedTime(editorStarted).TotalMilliseconds;
         int currentEvents = editor.SessionEventCount;
@@ -327,6 +355,18 @@ internal sealed class ParticleLifeGame : Game
 
     private bool HandleShortcut(Keys key, bool control)
     {
+        if ((brushing || panning) && key == Keys.Escape)
+        {
+            EndCanvasGesture();
+            SetMessage("Canvas gesture stopped. Applied edits remain available to Undo.");
+            return true;
+        }
+        if ((brushing || panning) && (control && key is Keys.Z or Keys.Y
+            || key is Keys.R or Keys.I or Keys.M or Keys.D1 or Keys.D2 or Keys.D3 or Keys.S or Keys.O or Keys.F5
+                or Keys.E or Keys.D or Keys.V or Keys.H or Keys.F1))
+        {
+            EndCanvasGesture();
+        }
         if (control && key == Keys.Z)
         {
             editor.Undo();
@@ -339,7 +379,14 @@ internal sealed class ParticleLifeGame : Game
         }
         switch (key)
         {
-            case Keys.Escape: Exit(); return true;
+            case Keys.Escape:
+                if (brushing || panning)
+                {
+                    EndCanvasGesture();
+                    SetMessage("Canvas gesture stopped. Applied edits remain available to Undo.");
+                }
+                else { Exit(); }
+                return true;
             case Keys.Space:
                 controller.SetPaused(!controller.IsPaused);
                 SetMessage(controller.IsPaused ? "Pause queued. The current step will finish before playback pauses." : "Resume queued. Playback restarts without a wall-time backlog.");
@@ -366,6 +413,7 @@ internal sealed class ParticleLifeGame : Game
                 }
                 return true;
             case Keys.D: surface.ToggleDiagnostics(); return false;
+            case Keys.V when !control: surface.FitCamera(); return false;
             case Keys.H:
             case Keys.F1: ToggleLegend(); return false;
             case Keys.F9: return false;
@@ -483,8 +531,7 @@ internal sealed class ParticleLifeGame : Game
         legendBounds = Logical(new Rectangle((width - legendWidth) / 2, 60, legendWidth, Math.Max(120, legendHeight)));
         legend.Arrange(legendBounds);
         WorldTransform transform = CreateWorldTransform();
-        gridBounds = new Rectangle((int)transform.OffsetX, (int)transform.OffsetY,
-            Math.Max(1, (int)transform.Width), Math.Max(1, (int)transform.Height));
+        gridBounds = MappedWorldBounds(transform);
     }
 
     private Rectangle Logical(Rectangle screen) => new((int)(screen.X / uiScale), (int)(screen.Y / uiScale),
@@ -633,18 +680,17 @@ internal sealed class ParticleLifeGame : Game
         }
     }
 
-    private WorldTransform CreateWorldTransform() => new(editor.Publication.Configuration.Parameters.WorldWidth,
+    private WorldTransform CreateWorldTransform(CameraSettings? camera = null) => new(editor.Publication.Configuration.Parameters.WorldWidth,
         editor.Publication.Configuration.Parameters.WorldHeight, worldBounds.X, worldBounds.Y,
-        Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height));
+        Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height), camera ?? displayedCamera);
 
     private void DrawWorld()
     {
         using RenderFrameLease? state = editor.AcquireRenderFrame();
         if (state is null) { return; }
         WorldTransform transform = new(state.Configuration.Parameters.WorldWidth, state.Configuration.Parameters.WorldHeight,
-            worldBounds.X, worldBounds.Y, Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height));
-        Rectangle world = new((int)transform.OffsetX, (int)transform.OffsetY,
-            Math.Max(1, (int)transform.Width), Math.Max(1, (int)transform.Height));
+            worldBounds.X, worldBounds.Y, Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height), displayedCamera);
+        Rectangle world = MappedWorldBounds(transform);
         batch.Begin(samplerState: SamplerState.LinearClamp);
         // A quiet full-window field sits beneath the floating control layer.
         for (int x = worldBounds.X; x < GraphicsDevice.Viewport.Width; x += 48)
@@ -665,6 +711,140 @@ internal sealed class ParticleLifeGame : Game
         batch.End();
         GraphicsDevice.ScissorRectangle = Rectangle.Intersect(worldBounds, GraphicsDevice.Viewport.Bounds);
         particleRenderer!.Draw(state, transform, worldBounds, editor.Appearance);
+        DrawBrushPreview(transform);
+    }
+
+    private static Rectangle MappedWorldBounds(WorldTransform transform)
+    {
+        if (!double.IsFinite(transform.OffsetX) || !double.IsFinite(transform.OffsetY)
+            || Math.Abs(transform.OffsetX) > 1e8 || Math.Abs(transform.OffsetY) > 1e8
+            || transform.Width > 1e8 || transform.Height > 1e8) { return Rectangle.Empty; }
+        return new Rectangle((int)transform.OffsetX, (int)transform.OffsetY,
+            Math.Max(1, (int)transform.Width), Math.Max(1, (int)transform.Height));
+    }
+
+    /// <summary>Interpolates presentation targets independently of numerical and playback clocks.</summary>
+    private void UpdateDisplayedCamera(double elapsed)
+    {
+        CameraSettings target = editor.Appearance.Camera;
+        if (!target.Smooth) { displayedCamera = target; return; }
+        double fraction = 1 - Math.Exp(-Math.Min(elapsed, 0.1) * 12);
+        displayedCamera = target with
+        {
+            CenterX = displayedCamera.CenterX + (target.CenterX - displayedCamera.CenterX) * fraction,
+            CenterY = displayedCamera.CenterY + (target.CenterY - displayedCamera.CenterY) * fraction,
+            Zoom = Math.Exp(Math.Log(displayedCamera.Zoom) + (Math.Log(target.Zoom) - Math.Log(displayedCamera.Zoom)) * fraction)
+        };
+    }
+
+    /// <summary>Maps canvas gestures through the displayed camera; every particle mutation remains an owner command.</summary>
+    private void UpdateCanvasControls(MouseState mouse, double elapsed, bool available)
+    {
+        bool inside = worldBounds.Contains(mouse.Position);
+        bool panHeld = mouse.MiddleButton == ButtonState.Pressed || mouse.RightButton == ButtonState.Pressed;
+        bool panPressed = mouse.MiddleButton == ButtonState.Pressed && previousCanvasMouse.MiddleButton == ButtonState.Released
+            || mouse.RightButton == ButtonState.Pressed && previousCanvasMouse.RightButton == ButtonState.Released;
+        if (available && inside && panPressed)
+        {
+            if (brushing) { editor.EndBrushStroke(); brushing = false; }
+            panning = true;
+            editor.BeginGesture("Pan camera");
+        }
+        if (panning)
+        {
+            if (!panHeld || !available) { editor.EndGesture(); panning = false; }
+            else
+            {
+                WorldTransform transform = CreateWorldTransform(editor.Appearance.Camera);
+                CameraSettings camera = editor.Appearance.Camera with
+                {
+                    CenterX = editor.Appearance.Camera.CenterX - (mouse.X - previousCanvasMouse.X) / transform.Width,
+                    CenterY = editor.Appearance.Camera.CenterY - (mouse.Y - previousCanvasMouse.Y) / transform.Height
+                };
+                editor.SetAppearance(editor.Appearance with { Camera = camera });
+            }
+        }
+        int wheel = mouse.ScrollWheelValue - previousCanvasMouse.ScrollWheelValue;
+        if (available && inside && wheel != 0 && !brushing)
+        {
+            CameraSettings target = editor.Appearance.Camera;
+            CameraSettings camera = target.ZoomAt(CreateWorldTransform(target), new Vector2d(mouse.X, mouse.Y),
+                Math.Pow(1.12, wheel / 120.0), editor.Publication.Configuration.Parameters.WorldWidth,
+                editor.Publication.Configuration.Parameters.WorldHeight);
+            editor.BeginGesture("Zoom camera");
+            editor.SetAppearance(editor.Appearance with { Camera = camera });
+            editor.EndGesture();
+        }
+        bool pressed = mouse.LeftButton == ButtonState.Pressed && previousCanvasMouse.LeftButton == ButtonState.Released;
+        if (available && inside && pressed && !panning && surface.BrushEnabled)
+        {
+            BrushSettings settings = surface.Brush;
+            settings.Validate(editor.Publication.Configuration.Matrix.SpeciesCount);
+            Vector2d point = CreateWorldTransform().ToWorld(new Vector2d(mouse.X, mouse.Y));
+            editor.BeginBrushStroke(settings, point);
+            editor.ApplyBrushSample(point);
+            lastBrushPoint = point;
+            brushSampleElapsed = 0;
+            brushing = true;
+        }
+        else if (brushing)
+        {
+            if (mouse.LeftButton != ButtonState.Pressed || !available || !inside)
+            {
+                if (mouse.LeftButton == ButtonState.Released && available && inside && surface.Brush.Kind == BrushKind.Move)
+                {
+                    editor.ApplyBrushSample(CreateWorldTransform().ToWorld(new Vector2d(mouse.X, mouse.Y)));
+                }
+                editor.EndBrushStroke(); brushing = false;
+            }
+            else
+            {
+                brushSampleElapsed += elapsed;
+                Vector2d point = CreateWorldTransform().ToWorld(new Vector2d(mouse.X, mouse.Y));
+                double dx = (point.X - lastBrushPoint.X) / surface.Brush.Radius;
+                double dy = (point.Y - lastBrushPoint.Y) / surface.Brush.Radius;
+                bool moved = dx * dx + dy * dy >= 0.01;
+                if (moved || (surface.Brush.Kind != BrushKind.Move && brushSampleElapsed >= 0.1))
+                {
+                    editor.ApplyBrushSample(point);
+                    lastBrushPoint = point; brushSampleElapsed = 0;
+                }
+            }
+        }
+        if (!editor.Appearance.Camera.Smooth) { displayedCamera = editor.Appearance.Camera; }
+        previousCanvasMouse = mouse;
+    }
+
+    private void EndCanvasGesture()
+    {
+        if (brushing) { editor.EndBrushStroke(); brushing = false; }
+        if (panning) { editor.EndGesture(); panning = false; }
+    }
+
+    private void DrawBrushPreview(WorldTransform transform)
+    {
+        MouseState mouse = Mouse.GetState();
+        if (!surface.BrushEnabled || surface.IsModal || editor.Appearance.ShowHelp || !worldBounds.Contains(mouse.Position)) { return; }
+        double extent = transform.WorldLengthToPixels(surface.Brush.Radius);
+        if (!double.IsFinite(extent) || extent <= 0 || extent > 1e5) { return; }
+        Vector2 centre = new(mouse.X, mouse.Y);
+        Color tint = brushing ? UiCanvas.Accent : UiCanvas.Ink * 0.6f;
+        batch.Begin(samplerState: SamplerState.LinearClamp, rasterizerState: clipped);
+        if (surface.Brush.Shape == BrushShape.Square)
+        {
+            canvas.RoundedBorder(new Rectangle((int)(mouse.X - extent), (int)(mouse.Y - extent), Math.Max(1, (int)(extent * 2)), Math.Max(1, (int)(extent * 2))), tint, 0);
+        }
+        else
+        {
+            Vector2 previous = centre + new Vector2((float)extent, 0);
+            for (int i = 1; i <= 48; i++)
+            {
+                float angle = i * MathF.Tau / 48;
+                Vector2 next = centre + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (float)extent;
+                canvas.Line(previous, next, tint); previous = next;
+            }
+        }
+        batch.End();
     }
 
     /// <summary>Groups playback controls inside the grid, with more transparent material while idle.</summary>

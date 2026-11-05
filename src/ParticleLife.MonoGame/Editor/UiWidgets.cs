@@ -23,6 +23,7 @@ internal abstract class UiWidget(string help = "")
         return true;
     }
     internal virtual void Press(Point point) { }
+    internal virtual void Press(Point point, bool control, bool shift) => Press(point);
     internal virtual void Drag(Point point) { }
     internal virtual void Release() { }
     internal virtual void Key(Keys key, bool control, bool shift) { }

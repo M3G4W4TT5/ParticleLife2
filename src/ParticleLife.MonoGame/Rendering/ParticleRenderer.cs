@@ -42,12 +42,14 @@ internal sealed class ParticleRenderer : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         clip = Rectangle.Intersect(clip, device.Viewport.Bounds);
-        float radius = (float)Math.Min(appearance.ParticleRadius, Math.Max(clip.Width, clip.Height));
         if (frame.Count == 0 || clip.Width <= 0 || clip.Height <= 0)
         {
             LastMetrics = new(0, 0, 0, 0, frame.Count, 0, Description, unavailableReason);
             return;
         }
+        double requestedRadius = appearance.ParticleSizeMode == ParticleSizeMode.WorldRelative
+            ? transform.WorldLengthToPixels(appearance.WorldParticleRadius) : appearance.ParticleRadius;
+        float radius = (float)Math.Clamp(requestedRadius, 0.25, Math.Max(clip.Width, clip.Height));
 
         string? reason = unavailableReason;
         if (points is not null)

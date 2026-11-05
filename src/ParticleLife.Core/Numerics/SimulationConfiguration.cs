@@ -12,7 +12,7 @@ public sealed class SimulationConfiguration
     /// <param name="matrix">Immutable directed receiver-row/source-column coefficients.</param>
     /// <param name="timeStep">Positive finite integration increment in reduced time units.</param>
     /// <param name="backend">Direct reference or exact uniform-grid enumeration.</param>
-    /// <param name="workerCount">Workers including the caller, from one through eight; direct requires one.</param>
+    /// <param name="workerCount">Workers including the caller, from one through 64; direct requires one.</param>
     /// <exception cref="ArgumentException">A configuration object or numerical setting is invalid.</exception>
     public SimulationConfiguration(ModelParameters parameters, InteractionMatrix matrix, double timeStep,
         ForceBackend backend = ForceBackend.Direct, int workerCount = 1)
