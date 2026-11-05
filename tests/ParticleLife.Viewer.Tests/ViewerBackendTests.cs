@@ -38,7 +38,7 @@ public sealed class ViewerBackendTests : IDisposable
         Assert.Equal(ForceBackend.Direct, loaded.Configuration.Backend);
         Assert.Equal(1, loaded.Configuration.WorkerCount);
         Assert.Throws<ArgumentOutOfRangeException>(() => ViewerOptions.Parse(["--backend", "direct", "--workers", "4"]));
-        Assert.Throws<ArgumentOutOfRangeException>(() => ViewerOptions.Parse(["--workers", "9"]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ViewerOptions.Parse(["--workers", "65"]));
     }
 
     [Fact]

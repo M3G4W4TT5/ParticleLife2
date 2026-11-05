@@ -61,7 +61,7 @@ public static class PresetGenerator
     /// <param name="parameters">Optional model parameters; null selects the migration defaults.</param>
     /// <param name="timeStep">Positive finite step duration in reduced time units.</param>
     /// <param name="backend">Intended neighbour search; the API defaults to the direct reference.</param>
-    /// <param name="workerCount">Explicit grid workers, 1..8 including the caller; direct requires one.</param>
+    /// <param name="workerCount">Explicit grid workers, 1..64 including the caller; direct requires one.</param>
     /// <returns>A validated experiment containing actual initial state and matrix values.</returns>
     /// <remarks>New recipes use independent position and species streams: positions use <paramref name="seed"/>,
     /// while a balanced or ratio-weighted species array is shuffled with seed XOR 0x4A7291. Identities follow

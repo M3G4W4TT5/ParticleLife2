@@ -56,10 +56,15 @@ public static class ParticleGeneration
     /// <param name="random">Caller-owned seeded generator.</param><param name="position">Actual position for radial modes.</param>
     /// <param name="parameters">World geometry.</param><param name="settings">Validated velocity recipe.</param>
     /// <returns>Finite intended velocity in reduced length/time; validation rejects unrepresentable results at the edit boundary.</returns>
+    /// <remarks>Radial/tangential directions use physical offsets from the world centre with a common
+    /// normalization scale, so rectangular worlds do not stretch the direction. Normalizing before
+    /// subtraction also avoids overflow for very large finite off-world coordinates.</remarks>
     public static Vector2d Velocity(Random random, Vector2d position, ModelParameters parameters, GenerationSettings settings)
     {
         if (settings.Velocity == VelocityKind.Zero) { return default; }
-        double radial = Math.Atan2(position.Y / parameters.WorldHeight - 0.5, position.X / parameters.WorldWidth - 0.5);
+        double extent = Math.Max(Math.Max(parameters.WorldWidth, parameters.WorldHeight), Math.Max(Math.Abs(position.X), Math.Abs(position.Y)));
+        double radial = Math.Atan2(position.Y / extent - parameters.WorldHeight / extent * 0.5,
+            position.X / extent - parameters.WorldWidth / extent * 0.5);
         double direction = settings.Velocity switch
         {
             VelocityKind.UniformDirection => settings.DirectionRadians,

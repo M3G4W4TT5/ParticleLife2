@@ -8,6 +8,19 @@ namespace ParticleLife.Viewer.Tests;
 
 public sealed class ExplorationTests
 {
+    [Fact]
+    public void RadialVelocityUsesGeometricDirectionInARectangularWorld()
+    {
+        ModelParameters parameters = new() { WorldWidth = 4, WorldHeight = 2 };
+        GenerationSettings settings = new() { Velocity = VelocityKind.RadialOutward, Speed = 2 };
+        Vector2d radial = ParticleGeneration.Velocity(new Random(1), new(3, 1.5), parameters, settings);
+        Close(2 / Math.Sqrt(1.25), radial.X);
+        Close(1 / Math.Sqrt(1.25), radial.Y);
+        Vector2d tangent = ParticleGeneration.Velocity(new Random(1), new(3, 1.5), parameters,
+            settings with { Velocity = VelocityKind.Tangential });
+        Close(0, radial.X * tangent.X + radial.Y * tangent.Y);
+    }
+
     [Theory]
     [InlineData(0.02, -0.4, 1.7)]
     [InlineData(1, 0.5, 0.5)]

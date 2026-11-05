@@ -56,6 +56,14 @@ All cases below remain **Pending** until the consolidated review. Start with the
 - V07: apply each position layout, position-only and species-filtered velocity-only generation; partial rotate/flip and spatial species reassignment; independent matrix and palette recipes. Save/replay actual results and verify unchanged components.
 - V08–V09: while paused and playing, use move/add/paint/erase/attract/repel/directional tools with circle/square shapes, filters and changed intensity. Pan/zoom first. Hold a stroke through a busy step, stop with Escape/focus loss, undo once, redo and replay. Confirm unrelated identities retain motion, rejected samples do not enlarge undo, and queued pointer previews do not lose total move displacement. Release Move after a small sub-threshold pointer change and after a quick release-frame displacement; the particles must reach the final pointer position, while releasing other tools must not add an extra impulse/population sample. Record session-memory/file cost for a bounded long stroke; do not infer compact storage.
 
+### Concrete P2 render and ownership cases (pending)
+
+- Use the saved P1 50k fixed-density input with CPU grid, 24 workers and diagnostics disabled. While running, pan/resize and drag a force value, then pause and single-step. Record input response, graphics FPS, simulation steps/s and achieved speed separately. Confirm count never changes and an eventual pause completes after the in-flight step.
+- While paused, use F9 before and after a palette/radius/camera edit. A camera or radius change must not upload another full particle buffer; a palette change may upload only palette data. Resume and confirm each new displayed completed sequence uploads once.
+- With particles on all four canvas edges, resize and pan so circles overlap the edge with their centres outside. Circles must clip cleanly without disappearing early. Inspect both direct backbuffer and the scene target beneath translucent panels; orientation must match the input coordinates.
+- Increase display radius beyond the native point-size limit to exercise the bulk-quad fallback. Confirm readable UI and correct clipping after the fallback, then restore a small radius. Record the actual fallback reason and render path from F9.
+- Change population from 10k to 50k with Preserve density enabled. Confirm world area grows fivefold, cutoff remains unchanged and undo restores the prior membership/world as one operation. Save and reload the applied values. A zero-population density-preservation request must explain why a scale cannot be computed.
+
 No consolidated review findings yet. Record case ID, observed issue, responsible fix, fix commit and focused recheck result here. Keep blocked/manual cases explicit; do not mark the review complete until required cases are resolved or the user has agreed to a stated exception.
 
 ### Necessary early P1 interoperability check
