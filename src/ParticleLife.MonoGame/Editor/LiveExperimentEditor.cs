@@ -34,7 +34,6 @@ internal sealed class LiveExperimentEditor
     private double height;
     private double wallWidth;
     private double rememberedDamping = 0.025;
-    private double rememberedWall = 1.44;
     private int rememberedCadence = 144;
     private string populationSummary = string.Empty;
     private PresetKind selectedRecipe = PresetKind.CoreHalo;
@@ -103,8 +102,19 @@ internal sealed class LiveExperimentEditor
         BuildGeneration();
         BuildSimulation();
         BuildAppearance();
-        world.Children.AddRange(population.Children.Take(4));
-        population.Children.RemoveRange(0, 4);
+        world.Children.AddRange(population.Children.Take(5));
+        population.Children.RemoveRange(0, 5);
+        world.Children.Insert(0, new UiDropdown("World boundary", ["Soft walls", "Open", "Reflecting", "Periodic"],
+            () => (int)Parameters.Boundary, index => ParametersChange(Parameters with { Boundary = (BoundaryKind)index }),
+            "Soft walls extend outside; Open has no wall force. Reflecting folds positions and reflects velocity. Periodic wraps and uses minimum-image forces, with every cutoff <= half the shorter extent."));
+        world.Children.Insert(1, new UiLabel(() => Parameters.Boundary switch
+        {
+            BoundaryKind.Periodic => $"Periodic live changes wrap actual positions; velocity and clock stay. Maximum cutoff {editor.Configuration.Matrix.MaximumCutoff(Parameters):G6} must be <= {Math.Min(Parameters.WorldWidth, Parameters.WorldHeight) / 2:G6}. Undo restores recorded pre-map values.",
+            BoundaryKind.Reflecting => "Reflecting live changes fold actual positions and reflect crossed normal velocities. Undo restores recorded pre-map motion; the clock stays.",
+            BoundaryKind.Open => "Open has no wall force. Resizing retains absolute positions, velocities and clock, including off-world particles.",
+            _ => "Soft walls extend the linear inward layer outside the rectangle. Resizing retains absolute positions, velocities and clock."
+        }, 90));
+        interactions.Children.Insert(interactions.Children.Count - 1, new DirectedRangeControls(editor, matrix, () => symmetry, report).Section);
         exploration.AddMatrixTools(interactions);
         exploration.AddPopulationTools(population, species => populationIndex = Math.Min(species, populationSpecies - 1), SelectColour);
         exploration.AddIndependentGeneration(generation);
@@ -224,8 +234,8 @@ internal sealed class LiveExperimentEditor
     private void BuildInteractions()
     {
         interactions.Children.Add(matrix);
-        interactions.Children.Add(new UiLabel(() => $"Selected {matrix.Receiver} <- {matrix.Source}   A={editor.Configuration.Matrix[matrix.Receiver, matrix.Source]:G17}", 25, UiCanvas.Accent));
-        interactions.Children.Add(Number("Coefficient A", () => editor.Configuration.Matrix[matrix.Receiver, matrix.Source],
+        interactions.Children.Add(new UiLabel(() => $"Selected {matrix.Receiver} <- {matrix.Source}   A={SelectedCoefficient():G17}", 25, UiCanvas.Accent));
+        interactions.Children.Add(Number("Coefficient A", SelectedCoefficient,
             value => editor.SetMatrixCoefficient(matrix.Receiver, matrix.Source, value, symmetry), 0, -1, 1,
             "A[receiver,source] is dimensionless, in [-1,1]. Positive outer values attract; negative repel. Core repulsion is independent of A."));
         interactions.Children.Add(new UiToggle("Link reverse direction", () => symmetry, value => symmetry = value,
@@ -255,11 +265,13 @@ internal sealed class LiveExperimentEditor
 
     private void BuildForces()
     {
-        forces.Children.Add(Number("Cutoff R [L]", () => Parameters.Cutoff, value => ParametersChange(Parameters with { Cutoff = value }),
+        forces.Children.Add(new UiLabel(() => editor.Configuration.Matrix.Ranges is null ? "Global radii active: core = beta * R for every pair."
+            : "Directed radii active. Global R/beta below stay as defaults; use directed controls under Interactions.", 48));
+        forces.Children.Add(Number("Global cutoff R [L]", () => Parameters.Cutoff, value => ParametersChange(Parameters with { Cutoff = value }),
             0.1, 0.005, 1, "Finite positive reduced length; R squared must be finite and positive. Slider is logarithmic; typed valid values are unrestricted.", log: true));
         forces.Children.Add(Number("Force F0 [F]", () => Parameters.ForceScale, value => ParametersChange(Parameters with { ForceScale = value }),
             1, 0, 10, "Finite nonnegative pair-force scale in reduced force units. Zero disables pair forces. Unit particle mass is assumed."));
-        forces.Children.Add(Number("Core beta [1]", () => Parameters.RepulsionFraction, value => ParametersChange(Parameters with { RepulsionFraction = value }),
+        forces.Children.Add(Number("Global core beta [1]", () => Parameters.RepulsionFraction, value => ParametersChange(Parameters with { RepulsionFraction = value }),
             0.3, 0.01, 0.99, "Dimensionless core fraction, strictly 0 < beta < 1. The core ends at distance beta*R."));
         forces.Children.Add(new UiToggle("Damping enabled", () => Parameters.DampingHalfLife is not null, value =>
         {
@@ -274,23 +286,15 @@ internal sealed class LiveExperimentEditor
             ParametersChange(Parameters with { DampingHalfLife = value });
             rememberedDamping = value;
         }, 0.025, 0.001, 10, "Finite positive reduced time. Entering a half-life enables damping. Velocity factor per step is 2^(-dt/halfLife).", log: true));
-        forces.Children.Add(new UiToggle("Soft walls", () => Parameters.WallStrength > 0, value =>
-        {
-            if (Parameters.WallStrength > 0)
-            {
-                rememberedWall = Parameters.WallStrength;
-            }
-            ParametersChange(Parameters with { WallStrength = value ? rememberedWall : 0 });
-        }, "Off sets wall strength to zero. No reflecting or periodic boundary is introduced; finite off-world particles remain valid."));
         forces.Children.Add(Number("Wall width [L]", () => Parameters.WallWidth, value => ParametersChange(Parameters with { WallWidth = value }),
             0.05, 0.001, 0.5, "Positive layer width, at most half the smaller world dimension. Coupled world-size/width changes can be applied together under World.", log: true));
         forces.Children.Add(Number("Wall strength [F]", () => Parameters.WallStrength, value => ParametersChange(Parameters with { WallStrength = value }),
-            1.44, 0, 10, "Finite nonnegative reduced force. The linear soft wall extends outside the nominal rectangle. Zero disables this force."));
+            1.44, 0, 10, "Saved nonnegative strength, active only for Soft walls. Open, Reflecting and Periodic ignore this force."));
     }
 
     private void BuildPopulation()
     {
-        population.Children.Add(new UiLabel(() => "World draft: apply together. Positions and velocities stay.", 32));
+        population.Children.Add(new UiLabel(() => "World draft: apply together. Periodic/reflecting worlds map motion; soft/open retain it. The clock stays.", 48));
         population.Children.Add(Number("World width [L]", () => width, value => { width = value; worldDraft = true; }, 1, 0.1, 10,
             "Draft finite positive width. Apply world validates width, height and wall layer together; particles are not rescaled.", log: true, gesture: false));
         population.Children.Add(Number("World height [L]", () => height, value => { height = value; worldDraft = true; }, 1, 0.1, 10,
@@ -310,7 +314,7 @@ internal sealed class LiveExperimentEditor
                     WorldHeight = requestedHeight,
                     WallWidth = requestedWallWidth
                 }, current.Matrix, current.TimeStep, current.Backend, current.WorkerCount), "Edit world");
-            }, "World rectangle changed; absolute positions, velocities and clock retained.", () =>
+            }, "World applied. Periodic/reflecting motion is mapped; soft/open motion retained. Clock unchanged.", () =>
             {
                 if (width == requestedWidth && height == requestedHeight && wallWidth == requestedWallWidth) { worldDraft = false; }
             });
@@ -326,7 +330,7 @@ internal sealed class LiveExperimentEditor
             500, 0, 1_000_000, "Exact total entry and a slider up to one million. Changing this draft distributes the target total evenly. No particle changes until Apply live.", integer: true, gesture: false));
         population.Children.Add(new UiToggle("Preserve density: resize world", () => preserveDensity,
             value => preserveDensity = value,
-            "Apply population also scales both world extents by sqrt(new/old count), retaining nominal count per area. Survivors keep absolute positions and motion; additions use the new world. Both totals must be nonzero. Wall layer clamps to half the shorter extent if needed; cutoff stays fixed."));
+            "Scales extents by sqrt(new/old count). Periodic/reflecting survivor motion maps into the new world, with actual pre-map undo. Soft/open retain absolute motion. Unsupported smaller periodic worlds reject atomically; cutoffs stay fixed."));
         population.Children.Add(Number("Species count", () => populationSpecies, value => Distribute(populations.Sum(), Integer(value)),
             7, 1, 32, "Changing this draft redistributes targets evenly. Apply live retains unaffected matrix entries; new entries are zero. Removed species remap modulo the new count.", integer: true, gesture: false));
         population.Children.Add(new UiLabel(() => populationSummary, 50, UiCanvas.Accent));
@@ -355,7 +359,7 @@ internal sealed class LiveExperimentEditor
             int[] requested = (int[])populations.Clone();
             bool requestedPreserveDensity = preserveDensity;
             ReportCommand("Apply population", owner => owner.ApplyPopulation(speciesCount, requested, requestedPreserveDensity),
-                requestedPreserveDensity ? "Population and world resized to preserve nominal density; surviving motion retained."
+                requestedPreserveDensity ? "Population/world resized to preserve nominal density; boundary mapping recorded for undo."
                     : "Population applied: surviving identities/state retained; actual additions recorded in the session.", () =>
                 {
                     if (populationSpecies == speciesCount && populations.AsSpan().SequenceEqual(requested)) { populationDraft = false; }
@@ -507,6 +511,12 @@ internal sealed class LiveExperimentEditor
     }
 
     private ModelParameters Parameters => editor.Configuration.Parameters;
+
+    private double SelectedCoefficient()
+    {
+        InteractionMatrix current = editor.Configuration.Matrix;
+        return current[Math.Min(matrix.Receiver, current.SpeciesCount - 1), Math.Min(matrix.Source, current.SpeciesCount - 1)];
+    }
 
     private int RecipeTotal()
     {

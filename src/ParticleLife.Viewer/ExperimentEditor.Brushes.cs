@@ -1,4 +1,5 @@
 using ParticleLife.Core.State;
+using ParticleLife.Core.Models;
 
 namespace ParticleLife.Viewer;
 
@@ -26,7 +27,7 @@ public sealed partial class ExperimentEditor
             for (int i = 0; i < initial.Count; i++)
             {
                 if ((settings.SpeciesFilter < 0 || initial.Species[i] == settings.SpeciesFilter)
-                    && settings.Contains(initial.Positions[i], point)) { grabbed.Add(initial.Ids[i]); }
+                    && settings.Contains(initial.Positions[i], point, Configuration.Parameters)) { grabbed.Add(initial.Ids[i]); }
             }
         }
         brushStroke = new BrushStroke(settings, point, initial, CaptureValues(), grabbed);
@@ -51,11 +52,11 @@ public sealed partial class ExperimentEditor
         List<int> species = new(ids.Capacity);
         List<(long Identity, Vector2d Position, Vector2d Velocity)> firstTouches = [];
         List<long> addedIdentities = [];
-        Vector2d movement = new(point.X - stroke.PreviousPoint.X, point.Y - stroke.PreviousPoint.Y);
+        Vector2d movement = WorldBoundary.Displacement(stroke.PreviousPoint, point, Configuration.Parameters);
         for (int i = 0; i < before.Count; i++)
         {
             bool hit = settings.Kind == BrushKind.Move ? stroke.Grabbed.Contains(before.Ids[i])
-                : (settings.SpeciesFilter < 0 || before.Species[i] == settings.SpeciesFilter) && settings.Contains(before.Positions[i], point);
+                : (settings.SpeciesFilter < 0 || before.Species[i] == settings.SpeciesFilter) && settings.Contains(before.Positions[i], point, Configuration.Parameters);
             Vector2d position = before.Positions[i], velocity = before.Velocities[i];
             int assignment = before.Species[i];
             if (hit && settings.Kind != BrushKind.Add)
@@ -70,7 +71,8 @@ public sealed partial class ExperimentEditor
                 else
                 {
                     double direction = settings.DirectionRadians;
-                    double dx = point.X - position.X, dy = point.Y - position.Y;
+                    Vector2d displacement = WorldBoundary.Displacement(position, point, Configuration.Parameters);
+                    double dx = displacement.X, dy = displacement.Y;
                     if (settings.Kind != BrushKind.DirectionalForce)
                     {
                         if (dx == 0 && dy == 0) { ids.Add(before.Ids[i]); positions.Add(position); velocities.Add(velocity); species.Add(assignment); continue; }
@@ -79,6 +81,7 @@ public sealed partial class ExperimentEditor
                     double impulse = settings.Intensity * Configuration.TimeStep;
                     velocity = new(velocity.X + impulse * Math.Cos(direction), velocity.Y + impulse * Math.Sin(direction));
                 }
+                WorldBoundary.Map(ref position, ref velocity, Configuration.Parameters);
                 if (position != before.Positions[i] || velocity != before.Velocities[i] || assignment != before.Species[i])
                 {
                     firstTouches.Add((before.Ids[i], before.Positions[i], before.Velocities[i]));
@@ -97,9 +100,11 @@ public sealed partial class ExperimentEditor
             }
             else { x = (2 * random.NextDouble() - 1) * settings.Radius; y = (2 * random.NextDouble() - 1) * settings.Radius; }
             Vector2d position = new(point.X + x, point.Y + y);
+            Vector2d velocity = ParticleGeneration.Velocity(random, position, Configuration.Parameters, Generation);
+            WorldBoundary.Map(ref position, ref velocity, Configuration.Parameters);
             long identity = nextIdentity + i;
             ids.Add(identity); positions.Add(position);
-            velocities.Add(ParticleGeneration.Velocity(random, position, Configuration.Parameters, Generation));
+            velocities.Add(velocity);
             species.Add(settings.Species);
             addedIdentities.Add(identity);
         }

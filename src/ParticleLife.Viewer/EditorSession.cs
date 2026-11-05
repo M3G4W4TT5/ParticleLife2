@@ -214,8 +214,8 @@ public sealed class EditorSession : IDisposable
     /// <param name="cutoff">Outer radius.</param><param name="linkReverse">Also changes reverse pairs.</param>
     public void SetSelectedPairRanges(ReadOnlySpan<int> cells, double core, double cutoff, bool linkReverse = false)
     {
-        int[] selection = cells.ToArray();
-        Run("Set selected pair radii", editor => editor.SetSelectedPairRanges(selection, core, cutoff, linkReverse));
+        MatrixCell[] selection = CaptureInteractionCells(cells);
+        Run("Set selected pair radii", editor => editor.SetSelectedPairRanges(ResolveInteractionCells(selection, editor.Configuration.Matrix), core, cutoff, linkReverse));
     }
     /// <summary>Queues actual selected rule/radius generation with its independent component choice.</summary>
     /// <param name="cells">Flattened directed cell indices.</param><param name="components">Quantities to generate.</param>
@@ -225,9 +225,32 @@ public sealed class EditorSession : IDisposable
     public void RandomizeInteractionSelection(ReadOnlySpan<int> cells, InteractionRandomization components, int seed,
         double minimumCutoff, double maximumCutoff, double maximumCoreFraction = 0.6, bool linkReverse = false)
     {
-        int[] selection = cells.ToArray();
-        Run("Randomize interactions", editor => editor.RandomizeInteractionSelection(selection, components, seed,
+        MatrixCell[] selection = CaptureInteractionCells(cells);
+        Run("Randomize interactions", editor => editor.RandomizeInteractionSelection(ResolveInteractionCells(selection, editor.Configuration.Matrix), components, seed,
             minimumCutoff, maximumCutoff, maximumCoreFraction, linkReverse));
+    }
+
+    private MatrixCell[] CaptureInteractionCells(ReadOnlySpan<int> cells)
+    {
+        int dimension = Configuration.Matrix.SpeciesCount;
+        MatrixCell[] result = new MatrixCell[cells.Length];
+        for (int i = 0; i < cells.Length; i++)
+        {
+            if ((uint)cells[i] >= (uint)(dimension * dimension)) { throw new ArgumentOutOfRangeException(nameof(cells)); }
+            result[i] = new(cells[i] / dimension, cells[i] % dimension);
+        }
+        return result;
+    }
+
+    private static int[] ResolveInteractionCells(MatrixCell[] cells, InteractionMatrix matrix)
+    {
+        int[] result = new int[cells.Length];
+        for (int i = 0; i < result.Length; i++)
+        {
+            _ = matrix[cells[i].Receiver, cells[i].Source];
+            result[i] = cells[i].Receiver * matrix.SpeciesCount + cells[i].Source;
+        }
+        return result;
     }
     /// <summary>Queues an explicit matrix template barrier.</summary>
     /// <param name="kind">Template kind.</param><param name="seed">Recorded generation seed.</param>
