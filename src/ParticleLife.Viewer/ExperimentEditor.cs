@@ -135,23 +135,8 @@ public sealed partial class ExperimentEditor
             throw new ArgumentException("Use Apply population to change species and matrix dimensions together.", nameof(configuration));
         }
 
-        ModelParameters previous = Configuration.Parameters;
-        ModelParameters next = configuration.Parameters;
-        bool mapWorld = next.Boundary is BoundaryKind.Periodic or BoundaryKind.Reflecting
-            && (previous.Boundary != next.Boundary || previous.WorldWidth != next.WorldWidth || previous.WorldHeight != next.WorldHeight);
-        ParticleSnapshot? before = mapWorld ? Snapshot() : null;
-        ParticleSnapshot? mapped = null;
-        if (before is not null)
-        {
-            Vector2d[] positions = before.Positions.ToArray();
-            Vector2d[] velocities = before.Velocities.ToArray();
-            for (int index = 0; index < before.Count; index++)
-            {
-                WorldBoundary.Map(ref positions[index], ref velocities[index], next);
-            }
-            mapped = new(before.Ids, positions, velocities, before.Species, before.Time, before.Step);
-        }
-        Apply(CaptureValues() with { Configuration = configuration }, mapped, mapWorld, label, before);
+        (ParticleSnapshot? before, ParticleSnapshot? mapped) = MapLiveWorld(configuration);
+        Apply(CaptureValues() with { Configuration = configuration }, mapped, mapped is not null, label, before);
     }
 
     /// <summary>Changes one directed coefficient, optionally linking its reverse as an explicit edit choice.</summary>
@@ -454,14 +439,7 @@ public sealed partial class ExperimentEditor
     /// <summary>Captures exact initial conditions and all applied edits through the current terminal boundary.</summary>
     /// <param name="name">Human-readable label applied to the saved initial experiment, retaining exact state and provenance.</param>
     /// <returns>Pure headless session independent of presentation and wall-clock timing.</returns>
-    public SessionDefinition CaptureSession(string name)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ExperimentDefinition baseline = Playback.Experiment;
-        ExperimentDefinition named = new(name, baseline.Parameters, baseline.Matrix, baseline.InitialState, baseline.TimeStep,
-            baseline.Generator, baseline.Backend, baseline.WorkerCount, baseline.Provenance);
-        return new SessionDefinition(named, events, Playback.Boundary.Step);
-    }
+    public SessionDefinition CaptureSession(string name) => FreezeActionSession(name).Build();
 
     /// <summary>Applies a reusable preset live or explicitly generates a new population and baseline.</summary>
     /// <param name="preset">Validated reusable settings.</param>
@@ -488,8 +466,26 @@ public sealed partial class ExperimentEditor
             throw new ArgumentException("Live preset application requires the same species count. Use New population from preset explicitly.");
         }
 
+        (ParticleSnapshot? before, ParticleSnapshot? mapped) = MapLiveWorld(preset.Configuration);
         Apply(new EditorValues(preset.Configuration, preset.Generation, preset.Appearance, preset.Playback,
-            preset.Populations.ToArray()), null, false, "Apply preset live", separateAction: true);
+            preset.Populations.ToArray()), mapped, mapped is not null, "Apply preset live", before, separateAction: true);
+    }
+
+    /// <summary>Prepares the same explicit world remapping for scalar controls and complete live presets.</summary>
+    /// <remarks>Only entering/resizing a bounded world needs particle state. The returned owned
+    /// before/after payloads let one atomic action record the actual mapping and its motion undo.</remarks>
+    private (ParticleSnapshot? Before, ParticleSnapshot? Mapped) MapLiveWorld(SimulationConfiguration configuration)
+    {
+        ModelParameters previous = Configuration.Parameters;
+        ModelParameters next = configuration.Parameters;
+        if (next.Boundary is not (BoundaryKind.Periodic or BoundaryKind.Reflecting)
+            || previous.Boundary == next.Boundary && previous.WorldWidth == next.WorldWidth && previous.WorldHeight == next.WorldHeight)
+        { return (null, null); }
+        ParticleSnapshot before = Snapshot();
+        Vector2d[] positions = before.Positions.ToArray();
+        Vector2d[] velocities = before.Velocities.ToArray();
+        for (int index = 0; index < before.Count; index++) { WorldBoundary.Map(ref positions[index], ref velocities[index], next); }
+        return (before, new(before.Ids, positions, velocities, before.Species, before.Time, before.Step));
     }
 
     private void Apply(EditorValues values, ParticleSnapshot? state, bool restoreMotion, string label,

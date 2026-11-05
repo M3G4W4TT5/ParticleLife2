@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using ParticleLife.Core.Experiments;
+using ParticleLife.Core.Execution;
 
 namespace ParticleLife.Viewer;
 
@@ -14,6 +15,7 @@ public sealed partial class ExperimentEditor
     public PreparedDiscoverySave PrepareDiscoverySave(DiscoveryKind kind, string name, string description = "", string[]? tags = null)
     {
         EnsureNotReplaying();
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
         if (kind == DiscoveryKind.Preset)
         {
             PresetDefinition preset = CapturePreset(name);
@@ -23,40 +25,54 @@ public sealed partial class ExperimentEditor
         ExperimentDefinition experiment;
         Func<string> scientific;
         ViewerSettings settings;
+        DiscoveryMetadata? capturedPreview = null;
         if (kind == DiscoveryKind.Pattern)
         {
             experiment = CaptureCurrentExperiment(name);
             scientific = () => ExperimentFile.Serialize(experiment);
             settings = CaptureViewerSettings(populations);
         }
-        else if (kind is DiscoveryKind.Initial or DiscoveryKind.Session)
+        else if (kind is DiscoveryKind.Initial or DiscoveryKind.Session or DiscoveryKind.CapturedSession)
         {
-            ExperimentDefinition initial = Playback.Experiment;
-            experiment = new(name, initial.Parameters, initial.Matrix, initial.InitialState, initial.TimeStep,
-                initial.Generator, initial.Backend, initial.WorkerCount, initial.Provenance);
-            if (kind == DiscoveryKind.Session)
+            experiment = Playback.Experiment;
+            if (kind != DiscoveryKind.Initial && (kind == DiscoveryKind.CapturedSession || HasCapturedExecution))
             {
-                SessionDefinition session = CaptureSession(name);
-                scientific = () => SessionFile.Serialize(session);
+                FrozenCapturedSession captured = FreezeCapturedSession(name);
+                scientific = () => ExecutionCaptureFile.Serialize(captured.Build());
+                capturedPreview = DiscoveryLibrary.PreviewCapturedBoundary(name, captured.TerminalState, captured.Configuration,
+                    captured.Execution, Appearance, description, tags);
+                settings = CaptureViewerSettings(populations);
+            }
+            else if (kind == DiscoveryKind.Session)
+            {
+                FrozenActionSession session = FreezeActionSession(name);
+                scientific = () => SessionFile.Serialize(session.Build());
                 settings = CaptureViewerSettings(populations);
             }
             else
             {
-                scientific = () => ExperimentFile.Serialize(experiment);
-                int[] counts = new int[experiment.Matrix.SpeciesCount];
-                foreach (int species in experiment.InitialState.Species) { counts[species]++; }
-                settings = CaptureViewerSettings(counts);
+                scientific = () => ExperimentFile.Serialize(new ExperimentDefinition(name, experiment.Parameters, experiment.Matrix,
+                    experiment.InitialState, experiment.TimeStep, experiment.Generator, experiment.Backend, experiment.WorkerCount, experiment.Provenance));
+                settings = CaptureViewerSettings(populations);
             }
         }
         else { throw new ArgumentOutOfRangeException(nameof(kind)); }
-        DiscoveryMetadata metadata = DiscoveryLibrary.PreviewExperiment(experiment, Appearance, kind, description, tags);
+        DiscoveryMetadata metadata = capturedPreview ?? DiscoveryLibrary.PreviewExperiment(experiment, Appearance, kind, description, tags) with { Name = name };
         // Only immutable settings/experiment/session values enter the worker closure.
         return new PreparedDiscoverySave(() =>
         {
             string content = scientific() + "\n";
             string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+            int[] savedPopulations = settings.Populations;
+            if (kind == DiscoveryKind.Initial)
+            {
+                // Initial-state recipes describe the immutable reset population, not a later live recipe.
+                // Count it on this worker along with full experiment validation and serialization.
+                savedPopulations = new int[experiment.Matrix.SpeciesCount];
+                foreach (int species in experiment.InitialState.Species) { savedPopulations[species]++; }
+            }
             string companion = JsonSerializer.Serialize(new ViewerSettingsData("particle-life-viewer-settings", 1, hash,
-                settings.Populations, GenerationData.From(settings.Generation), AppearanceData.From(settings.Appearance),
+                savedPopulations, GenerationData.From(settings.Generation), AppearanceData.From(settings.Appearance),
                 PlaybackData.From(settings.Playback)), EditorJson.Options) + "\n";
             return (content, companion);
         }, metadata);
@@ -67,6 +83,24 @@ public sealed partial class ExperimentEditor
     /// <returns>Immutable prepared data for owner-only application.</returns>
     public static PreparedDiscoveryLoad PrepareDiscoveryLoad(string path, DiscoveryLoadAction action)
     {
+        if (action is DiscoveryLoadAction.RestoreCapturedState or DiscoveryLoadAction.ResimulateCapturedOnCpu)
+        {
+            string content = File.ReadAllText(path);
+            CapturedSessionDefinition captured = ExecutionCaptureFile.Deserialize(content);
+            ViewerSettings? settings = LoadViewerSettings(path, content, captured.TerminalCapture.Configuration.Matrix.SpeciesCount);
+            if (action == DiscoveryLoadAction.RestoreCapturedState)
+            {
+                PreparedCapturedRestore prepared = PrepareCapturedRestore(captured);
+                ExperimentDefinition initial = captured.Actions.InitialExperiment;
+                return new PreparedDiscoveryLoad(owner =>
+                {
+                    owner.ApplyCapturedRestore(prepared);
+                    owner.PublishLoadedSettings(initial, settings, null);
+                }, notice: "Restored stored terminal values, clock and history on CPU. Future CPU motion may differ; GPU continuation is a separate explicit transfer.");
+            }
+            return PrepareActionReplay(captured.Actions, settings,
+                "CPU action re-simulation selected. This does not restore the stored terminal pattern; its resulting trajectory may differ from the recorded execution.");
+        }
         if (action == DiscoveryLoadAction.LoadState)
         {
             (ExperimentDefinition experiment, ViewerSettings? settings) = PrepareExperiment(path, null, null, null);
@@ -82,13 +116,7 @@ public sealed partial class ExperimentEditor
             SessionDefinition session = SessionFile.Deserialize(content);
             int species = session.Events.Count == 0 ? session.InitialExperiment.Matrix.SpeciesCount : session.Events[^1].Configuration.Matrix.SpeciesCount;
             ViewerSettings? settings = LoadViewerSettings(path, content, species);
-            return new PreparedDiscoveryLoad(owner =>
-            {
-                owner.EnsureNotReplaying();
-                SessionReplayRunner replay = new(session);
-                owner.EndGesture(); owner.EndBrushStroke(); owner.pendingReplay = replay; owner.pendingReplaySettings = settings;
-                owner.Playback.SetPaused(true); owner.Revision++;
-            });
+            return PrepareActionReplay(session, settings, null);
         }
         if (action is not (DiscoveryLoadAction.PresetLive or DiscoveryLoadAction.PresetNew or DiscoveryLoadAction.ReviewPreset))
         { throw new ArgumentOutOfRangeException(nameof(action)); }
@@ -102,5 +130,30 @@ public sealed partial class ExperimentEditor
             owner.Generation = preset.Generation; owner.Appearance = preset.Appearance;
             owner.ApplyPlayback(preset.Playback); owner.Playback.SetPaused(true); owner.ClearTimeline();
         }, preset);
+    }
+
+    private static PreparedDiscoveryLoad PrepareActionReplay(SessionDefinition session, ViewerSettings? settings, string? notice) => new(owner =>
+    {
+        owner.EnsureNotReplaying();
+        SessionReplayRunner replay = new(session);
+        owner.EndGesture(); owner.EndBrushStroke(); owner.pendingReplay = replay; owner.pendingReplaySettings = settings;
+        owner.Playback.SetPaused(true); owner.Revision++;
+    }, notice: notice);
+
+    /// <summary>Freezes event references and the clock without membership validation or checkpoint work on the owner.</summary>
+    private FrozenActionSession FreezeActionSession(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return new(name, Playback.Experiment, events.ToArray(), Playback.Boundary.Step);
+    }
+
+    private sealed record FrozenActionSession(string Name, ExperimentDefinition Initial, SessionEvent[] Events, long TerminalStep)
+    {
+        internal SessionDefinition Build()
+        {
+            ExperimentDefinition named = new(Name, Initial.Parameters, Initial.Matrix, Initial.InitialState, Initial.TimeStep,
+                Initial.Generator, Initial.Backend, Initial.WorkerCount, Initial.Provenance);
+            return new(named, Events, TerminalStep);
+        }
     }
 }

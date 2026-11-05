@@ -1,4 +1,6 @@
 using System.Text.Json;
+using ParticleLife.Core.Execution;
+using ParticleLife.Core.Experiments;
 using ParticleLife.Core.State;
 
 namespace ParticleLife.Viewer;
@@ -13,7 +15,9 @@ public enum DiscoveryKind
     /// <summary>The exact original reset experiment.</summary>
     Initial,
     /// <summary>A recorded timeline; the library preview explicitly shows its initial state.</summary>
-    Session
+    Session,
+    /// <summary>An authoritative terminal capture plus action history; restore and CPU re-simulation are separate actions.</summary>
+    CapturedSession
 }
 
 /// <summary>One sampled thumbnail point in normalized nominal-world coordinates.</summary>
@@ -57,8 +61,10 @@ public static class DiscoveryLibrary
     {
         ArgumentNullException.ThrowIfNull(editor);
         if (kind == DiscoveryKind.Preset) { return PreviewPreset(editor.CapturePreset(name), description, tags); }
+        if (kind == DiscoveryKind.CapturedSession || kind == DiscoveryKind.Session && editor.HasCapturedExecution)
+        { return PreviewCaptured(editor.CaptureRecordedSession(name), editor.Appearance, description, tags); }
         var source = kind == DiscoveryKind.Pattern ? editor.CaptureCurrentExperiment(name) : editor.Playback.Experiment;
-        var named = new ParticleLife.Core.Experiments.ExperimentDefinition(name, source.Parameters, source.Matrix, source.InitialState,
+        var named = new ExperimentDefinition(name, source.Parameters, source.Matrix, source.InitialState,
             source.TimeStep, source.Generator, source.Backend, source.WorkerCount, source.Provenance);
         return PreviewExperiment(named, editor.Appearance, kind, description, tags);
     }
@@ -81,21 +87,39 @@ public static class DiscoveryLibrary
         return Preview(preset.Name, description, tags, DiscoveryKind.Preset, population, width, height, points, "Generated recipe sample; not an evolved pattern");
     }
 
-    internal static DiscoveryMetadata PreviewExperiment(ParticleLife.Core.Experiments.ExperimentDefinition experiment, AppearanceSettings appearance,
+    internal static DiscoveryMetadata PreviewExperiment(ExperimentDefinition experiment, AppearanceSettings appearance,
         DiscoveryKind kind, string description, string[]? tags)
     {
         ParticleStateView state = experiment.InitialState.Observe();
-        int samples = Math.Min(state.Count, MaximumPreviewPoints);
         double width = experiment.Parameters.WorldWidth, height = experiment.Parameters.WorldHeight;
+        string label = kind == DiscoveryKind.Session ? "Session INITIAL state; terminal pattern may differ"
+            : kind == DiscoveryKind.Initial ? "Original reset baseline" : $"Captured completed state, step {experiment.Provenance?.SourceStep ?? state.Step}";
+        return PreviewValues(experiment.Name, state, width, height, appearance, kind, description, tags, label);
+    }
+
+    internal static DiscoveryMetadata PreviewCaptured(CapturedSessionDefinition captured, AppearanceSettings appearance, string description, string[]? tags)
+    {
+        SimulationCapture terminal = captured.TerminalCapture;
+        return PreviewCapturedBoundary(captured.Actions.InitialExperiment.Name, terminal.State, terminal.Configuration, terminal.Execution, appearance, description, tags);
+    }
+
+    internal static DiscoveryMetadata PreviewCapturedBoundary(string name, ParticleSnapshot terminal, ParticleLife.Core.Numerics.SimulationConfiguration configuration,
+        ExecutionProvenance execution, AppearanceSettings appearance, string description, string[]? tags) =>
+        PreviewValues(name, terminal.Observe(), configuration.Parameters.WorldWidth, configuration.Parameters.WorldHeight,
+            appearance, DiscoveryKind.CapturedSession, description, tags, $"Stored TERMINAL capture, step {terminal.Step}; {execution.Hardware}/{execution.Precision}");
+
+    /// <summary>Samples only the supplied owned source boundary; no simulation or graphics owner is retained.</summary>
+    private static DiscoveryMetadata PreviewValues(string name, ParticleStateView state, double width, double height, AppearanceSettings appearance,
+        DiscoveryKind kind, string description, string[]? tags, string label)
+    {
+        int samples = Math.Min(state.Count, MaximumPreviewPoints);
         DiscoveryPoint[] points = new DiscoveryPoint[samples];
         for (int i = 0; i < samples; i++)
         {
             int source = (int)((long)i * state.Count / samples);
             points[i] = Point(state.Positions[source], width, height, appearance.ColorForSpecies(state.Species[source]));
         }
-        string label = kind == DiscoveryKind.Session ? "Session INITIAL state; terminal pattern may differ"
-            : kind == DiscoveryKind.Initial ? "Original reset baseline" : $"Captured completed state, step {experiment.Provenance?.SourceStep ?? state.Step}";
-        return Preview(experiment.Name, description, tags, kind, state.Count, width, height, points, label);
+        return Preview(name, description, tags, kind, state.Count, width, height, points, label);
     }
 
     private static DiscoveryMetadata Preview(string name, string description, string[]? tags, DiscoveryKind kind, int population,
@@ -163,6 +187,11 @@ public static class DiscoveryLibrary
                 DiscoveryMetadata metadata = JsonSerializer.Deserialize<DiscoveryMetadata>(File.ReadAllText(sidecar), EditorJson.Options)
                     ?? throw new JsonException("Library metadata must be an object.");
                 Validate(metadata);
+                if (metadata.Kind == DiscoveryKind.Session && HasCapturedHeader(path))
+                {
+                    metadata = metadata with { Kind = DiscoveryKind.CapturedSession, Points = [], Population = 0,
+                        PreviewLabel = "No preview indexed for stored TERMINAL capture" };
+                }
                 if (metadata.FileBytes != file.Length || metadata.FileModifiedUtcTicks != file.LastWriteTimeUtc.Ticks)
                 {
                     metadata = metadata with { Points = [], Population = 0, PreviewLabel = "Preview stale: scientific file changed" };
@@ -192,6 +221,7 @@ public static class DiscoveryLibrary
                     string? value = reader.GetString();
                     if (property == "documentKind" && value == "particle-life-preset") { kind = DiscoveryKind.Preset; }
                     if (property == "format" && value == "particle-life-session") { kind = DiscoveryKind.Session; }
+                    if (property == "format" && value == ExecutionCaptureFile.Format) { kind = DiscoveryKind.CapturedSession; }
                     if (property == "modelVersion" && value?.StartsWith("particle-life/", StringComparison.Ordinal) == true)
                     {
                         kind = path.EndsWith(".initial.json", StringComparison.OrdinalIgnoreCase) ? DiscoveryKind.Initial : DiscoveryKind.Pattern;
@@ -256,4 +286,21 @@ public static class DiscoveryLibrary
 
     private static DiscoveryPoint Point(Vector2d position, double width, double height, uint color) => new(
         (float)Math.Clamp(position.X / width, 0, 1), (float)Math.Clamp(position.Y / height, 0, 1), color);
+
+    private static bool HasCapturedHeader(string path)
+    {
+        using FileStream stream = File.OpenRead(path);
+        byte[] prefix = new byte[(int)Math.Min(stream.Length, 16 * 1024)]; stream.ReadExactly(prefix);
+        Utf8JsonReader reader = new(prefix, isFinalBlock: false, state: default);
+        try
+        {
+            while (reader.Read())
+            {
+                if (reader.CurrentDepth == 1 && reader.TokenType == JsonTokenType.PropertyName && reader.ValueTextEquals("format"))
+                { return reader.Read() && reader.TokenType == JsonTokenType.String && reader.ValueTextEquals(ExecutionCaptureFile.Format); }
+            }
+        }
+        catch (JsonException) { }
+        return false;
+    }
 }
