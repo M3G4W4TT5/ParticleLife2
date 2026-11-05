@@ -269,7 +269,9 @@ internal sealed class LiveExperimentEditor
                 SimulationConfiguration current = owner.Configuration;
                 owner.ApplyConfiguration(new SimulationConfiguration(current.Parameters with
                 {
-                    WorldWidth = requestedWidth, WorldHeight = requestedHeight, WallWidth = requestedWallWidth
+                    WorldWidth = requestedWidth,
+                    WorldHeight = requestedHeight,
+                    WallWidth = requestedWallWidth
                 }, current.Matrix, current.TimeStep, current.Backend, current.WorkerCount), "Edit world");
             }, "World rectangle changed; absolute positions, velocities and clock retained.", () =>
             {
