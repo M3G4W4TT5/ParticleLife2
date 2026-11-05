@@ -2,7 +2,7 @@
 
 Particle Life 2 is a creative sandbox for making and exploring emergent particle behaviour. The priorities are interesting patterns, many more particles, responsive controls and an enjoyable way to discover, save and revisit results. Reproducibility supports that experience; scientific validation is not the product's purpose.
 
-Direction updated **5 November 2026**. M1–M4, M4.1 and the live experiment editor provide the implemented CPU foundation. The active roadmap below adds improved CPU execution, selectable GPU simulation, richer 2D interactions and exploration tools, followed by a deliberately deferred 3D phase. P1–P8 are planned work, not implemented capabilities. The historical M5 release backlog is incorporated into P7.
+Direction updated **5 November 2026**. M1–M4, M4.1 and the live experiment editor provide the implemented CPU foundation. P1's saved workload tooling and bounded GPU/render interoperability prototype are implemented; P2–P7 are in progress and P8 remains deferred. The active roadmap below specifies the complete update, not a claim that its remaining features already exist. The historical M5 release backlog is incorporated into P7.
 
 ## Scope and priorities
 
@@ -35,6 +35,22 @@ Each phase ends with a usable result and focused verification. The order is driv
 | P6 Discovery library and visual tools | Easy saving, replay, sharing and observation | P3; integrates P4/P5 captures |
 | P7 Large-population tuning and 2D release | Measured capacity, polished workflows and distribution | P2–P6 |
 | P8 3D exploration, later | An optional 3D mode with CPU and GPU support | Usable expanded 2D release; deferred |
+
+### Implementation status and decisions
+
+| Phase | Current evidence and outstanding acceptance |
+| --- | --- |
+| P1 | Saved twenty geometry/population fixtures through 250k plus a 1M fixed-density stretch input; bounded CPU screens and timeout protection verified. Existing MonoGame context demonstrated compute/render buffer sharing, exact capture/restore and CPU-only startup. See [performance evidence](performance-p1.md) and [GPU boundary](gpu-integration.md). |
+| P2 | Background CPU ownership and completed publication under implementation; bulk renderer and measured CPU tuning pending. |
+| P3 | Pending exploration controls, independent generators and brushes. |
+| P4 | Independent boundary/range core work in progress; integration, editor and persistence acceptance pending. |
+| P5 | Production GPU simulation and checkpoint/backend workflows pending; P1 prototype is not the production backend. |
+| P6 | Discovery and visual tools pending. |
+| P7 | Integrated tuning, packaging, final verification and consolidated review pending. |
+
+The first GPU platform is Windows with the existing MonoGame DesktopGL context and optional OpenGL 4.3+ compute support; the demonstrated device is an RTX 5080 Laptop GPU with OpenGL 4.6. CPU-only headless operation remains independent. Production drawing must split common rendering capabilities from optional compute capabilities and retain a CPU renderer fallback. Native resources belong to the current graphics thread; shaders consume completed device storage with explicit barriers, and full readback occurs only for deliberate captures/transfers. This decision avoids a host migration while keeping device ownership explicit.
+
+P1 uses a 60 FPS presentation target, separately reported fixed-step achieved speed, and explicit deadlines for expensive scenes. Its two-warmup/five-sample CPU runs are feasibility screens, not steady-state optimization evidence. Full native input/layout acceptance remains deferred to the [consolidated review](visual-review-checklist.md); the early GPU check was necessary to establish interoperability. Its saved framebuffer and machine pixel checks passed; direct CUA window observation encountered an app-access timeout and remains recorded as pending.
 
 ### P1 Performance baseline and execution design
 
