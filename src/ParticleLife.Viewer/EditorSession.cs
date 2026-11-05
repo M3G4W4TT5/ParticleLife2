@@ -477,8 +477,10 @@ public sealed partial class EditorSession : IDisposable
             editor.Playback.DroppedPlaybackSeconds, editor.IsReplaying, editor.ReplayCompletedStep,
             editor.ReplayTerminalStep, 0, null, 0, 0)
         {
-            Recording = editor.Recording, BaselineVersion = editor.BaselineVersion,
-            Execution = editor.Playback.Execution, CaptureRecording = editor.CaptureRecording
+            Recording = editor.Recording,
+            BaselineVersion = editor.BaselineVersion,
+            Execution = editor.Playback.Execution,
+            CaptureRecording = editor.CaptureRecording
         };
     }
     /// <summary>Retains fields touched by any unapplied preview, including a drag returning to its starting value.</summary>

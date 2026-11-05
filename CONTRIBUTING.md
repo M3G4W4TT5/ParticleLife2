@@ -37,7 +37,7 @@ The `--help` command and MonoGame compatibility check do not create a graphics d
 
 The core and graphics-free viewer library generate XML documentation in their build output directories. The XML gate temporarily adds malformed/missing documentation probes to the core, checks that CS1591, CS1570 and CS1574 are errors, removes them in a `finally` block, and rebuilds the unmodified core. An API website remains optional release tooling in P7, separate from keeping code documentation useful.
 
-For timing commands and their measurement boundaries, use the [P2 CPU comparison](docs/performance-p2.md), [P1 saved workloads](docs/performance-p1.md), [live editor comparison](docs/performance-live-editor.md) and [M4.1 CPU comparison](docs/performance-m4-1.md); [M4](docs/performance-m4.md) and the [historical baseline](docs/performance-baseline.md) retain earlier provenance. Performance tests check zero allocations for warmed steps with moving particles, changing cell occupancy, successful fallbacks and settled reconfiguration. Parallel measurements include background workers. Setup, edits and growth are separate; diagnostics, serialization and snapshots remain outside the stepping contract. Dispose parallel simulations/controllers between completed steps to release their persistent workers.
+For current timing commands and measurement boundaries, use the [P7 CPU/GPU capacity report](docs/performance-p7.md) and [GPU integration evidence](docs/gpu-integration.md). The [P2 CPU comparison](docs/performance-p2.md), [P1 saved workloads](docs/performance-p1.md), [live editor comparison](docs/performance-live-editor.md), [M4.1](docs/performance-m4-1.md), [M4](docs/performance-m4.md) and [historical baseline](docs/performance-baseline.md) retain earlier provenance. Performance tests check zero allocations for warmed steps with moving particles, changing cell occupancy, successful fallbacks and settled reconfiguration. Parallel measurements include background workers. Setup, edits and growth are separate; diagnostics, serialization and snapshots remain outside the stepping contract. Dispose parallel simulations/controllers between completed steps to release their persistent workers.
 
 ### Interactive verification
 
@@ -62,6 +62,10 @@ For startup artwork changes, also check the executable and native window icons, 
 6. Check responsiveness with the default 500 particles and a representative larger grid workload. Use `F9` to record the latest approximately one-second FPS, controller/editor/draw timings, the step and dropped playback time, with the editor visible/hidden and idle/dragging. Controller timing includes scheduled diagnostics and catch-up; drawing excludes present. These are not pure solver timings. Record workload, runtime, machine and limitations with any performance claim. Run solver benchmarks separately with the viewer closed and no competing builds/tests.
 
 The catch-up limit bounds steps per frame, not the cost of one all-pairs step or diagnostic. A large population can still delay input. Test native startup and controls on the target platform; passing the display-free checks alone does not establish that result.
+
+### Windows private preview packaging
+
+Use `pwsh -NoProfile -File scripts/package-windows-preview.ps1 -SmokeTest` to create a fresh, self-contained Windows x64 viewer and CPU CLI package under ignored `artifacts/packages/`. Publishing runs from a copied source snapshot, with locked framework restore and checked package pins; it does not rewrite source lock files or replace an existing package. The [package guide](docs/portable-preview.md) defines contents, hashes, runtime provenance and clean-checkout commands. Its headless smokes are separate from extracted-package native acceptance in the [visual checklist](docs/visual-review-checklist.md). Keep packaging outside benchmark windows; no signing or release publication is implied.
 
 ## Readable numerical code
 

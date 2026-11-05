@@ -3,6 +3,36 @@ using ParticleLife.Benchmarks;
 
 try
 {
+    if (args.Length > 0 && args[0] == "prepare-p7")
+    {
+        if (args.Length is < 3 or > 5)
+        {
+            throw new ArgumentException("Use prepare-p7 p1-input-directory fresh-output-directory [screen|ladder|stretch|all|case-list] [global|heterogeneous|both].");
+        }
+        P7Inputs.Prepare(args[1], args[2], args.Length > 3 ? args[3] : "screen", args.Length > 4 ? args[4] : "both");
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "measure-p7-cpu")
+    {
+        if (args.Length is < 6 or > 8)
+        {
+            throw new ArgumentException("Use measure-p7-cpu input.json fresh-report.json workers evolution-steps samples [deadline-seconds=60] [fresh-premeasurement-snapshot.json].");
+        }
+        return P7Runner.Run(args[1], args[2], int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture),
+            int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture), int.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture),
+            args.Length > 6 ? int.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture) : 60, args.Length > 7 ? args[7] : null);
+    }
+
+    if (args.Length > 0 && args[0] == "_measure-p7-cpu")
+    {
+        if (args.Length != 9) { throw new ArgumentException("Internal P7 CPU child requires eight arguments."); }
+        P7Runner.MeasureCase(args[1], args[2], args[3], int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture),
+            int.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture), int.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture),
+            args[7], args[8].Length == 0 ? null : args[8]);
+        return 0;
+    }
+
     if (args.Length > 0 && args[0] == "prepare-p4-production")
     {
         if (args.Length != 3) { throw new ArgumentException("Use prepare-p4-production source-profile-input-directory fresh-output-directory."); }
@@ -178,6 +208,8 @@ try
     }
 
     Console.WriteLine("Particle Life CPU benchmarks (run Release without a debugger)");
+    Console.WriteLine("  prepare-p7 p1-input-directory fresh-output-directory [screen|ladder|stretch|all|case-list] [global|heterogeneous|both]");
+    Console.WriteLine("  measure-p7-cpu input.json fresh-report.json workers evolution-steps samples [deadline-seconds=60] [fresh-premeasurement-snapshot.json]");
     Console.WriteLine("  prepare-p2 fresh-output-directory saved-input.json");
     Console.WriteLine("  measure-p2 output.json input.json workers static|evolving samples");
     Console.WriteLine("  profile-p2 output.json input.json samples");

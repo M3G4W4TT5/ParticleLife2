@@ -84,7 +84,7 @@ internal sealed partial class ParticleLifeGame : Game
                 SetMessage($"Operation failed: {failure}. Last completed state retained.");
             };
             surface = new LiveExperimentEditor(this.editor, options.SaveDirectory, SetMessage, PrintTimings);
-            legend = new HelpLegend(CloseLegend, SetMessage);
+            legend = new HelpLegend(CloseLegend, SetMessage, () => this.message);
             graphics = new GraphicsDeviceManager(this)
             {
                 PreferredBackBufferWidth = 1360,
@@ -161,6 +161,7 @@ internal sealed partial class ParticleLifeGame : Game
 
     protected override void Update(GameTime gameTime)
     {
+        long inputUpdateStarted = Stopwatch.GetTimestamp();
         editor.Pump();
         UpdateVisualRequests();
         long now = Stopwatch.GetTimestamp();
@@ -169,6 +170,7 @@ internal sealed partial class ParticleLifeGame : Game
         MouseState mouse = Mouse.GetState();
         if (!IsActive)
         {
+            nativeTimings.ForgetPendingInput();
             if (wasActive)
             {
                 surface.LoseFocus();
@@ -198,6 +200,15 @@ internal sealed partial class ParticleLifeGame : Game
         statsProgress = AdvanceReveal(statsProgress, statsExpanded, elapsed);
         UpdateDisplayedCamera(elapsed);
         PollKeyboard();
+        if (input.Count != 0 || mouse.LeftButton != previousCanvasMouse.LeftButton
+            || mouse.ScrollWheelValue != previousCanvasMouse.ScrollWheelValue
+            || mouse.LeftButton == ButtonState.Pressed && mouse.Position != previousCanvasMouse.Position)
+        { nativeTimings.ObserveInput(inputUpdateStarted); }
+        if (input.Any(entry => !entry.IsText && entry.Key == Keys.F10))
+        {
+            nativeTimings.Reset();
+            SetMessage("Native timing window reset. Use the controls, then F9 to print frame, input and presentation measurements.");
+        }
         if (input.Any(entry => !entry.IsText && entry.Key == Keys.F9))
         {
             // Measurement logging changes no simulation/UI value and stays available during a drag.
@@ -386,6 +397,11 @@ internal sealed partial class ParticleLifeGame : Game
         if (control && key == Keys.Y)
         {
             editor.Redo();
+            return false;
+        }
+        if (control && UiAccessibility.TryAdjustScale(key, editor.Appearance.UiScale, out double requestedScale))
+        {
+            editor.SetAppearance(editor.Appearance with { UiScale = requestedScale });
             return false;
         }
         switch (key)
@@ -657,7 +673,9 @@ internal sealed partial class ParticleLifeGame : Game
             }
         }
         summaryFrames++;
-        renderTotal += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        double drawMilliseconds = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        renderTotal += drawMilliseconds;
+        nativeTimings.RecordDraw(drawMilliseconds);
         base.Draw(gameTime);
     }
 
@@ -1173,6 +1191,7 @@ internal sealed partial class ParticleLifeGame : Game
 
     private void PrintTimings()
     {
+        Console.WriteLine(nativeTimings.Describe());
         Console.WriteLine($"Viewer sample (~1 wall second): {framesPerSecond:F1} FPS; " +
         $"playback submission mean {meanController:F3} ms, max {peakController:F3} ms; " +
         $"{editor.Publication.Execution.Hardware} {editor.Publication.StepsPerSecond:F1} steps/s, achieved {editor.Publication.SimulationSpeed:F3} simulation seconds/wall second; " +

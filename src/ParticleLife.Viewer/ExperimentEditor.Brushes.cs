@@ -1,5 +1,5 @@
-using ParticleLife.Core.State;
 using ParticleLife.Core.Models;
+using ParticleLife.Core.State;
 
 namespace ParticleLife.Viewer;
 

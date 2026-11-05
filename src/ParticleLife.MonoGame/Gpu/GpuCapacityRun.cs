@@ -40,10 +40,24 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
         Evidence.Add(DescribeConversion(input.InitialState, converted, conversionMilliseconds));
         SimulationConfiguration configuration = new(input.Parameters, input.Matrix, input.TimeStep, input.Backend, input.WorkerCount);
         GpuModelData model = new(configuration);
-        Evidence.Add(new { Case = "actual-float-model", requestedConfiguration = ConfigurationFile.Encode(configuration),
-            model.Width, model.Height, model.Cutoff, model.CellWidth, model.CellHeight, model.CellsX, model.CellsY,
-            model.TimeStep, model.Damping, model.ForceScale, model.WallWidth, model.WallStrength,
-            rules = model.Rules.Select(rule => new { rule.Coefficient, rule.Core, rule.Cutoff }).ToArray() });
+        Evidence.Add(new
+        {
+            Case = "actual-float-model",
+            requestedConfiguration = ConfigurationFile.Encode(configuration),
+            model.Width,
+            model.Height,
+            model.Cutoff,
+            model.CellWidth,
+            model.CellHeight,
+            model.CellsX,
+            model.CellsY,
+            model.TimeStep,
+            model.Damping,
+            model.ForceScale,
+            model.WallWidth,
+            model.WallStrength,
+            rules = model.Rules.Select(rule => new { rule.Coefficient, rule.Core, rule.Cutoff }).ToArray()
+        });
 
         SetPhase("initial-upload-and-program-construction");
         began = Stopwatch.GetTimestamp();
@@ -51,10 +65,16 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
         activeSimulation = simulation;
         double constructorCpuMilliseconds = Stopwatch.GetElapsedTime(began).TotalMilliseconds;
         foreach (bool pending in Fence(simulation.Api)) { yield return pending; }
-        Evidence.Add(new { Case = "initial-upload", constructorCpuMilliseconds,
+        Evidence.Add(new
+        {
+            Case = "initial-upload",
+            constructorCpuMilliseconds,
             completionWallMilliseconds = Stopwatch.GetElapsedTime(began).TotalMilliseconds,
-            particlePayloadBytes = (long)converted.Count * 32, simulation.RetainedDeviceBufferBytes, simulation.Execution,
-            includes = "Native program compilation, workspace/rule allocation, float record packing, upload submission and initial fence completion; explicit CPU precision conversion was measured separately." });
+            particlePayloadBytes = (long)converted.Count * 32,
+            simulation.RetainedDeviceBufferBytes,
+            simulation.Execution,
+            includes = "Native program compilation, workspace/rule allocation, float record packing, upload submission and initial fence completion; explicit CPU precision conversion was measured separately."
+        });
 
         simulation.ConfigureMeasurements(enabled: true);
         if (profileFirstStep)
@@ -67,9 +87,16 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
             MeasuredSteps = 1;
             Require(simulation.Boundary.Step == converted.Step + 1 && simulation.FullStateReadbacks == 0,
                 "The diagnostic did not complete exactly one capture-free step.");
-            Evidence.Add(new { Case = "one-cold-step-diagnostic", measurement = LastCompletedMeasurement,
-                simulation.FullStateReadbacks, simulation.MetadataReadbackBytes, simulation.TimestampUnavailableReason,
-                performanceClaim = false, warmedCapacityClaim = false });
+            Evidence.Add(new
+            {
+                Case = "one-cold-step-diagnostic",
+                measurement = LastCompletedMeasurement,
+                simulation.FullStateReadbacks,
+                simulation.MetadataReadbackBytes,
+                simulation.TimestampUnavailableReason,
+                performanceClaim = false,
+                warmedCapacityClaim = false
+            });
             SetPhase("completed-cold-diagnostic");
             yield break;
         }
@@ -95,11 +122,17 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
         began = Stopwatch.GetTimestamp();
         simulation.Replace(configuration, converted);
         foreach (bool pending in Fence(simulation.Api)) { yield return pending; }
-        Evidence.Add(new { Case = "warmup-and-final-reset", WarmupSteps, minimumWarmupSteps = MinimumWarmupSteps,
-            minimumWarmupSeconds = MinimumWarmupSeconds, warmupSeconds,
+        Evidence.Add(new
+        {
+            Case = "warmup-and-final-reset",
+            WarmupSteps,
+            minimumWarmupSteps = MinimumWarmupSteps,
+            minimumWarmupSeconds = MinimumWarmupSeconds,
+            warmupSeconds,
             warmupWorkSecondsExcludingProgress = warmupWorkSeconds,
             finalResetUploadMilliseconds = Stopwatch.GetElapsedTime(began).TotalMilliseconds,
-            policy = "Identical-input warm steps use production Replace, including its fresh native buffers. One last completed upload precedes all seven measured continuing steps; no resets, captures or observations occur between samples." });
+            policy = "Identical-input warm steps use production Replace, including its fresh native buffers. One last completed upload precedes all seven measured continuing steps; no resets, captures or observations occur between samples."
+        });
         object warmedMemory = Memory();
         GpuStepMeasurement[] steps = new GpuStepMeasurement[Samples];
         long[] allocations = new long[Samples];
@@ -123,10 +156,18 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
             "Measured steps changed membership or failed to advance exactly seven boundaries.");
         Require(simulation.FullStateReadbacks == 0, "Ordinary measured steps read particle state.");
         double simulationTime = simulation.Boundary.Time - startTime;
-        Evidence.Add(new { Case = "continuing-simulation", raw = steps, processAllocatedBytesAcrossStepPolling = allocations,
+        Evidence.Add(new
+        {
+            Case = "continuing-simulation",
+            raw = steps,
+            processAllocatedBytesAcrossStepPolling = allocations,
             allocationScope = "Whole process across SubmitStep/PollStep and the unpaced host loop; includes any host/runtime allocations, not an isolated numerical allocation claim. Late query collection and report objects are outside these deltas.",
-            startStep, startTime, endStep = simulation.Boundary.Step, endTime = simulation.Boundary.Time,
-            completedSimulationTime = simulationTime, samplingSecondsIncludingQueryCollection = samplingSeconds,
+            startStep,
+            startTime,
+            endStep = simulation.Boundary.Step,
+            endTime = simulation.Boundary.Time,
+            completedSimulationTime = simulationTime,
+            samplingSecondsIncludingQueryCollection = samplingSeconds,
             unpacedCompletedStepsPerWallSecond = Samples / samplingSeconds,
             unpacedSimulationTimePerWallSecond = simulationTime / samplingSeconds,
             gridGpuMilliseconds = Summary(steps.Select(step => step.GridGpuMilliseconds).ToArray()),
@@ -134,8 +175,13 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
             cpuSubmissionMilliseconds = Summary(steps.Select(step => (double?)step.CpuSubmissionMilliseconds).ToArray()),
             cpuPollingMilliseconds = Summary(steps.Select(step => (double?)step.CpuPollingMilliseconds).ToArray()),
             wallCompletionMilliseconds = Summary(steps.Select(step => (double?)step.WallCompletionMilliseconds).ToArray()),
-            simulation.FullStateReadbacks, simulation.MetadataReadbackBytes, simulation.TimestampUnavailableReason,
-            baselineMemory, warmedMemory, afterStepsMemory = Memory() });
+            simulation.FullStateReadbacks,
+            simulation.MetadataReadbackBytes,
+            simulation.TimestampUnavailableReason,
+            baselineMemory,
+            warmedMemory,
+            afterStepsMemory = Memory()
+        });
         simulation.ConfigureMeasurements(enabled: false);
 
         SetPhase("rendering-fixed-viewport-and-radii");
@@ -163,9 +209,19 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
             && actual.Ids.SequenceEqual(converted.Ids) && actual.Species.SequenceEqual(converted.Species),
             "Explicit terminal capture changed identity, species, count or the completed clock.");
         Require(simulation.FullStateReadbacks == 1 && CaptureTransfer.IsExactFloat32(actual), "Capture is not one actual float32 readback.");
-        Evidence.Add(new { Case = "explicit-terminal-capture", captureSubmissionMilliseconds, capturePollingMilliseconds,
-            captureWallMilliseconds, particleReadbackBytes = (long)actual.Count * 32, actual.Step, actual.Time,
-            simulation.FullStateReadbacks, simulation.RetainedDeviceBufferBytes, memoryBeforeSerialization = Memory() });
+        Evidence.Add(new
+        {
+            Case = "explicit-terminal-capture",
+            captureSubmissionMilliseconds,
+            capturePollingMilliseconds,
+            captureWallMilliseconds,
+            particleReadbackBytes = (long)actual.Count * 32,
+            actual.Step,
+            actual.Time,
+            simulation.FullStateReadbacks,
+            simulation.RetainedDeviceBufferBytes,
+            memoryBeforeSerialization = Memory()
+        });
 
         SetPhase("serializing-actual-capture");
         WriteCapture(configuration, converted, actual, simulation.Execution);
@@ -225,12 +281,25 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
                 Require(raw[index].UploadedBytes == 0 && raw[index].InputCount == input.InitialState.Count
                     && raw[index].SubmittedParticles == input.InitialState.Count, "A retained draw uploaded particles or silently reduced submitted membership.");
             }
-            Evidence.Add(new { Case = "fixed-resident-render", viewportWidth = target.Width, viewportHeight = target.Height,
-                radiusPixels = radius, raw, gpuCommandMilliseconds = gpu, gpuSummary = Summary(gpu), completionWall,
-                queryCollectionWall, timestampUnavailableReason, renderer.RetainedDeviceBufferBytes,
+            Evidence.Add(new
+            {
+                Case = "fixed-resident-render",
+                viewportWidth = target.Width,
+                viewportHeight = target.Height,
+                radiusPixels = radius,
+                raw,
+                gpuCommandMilliseconds = gpu,
+                gpuSummary = Summary(gpu),
+                completionWall,
+                queryCollectionWall,
+                timestampUnavailableReason,
+                renderer.RetainedDeviceBufferBytes,
                 targetColorPayloadBytes = (long)target.Width * target.Height * 4,
-                inputCount = input.InitialState.Count, particleUploads = 0, simulation.FullStateReadbacks,
-                policy = "Same completed resident buffer, fitted isotropic camera, normal blending, opaque species colours, no trails/glow/heatmap. All instances submitted; native viewport clipping is presentation-only. Draw timestamps exclude prior clear, later unbind, readback and present; wall completion includes host polling." });
+                inputCount = input.InitialState.Count,
+                particleUploads = 0,
+                simulation.FullStateReadbacks,
+                policy = "Same completed resident buffer, fitted isotropic camera, normal blending, opaque species colours, no trails/glow/heatmap. All instances submitted; native viewport clipping is presentation-only. Draw timestamps exclude prior clear, later unbind, readback and present; wall completion includes host polling."
+            });
         }
     }
 
@@ -256,24 +325,52 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
             SpatialObservation? observation = simulation.LatestSpatialObservation;
             if (!accepted || simulation.SpatialObservationError is not null)
             {
-                Evidence.Add(new { Case = "optional-spatial-observation-unavailable", accepted,
-                    simulation.SpatialObservationError, submissionMilliseconds, pollingMilliseconds, wallMilliseconds });
+                Evidence.Add(new
+                {
+                    Case = "optional-spatial-observation-unavailable",
+                    accepted,
+                    simulation.SpatialObservationError,
+                    submissionMilliseconds,
+                    pollingMilliseconds,
+                    wallMilliseconds
+                });
                 yield break;
             }
             Require(observation is not null && observation.Count == input.InitialState.Count && observation.Step == simulation.Boundary.Step,
                 "The sampled observation lost membership or source clock.");
             Require(simulation.SpatialObservationReadbackBytes - before == 65_564, "The histogram readback is not the bounded expected payload.");
-            object sample = new { submissionMilliseconds, pollingMilliseconds, wallMilliseconds,
+            object sample = new
+            {
+                submissionMilliseconds,
+                pollingMilliseconds,
+                wallMilliseconds,
                 readbackBytes = simulation.SpatialObservationReadbackBytes - before,
-                sourceStep = observation!.Step, sourceTime = observation.Time, observation.Count, observation.Outside,
-                observation.MeanSpeed, observation.MaximumSpeed };
-            if (index < 0) { Evidence.Add(new { Case = "optional-spatial-observation-cold", sample,
-                policy = "First optional observation includes lazy shader construction and observation-buffer allocation." }); }
+                sourceStep = observation!.Step,
+                sourceTime = observation.Time,
+                observation.Count,
+                observation.Outside,
+                observation.MeanSpeed,
+                observation.MaximumSpeed
+            };
+            if (index < 0)
+            {
+                Evidence.Add(new
+                {
+                    Case = "optional-spatial-observation-cold",
+                    sample,
+                    policy = "First optional observation includes lazy shader construction and observation-buffer allocation."
+                });
+            }
             else { raw[index] = sample; }
         }
-        Evidence.Add(new { Case = "optional-spatial-observation-retained", raw,
-            simulation.RetainedDeviceBufferBytes, simulation.FullStateReadbacks,
-            cadencePolicy = "Seven explicitly requested standalone samples reuse initialized observation resources and the same final state. Excluded from simulation/render timings; application cadence is a separate presentation choice." });
+        Evidence.Add(new
+        {
+            Case = "optional-spatial-observation-retained",
+            raw,
+            simulation.RetainedDeviceBufferBytes,
+            simulation.FullStateReadbacks,
+            cadencePolicy = "Seven explicitly requested standalone samples reuse initialized observation resources and the same final state. Excluded from simulation/render timings; application cadence is a separate presentation choice."
+        });
     }
 
     private void WriteCapture(SimulationConfiguration configuration, ParticleSnapshot converted, ParticleSnapshot actual, ExecutionProvenance execution)
@@ -296,10 +393,18 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
         began = Stopwatch.GetTimestamp();
         using FileStream saved = File.OpenRead(path);
         string sha256 = Convert.ToHexString(SHA256.HashData(saved));
-        Evidence.Add(new { Case = "canonical-actual-capture-file", file = path, sha256, bytes = saved.Length,
-            serializationMilliseconds, writeMilliseconds, hashMilliseconds = Stopwatch.GetElapsedTime(began).TotalMilliseconds,
+        Evidence.Add(new
+        {
+            Case = "canonical-actual-capture-file",
+            file = path,
+            sha256,
+            bytes = saved.Length,
+            serializationMilliseconds,
+            writeMilliseconds,
+            hashMilliseconds = Stopwatch.GetElapsedTime(began).TotalMilliseconds,
             initialCpuInputSha256 = inputHash,
-            policy = "Canonical capture embeds the actual converted GPU initial values and actual terminal values/provenance. The unchanged authoritative CPU input remains in the separately hashed common-input file. Serialization/storage are outside every simulation, render, observation and device-capture timing." });
+            policy = "Canonical capture embeds the actual converted GPU initial values and actual terminal values/provenance. The unchanged authoritative CPU input remains in the separately hashed common-input file. Serialization/storage are outside every simulation, render, observation and device-capture timing."
+        });
     }
 
     private static IEnumerable<bool> Fence(GpuComputeApi api)
@@ -338,10 +443,21 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
             Compare(source.Velocities[index].X, converted.Velocities[index].X, ref maximumVelocityError);
             Compare(source.Velocities[index].Y, converted.Velocities[index].Y, ref maximumVelocityError);
         }
-        return new { Case = "explicit-precision-conversion", from = "binary64", to = "binary32",
-            changedComponents, maximumPositionError, maximumVelocityError, milliseconds,
+        return new
+        {
+            Case = "explicit-precision-conversion",
+            from = "binary64",
+            to = "binary32",
+            changedComponents,
+            maximumPositionError,
+            maximumVelocityError,
+            milliseconds,
             identitiesAndSpeciesRetained = source.Ids.SequenceEqual(converted.Ids) && source.Species.SequenceEqual(converted.Species),
-            converted.Count, converted.Step, converted.Time, hostClockPrecision = "binary64" };
+            converted.Count,
+            converted.Step,
+            converted.Time,
+            hostClockPrecision = "binary64"
+        };
         void Compare(double before, double after, ref double maximum)
         {
             if (BitConverter.DoubleToInt64Bits(before) != BitConverter.DoubleToInt64Bits(after)) { changedComponents++; }
@@ -352,9 +468,14 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
     private static object Summary(double?[] values)
     {
         double[] valid = values.Where(value => value.HasValue).Select(value => value!.Value).Order().ToArray();
-        return new { samples = values.Length, availableSamples = valid.Length, complete = valid.Length == values.Length,
+        return new
+        {
+            samples = values.Length,
+            availableSamples = valid.Length,
+            complete = valid.Length == values.Length,
             p50Milliseconds = valid.Length == values.Length ? (double?)valid[(int)Math.Ceiling(valid.Length * 0.5) - 1] : null,
-            p95Milliseconds = valid.Length == values.Length ? (double?)valid[^1] : null };
+            p95Milliseconds = valid.Length == values.Length ? (double?)valid[^1] : null
+        };
     }
 
     private static object Memory()
@@ -362,8 +483,13 @@ internal sealed class GpuCapacityRun(GraphicsDevice device, ExperimentDefinition
         long managedLiveBytes = GC.GetTotalMemory(forceFullCollection: true);
         using Process process = Process.GetCurrentProcess();
         process.Refresh();
-        return new { managedLiveBytes, processWorkingSetBytes = process.WorkingSet64,
-            processPrivateBytes = process.PrivateMemorySize64, processPeakWorkingSetBytes = process.PeakWorkingSet64 };
+        return new
+        {
+            managedLiveBytes,
+            processWorkingSetBytes = process.WorkingSet64,
+            processPrivateBytes = process.PrivateMemorySize64,
+            processPeakWorkingSetBytes = process.PeakWorkingSet64
+        };
     }
     private void SetPhase(string phase) { Phase = phase; progress(phase); }
     private static void Require(bool condition, string message)

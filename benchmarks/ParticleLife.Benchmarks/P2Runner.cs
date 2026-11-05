@@ -120,8 +120,15 @@ internal static class P2Runner
             long before = GC.GetTotalAllocatedBytes(true);
             long began = Stopwatch.GetTimestamp();
             operation();
-            milliseconds[index] = Stopwatch.GetElapsedTime(began).TotalMilliseconds;
-            allocations[index] = GC.GetTotalAllocatedBytes(true) - before;
+            double elapsedMilliseconds = Stopwatch.GetElapsedTime(began).TotalMilliseconds;
+            Record(index, elapsedMilliseconds, GC.GetTotalAllocatedBytes(true) - before);
+        }
+
+        /// <summary>Records an already measured boundary so callers can collect untimed allocation attribution.</summary>
+        internal void Record(int index, double elapsedMilliseconds, long allocatedBytes)
+        {
+            milliseconds[index] = elapsedMilliseconds;
+            allocations[index] = allocatedBytes;
         }
 
         internal object Summarize() => new

@@ -90,7 +90,9 @@ internal sealed class LiveExperimentEditor : IDisposable
         panel.Toolbar.Add(new UiRow(
             new UiButton(() => "Undo", () => editor.Undo(), "Undo at the current clock. Membership undo preserves surviving motion and restores removed particles from saved state; resampling undo restores captured positions/velocities.", () => editor.CanUndo),
             new UiButton(() => "Redo", () => editor.Redo(), "Reapply an undone editor operation at the current boundary. A new edit clears redo.", () => editor.CanRedo),
-            Button(() => "Files", OpenFiles, "Save named presets, exact states, initial experiments and sessions; browse local files and replay in-app.")));
+            Button(() => "Files", OpenFiles, "Save named presets, exact states, initial experiments and sessions; browse local files and replay in-app."),
+            Button(() => "Guide", () => editor.SetAppearance(editor.Appearance with { ShowHelp = true }),
+                "Start here: Reset, Resample, New, camera, brushes, files and keyboard controls. H or F1 opens the same guide.")));
 
         recipes = Section("Starting recipe", true);
         interactions = Section("Interactions");

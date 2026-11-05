@@ -1,8 +1,8 @@
 using System.Diagnostics;
+using ParticleLife.Core.Execution;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
-using ParticleLife.Core.Execution;
 
 namespace ParticleLife.Viewer;
 
@@ -412,8 +412,10 @@ public sealed class BackgroundExperiment : IDisposable
             editor.Playback.LatestDiagnostic, editor.Playback.DroppedPlaybackSeconds, editor.IsReplaying,
             editor.ReplayCompletedStep, editor.ReplayTerminalStep, applied, error, stepsPerSecond, simulationSpeed)
         {
-            Recording = editor.Recording, BaselineVersion = editor.BaselineVersion,
-            Execution = editor.Playback.Execution, CaptureRecording = editor.CaptureRecording
+            Recording = editor.Recording,
+            BaselineVersion = editor.BaselineVersion,
+            Execution = editor.Playback.Execution,
+            CaptureRecording = editor.CaptureRecording
         };
     }
 

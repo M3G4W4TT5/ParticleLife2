@@ -32,7 +32,7 @@ internal sealed record ViewerStartup(ExperimentEditor Editor, string Message)
         PresetInfo recipe = PresetCatalog.Get(options.Preset);
         string label = recipe.Name + (recipe.IsExperimental ? " (experimental)" : "");
         message = options.InputPath is null
-            ? $"{label} / {options.Particles} particles / seed {options.Seed}"
+            ? $"{label} / {options.Particles} particles / seed {options.Seed}. H / F1 opens the quickstart guide."
             : message + $" Fallback: {label}.";
         PlaybackController playback = new(options.CreateDefaultExperiment(), diagnosticEverySteps: options.SampleEvery);
         try

@@ -46,6 +46,19 @@ Give each case an exact setup and repeatable actions before execution. Use Pendi
 
 ## Findings and follow-up checks
 
+For V02/V14 native measurements, settle the selected CPU/GPU scene at the recorded window size, press F10, interact for at least ten seconds, then press F9. Retain the printed p50/p95/counts for frame intervals, drawing, Present CPU wait and observed-input update-to-present latency. Record idle and dragging windows separately. This input metric is an application proxy that excludes OS delivery/display scanout and later numerical command application; do not call it a measured physical input-to-photon latency or infer the 50 ms target from solver timings. Compare Economy and Luminous display settings without changing the saved population, rules or precision.
+
+### P7 guidance, accessibility and packaged preview (pending)
+
+These cases remain **Pending** until the consolidated native review, repeated on CPU and the available GPU backend after integration.
+
+- V01/V22: launch the extracted Windows preview using `Start-Viewer.cmd` from a writable path containing spaces. Inspect branding/icon/splash and early dismissal. Open Guide/H/F1; follow its first experiment without a console or source checkout. Confirm the default save folder is beside the launcher and a saved discovery reloads after closing.
+- V02/V03: at 1360 × 900, 700 × 950 and 420 × 340, use only Tab/Shift+Tab, Enter, Escape and Page Up/Down to reach every inspector page, open/close Help, read the guide and activate Files. Check visible focus and scroll-into-view. With canvas focus, Ctrl+plus/minus changes scale and Ctrl+0 restores 1x; focused numeric/text fields retain their own keys. Larger UI scale must still allow a route back to the scale control.
+- V03/V19: reject an invalid number and a malformed load, let the notification fade, then inspect Help > Latest feedback. Correct/cancel the draft and confirm valid state retained. Verify no simulation shortcut fires through keyboard focus, and losing window focus still pauses.
+- V16: select Economy, Balanced and Luminous manually. Confirm the announced effects/overlays change; individually edit glow or opacity and observe Custom. Palette, velocity-colour choice, camera, timestep, rules, workers, hardware, precision and population must remain unchanged. Undo the preset at the current clock.
+- V10/V11: load `examples/experiments/periodic-seam.json` and `directed-ranges.json` paused. Inspect seam interactions, both directed curves and reflecting edges; save/reload the intended state. These small examples do not establish capacity.
+- V20/V22: from the extracted package, run CPU CLI help and the periodic example with a new output filename; verify an existing output is protected. On a capture-enabled package, explicitly restore a captured session and separately request CPU action re-simulation, checking source/effective provenance. Native GPU availability and practical capacity remain separate evidence.
+
 ### P6 observation and capture cases (pending)
 
 Repeat these cases on CPU and GPU after integration, with a two-species asymmetric pattern and a practical large evolved fixture. They remain **Pending**.

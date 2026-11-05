@@ -9,6 +9,7 @@ namespace ParticleLife.MonoGame.Editor;
 internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape = false)
 {
     private readonly List<UiWidget> layout = [];
+    private readonly List<UiWidget> bodyLayout = [];
     private readonly List<UiWidget> focusOrder = [];
     private UiWidget? focused;
     private UiWidget? captured;
@@ -188,6 +189,14 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
             {
                 MoveFocus(shift ? -1 : 1);
             }
+            else if (key is Keys.PageUp or Keys.PageDown && focused?.EditingText != true && focused is not UiDropdown { IsOpen: true }
+                && (HasFocus || Bounds.Contains(point) || dismissOnEscape))
+            {
+                scroll = Math.Clamp(scroll + (key == Keys.PageDown ? 1 : -1) * Math.Max(28, Body.Height - 28),
+                    0, Math.Max(0, contentHeight - Body.Height));
+                ConsumedKeyboard = true;
+                Layout();
+            }
             else if (key == Keys.Escape && focused is UiDropdown { IsOpen: true } dropdown)
             {
                 dropdown.Close();
@@ -260,6 +269,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
     private void Layout()
     {
         layout.Clear();
+        bodyLayout.Clear();
         focusOrder.Clear();
         int y = Bounds.Y + 34;
         if (!Compact)
@@ -285,23 +295,12 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         {
             foreach (UiWidget widget in Toolbar)
             {
-                Place(widget, y);
-                y += widget.Height + 3;
+                y = PlaceBody(widget, y, 0);
             }
         }
         foreach (UiWidget widget in Content)
         {
-            Place(widget, y);
-            y += widget.Height + 3;
-            if (widget is UiSection { Expanded: true } section)
-            {
-                foreach (UiWidget child in section.Children)
-                {
-                    Place(child, y);
-                    y += child.Height + 3;
-                }
-                y += 4;
-            }
+            y = PlaceBody(widget, y, 0);
         }
         contentHeight = y + scroll - Body.Y;
         float clamped = Math.Clamp(scroll, 0, Math.Max(0, contentHeight - Body.Height));
@@ -325,10 +324,29 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         }
     }
 
-    private void Place(UiWidget widget, int y)
+    /// <summary>Flattens expanded sections once for drawing, pointer routing and keyboard traversal.</summary>
+    /// <remarks>Rows draw their own children; sections draw only their header. Collapsed descendants
+    /// enter neither list, so they cannot retain focus or pointer capture. The host clips body drawing.</remarks>
+    private int PlaceBody(UiWidget widget, int y, int depth)
+    {
+        Place(widget, y, Math.Max(0, depth - 1) * 10);
+        bodyLayout.Add(widget);
+        y += widget.Height + 3;
+        if (widget is UiSection { Expanded: true } section)
+        {
+            foreach (UiWidget child in section.Children)
+            {
+                y = PlaceBody(child, y, depth + 1);
+            }
+            y += 4;
+        }
+        return y;
+    }
+
+    private void Place(UiWidget widget, int y, int indent = 0)
     {
         widget.ReportValidationError = reportError;
-        widget.Bounds = new Rectangle(Bounds.X + 10, y, Math.Max(1, Bounds.Width - 24), 0);
+        widget.Bounds = new Rectangle(Bounds.X + 10 + indent, y, Math.Max(1, Bounds.Width - 24 - indent), 0);
         widget.Bounds = new Rectangle(widget.Bounds.X, widget.Bounds.Y, widget.Bounds.Width, widget.Height);
         if (widget is UiRow row)
         {
@@ -384,31 +402,11 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
 
     internal void DrawBody(UiCanvas canvas)
     {
-        if (Compact)
-        {
-            foreach (UiWidget widget in Toolbar)
-            {
-                if (widget.Bounds.Intersects(Body))
-                {
-                    widget.Draw(canvas);
-                }
-            }
-        }
-        foreach (UiWidget widget in Content)
+        foreach (UiWidget widget in bodyLayout)
         {
             if (widget.Bounds.Intersects(Body))
             {
                 widget.Draw(canvas);
-            }
-            if (widget is UiSection { Expanded: true } section)
-            {
-                foreach (UiWidget child in section.Children)
-                {
-                    if (child.Bounds.Intersects(Body))
-                    {
-                        child.Draw(canvas);
-                    }
-                }
             }
         }
     }

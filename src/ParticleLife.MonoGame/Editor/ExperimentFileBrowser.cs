@@ -182,28 +182,28 @@ internal sealed class ExperimentFileBrowser : IDisposable
 
     private void AppendLibraryWidgets(bool current, IReadOnlyList<DiscoveryEntry> entries)
     {
-            foreach (string folder in current ? scan.Folders : [])
+        foreach (string folder in current ? scan.Folders : [])
+        {
+            string path = folder;
+            Add(new UiButton(() => "Folder / " + Path.GetFileName(path), () => Navigate(path), enabled: () => !fileOperationActive));
+        }
+        foreach (DiscoveryEntry entry in entries)
+        {
+            DiscoveryEntry item = entry;
+            Add(new DiscoveryItemWidget(item, () => { if (!fileOperationActive) { Select(item); } }, () => selected == item.Path));
+        }
+        foreach (string file in current ? scan.Archives : [])
+        {
+            string path = file;
+            Add(new UiButton(() => "Compressed share / " + Path.GetFileName(path), () =>
             {
-                string path = folder;
-                Add(new UiButton(() => "Folder / " + Path.GetFileName(path), () => Navigate(path), enabled: () => !fileOperationActive));
-            }
-            foreach (DiscoveryEntry entry in entries)
-            {
-                DiscoveryEntry item = entry;
-                Add(new DiscoveryItemWidget(item, () => { if (!fileOperationActive) { Select(item); } }, () => selected == item.Path));
-            }
-            foreach (string file in current ? scan.Archives : [])
-            {
-                string path = file;
-                Add(new UiButton(() => "Compressed share / " + Path.GetFileName(path), () =>
-                {
-                    if (fileOperationActive) { return; }
-                    selected = path; selectedEntry = null; selectedPreset = null;
-                    result = "Selected compressed share. Import validates it into a new file; loading is separate.";
-                    Rebuild(); panel.ScrollToTop();
-                }, "Portable compressed artifact; never extracted to an archive-provided path."));
-            }
-            Add(new UiLabel(() => $"Up to {DiscoveryLibrary.MaximumEntries} matching items shown; refine search for a larger folder. Previews sample at most 256 particles.", 50));
+                if (fileOperationActive) { return; }
+                selected = path; selectedEntry = null; selectedPreset = null;
+                result = "Selected compressed share. Import validates it into a new file; loading is separate.";
+                Rebuild(); panel.ScrollToTop();
+            }, "Portable compressed artifact; never extracted to an archive-provided path."));
+        }
+        Add(new UiLabel(() => $"Up to {DiscoveryLibrary.MaximumEntries} matching items shown; refine search for a larger folder. Previews sample at most 256 particles.", 50));
         void Add(UiWidget widget) { libraryWidgets.Add(widget); panel.Content.Add(widget); }
     }
 

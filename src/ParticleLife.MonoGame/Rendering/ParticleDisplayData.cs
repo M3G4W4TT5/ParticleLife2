@@ -70,7 +70,9 @@ internal static class ParticleDisplayData
             }
             destination[index] = new ParticleDisplayVertex
             {
-                X = (float)x, Y = (float)y, Species = (uint)species[index],
+                X = (float)x,
+                Y = (float)y,
+                Species = (uint)species[index],
                 VelocityX = (float)velocity.X,
                 VelocityY = (float)velocity.Y
             };

@@ -15,6 +15,17 @@ namespace ParticleLife.MonoGame.Gpu;
 /// The owner must stop submissions before changing rules, replacing state or transferring ownership.</remarks>
 internal sealed unsafe partial class GlGpuSimulation : IResidentSimulation, IResidentSpatialObservation
 {
+    /// <summary>Targets this many estimated source-entry visits in one independently queued receiver batch.</summary>
+    /// <remarks>Nine times the maximum hash-bucket occupancy bounds one receiver's visited entries,
+    /// including hash collisions. Dividing this budget by that bound chooses a batch size, never a
+    /// neighbour limit. At least one receiver is processed, even if its own traversal exceeds the
+    /// estimate. This is not a GPU-duration guarantee; cancellation waits for the current batch fence.</remarks>
+    private const long CandidateVisitsPerSubmission = 536_870_912;
+
+    /// <summary>Caps receiver parallelism per submission while retaining all members in subsequent batches.</summary>
+    /// <remarks>Every batch reads the same completed input. No partially integrated output or clock
+    /// publishes; the entire candidate must finish and pass numerical-status validation first.</remarks>
+    private const int MaximumReceiversPerSubmission = 65_536;
     private readonly GpuComputeApi api;
     private readonly List<GpuProgram> programs = [];
     private readonly GpuProgram clear, count, scan, addScan, scatter, integrate, summarize, reduce;
@@ -140,10 +151,11 @@ internal sealed unsafe partial class GlGpuSimulation : IResidentSimulation, IRes
         {
             GpuStatus status = ReadStatus();
             RejectFailedCandidate(status);
-            // Aim for at most about half a million candidate visits per submission. There is no
-            // neighbour limit: a dense receiver still examines every member of each visited bucket.
+            // Larger independent receiver batches can fill more workgroups. A single fence still
+            // bounds queued integration work; cancellation retains the prior completed input buffer.
+            // Every receiver examines every visited entry, even when its own work exceeds the budget.
             long visits = Math.Max(1L, (long)status.MaximumOccupancy * 9);
-            receiverChunk = (int)Math.Clamp(524288L / visits, 1, 8192);
+            receiverChunk = (int)Math.Clamp(CandidateVisitsPerSubmission / visits, 1, MaximumReceiversPerSubmission);
             measurements?.RecordGrid(status.MaximumOccupancy, receiverChunk);
             stage = StepStage.Forces;
         }
