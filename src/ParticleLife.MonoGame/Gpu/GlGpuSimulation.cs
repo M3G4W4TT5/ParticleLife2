@@ -13,7 +13,7 @@ namespace ParticleLife.MonoGame.Gpu;
 /// The unordered atomic scatter can change summation order, so action re-simulation is not bitwise
 /// repeatable. Explicit captures own copied actual float values and retain the binary64 host clock.
 /// The owner must stop submissions before changing rules, replacing state or transferring ownership.</remarks>
-internal sealed unsafe class GlGpuSimulation : IResidentSimulation
+internal sealed unsafe partial class GlGpuSimulation : IResidentSimulation, IResidentSpatialObservation
 {
     private readonly GpuComputeApi api;
     private readonly List<GpuProgram> programs = [];
@@ -98,7 +98,10 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
         {
             throw new InvalidOperationException("The simulation clock cannot represent another completed step.");
         }
+        measurements?.Begin(Boundary.Step + 1, workspace.Count);
+        using GpuMeasurementInterval measurementInterval = measurements?.Interval(polling: false) ?? default;
         using GpuComputeScope scope = new(api);
+        int timingToken = measurements?.BeginGroup(GpuCommandStage.Grid) ?? -1;
         BindGrid();
         ClearCounts(resetStatus: true);
         count.Configure(model, workspace.Count, workspace.BucketCount);
@@ -110,6 +113,7 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
         Dispatch(workspace.Count);
         api.MemoryBarrier(GpuComputeApi.BufferUpdateBarrier);
         api.Gl.Check("submitting GPU grid construction");
+        measurements?.EndGroup(timingToken);
         stepFence = api.Fence();
         stage = StepStage.Grid;
         cancelStep = false;
@@ -119,6 +123,7 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
     public bool PollStep()
     {
         EnsureOwner();
+        using GpuMeasurementInterval measurementInterval = measurements?.Interval(polling: true) ?? default;
         if (!IsStepPending || !api.IsComplete(stepFence))
         {
             return false;
@@ -127,6 +132,7 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
         if (cancelStep)
         {
             stage = StepStage.Idle;
+            measurements?.Complete(wasPublished: false, RetainedDeviceBufferBytes);
             return false;
         }
         using GpuComputeScope scope = new(api);
@@ -138,6 +144,7 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
             // neighbour limit: a dense receiver still examines every member of each visited bucket.
             long visits = Math.Max(1L, (long)status.MaximumOccupancy * 9);
             receiverChunk = (int)Math.Clamp(524288L / visits, 1, 8192);
+            measurements?.RecordGrid(status.MaximumOccupancy, receiverChunk);
             stage = StepStage.Forces;
         }
         else if (nextReceiver >= workspace.Count)
@@ -149,8 +156,10 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
             currentCapture = null;
             sequence++;
             stage = StepStage.Idle;
+            measurements?.Complete(wasPublished: true, RetainedDeviceBufferBytes);
             return true;
         }
+        int timingToken = measurements?.BeginGroup(GpuCommandStage.Integration) ?? -1;
         BindGrid();
         integrate.Configure(model, workspace.Count, workspace.BucketCount);
         int receivers = Math.Min(receiverChunk, workspace.Count - nextReceiver);
@@ -158,6 +167,7 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
         Dispatch(receivers);
         api.MemoryBarrier(GpuComputeApi.StorageBarrier | GpuComputeApi.VertexBarrier | GpuComputeApi.BufferUpdateBarrier);
         api.Gl.Check("submitting GPU integration");
+        measurements?.EndGroup(timingToken);
         nextReceiver += receivers;
         stepFence = api.Fence();
         return false;
@@ -341,6 +351,7 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
 
     private void SetBoundary(ParticleSnapshot state)
     {
+        InvalidateSpatialObservation();
         Boundary = new(state.Count, state.Step, state.Time);
         speciesCounts = new int[Configuration.Matrix.SpeciesCount];
         foreach (int species in state.Species)
@@ -384,6 +395,7 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
             Bind(2, workspace.ScanSums[level]);
             api.Gl.Uniform1i(scan.Count, workspace.ScanCounts[level]);
             api.DispatchCompute((uint)GpuWorkspace.DivideUp(workspace.ScanCounts[level], 512), 1, 1);
+            measurements?.Dispatch();
             api.MemoryBarrier(GpuComputeApi.StorageBarrier);
         }
         for (int level = workspace.ScanCounts.Length - 2; level >= 0; level--)
@@ -399,6 +411,7 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
     private void Dispatch(int count)
     {
         api.DispatchCompute((uint)Math.Max(1, GpuWorkspace.DivideUp(count, 256)), 1, 1);
+        measurements?.Dispatch();
         api.MemoryBarrier(GpuComputeApi.StorageBarrier);
     }
 
@@ -422,6 +435,7 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
         if (status.Flags != 0)
         {
             stage = StepStage.Idle;
+            measurements?.Complete(wasPublished: false, RetainedDeviceBufferBytes);
             throw new InvalidOperationException($"GPU candidate rejected at logical slot {status.FailedSlot} (status {status.Flags}). "
                 + "The previous completed state is retained; change the model or capture it for CPU continuation.");
         }
@@ -464,6 +478,8 @@ internal sealed unsafe class GlGpuSimulation : IResidentSimulation
         DeleteFence(ref stepFence);
         DeleteFence(ref captureFence);
         DeleteFence(ref summaryFence);
+        spatialSampler?.Dispose();
+        measurements?.Dispose();
         workspace?.Dispose();
         if (rules != 0 && api.Gl.CanUseOwner)
         {

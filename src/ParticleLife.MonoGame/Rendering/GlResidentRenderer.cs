@@ -9,7 +9,7 @@ namespace ParticleLife.MonoGame.Rendering;
 
 /// <summary>Draws the completed resident state directly as instanced disc quads without reading or uploading particles.</summary>
 /// <remarks>The simulation owns the borrowed 32-byte records. This adapter owns only its VAO, program
-/// and palette. Instance attributes read position at byte zero and species at byte 24. Four generated
+/// and palette. Instance attributes read position at byte zero, velocity at byte eight and species at byte 24. Four generated
 /// corners avoid hardware point-size limits and centre-based point clipping. Double camera arithmetic
 /// preserves the supplied 2D affine transform even for very small float32 worlds or large camera offsets;
 /// it changes presentation only, never float32 simulation storage. All touched GL state is restored.</remarks>
@@ -21,9 +21,12 @@ internal sealed unsafe class GlResidentRenderer : IDisposable
     private readonly AttributeDivisorCall attributeDivisor;
     private readonly UniformDoubleVectorCall uniform4d;
     private uint vertexArray, program, paletteBuffer, paletteTexture;
-    private readonly int cameraUniform, cornerUniform, radiusUniform, paletteUniform, paletteCountUniform;
+    private readonly int cameraUniform, cornerUniform, radiusUniform, paletteUniform, paletteCountUniform, visualUniform;
     private uint[] palette = [], rgba = [];
     private bool disposed;
+
+    /// <summary>Gets the retained palette payload; borrowed simulation buffers are accounted by their owner.</summary>
+    internal long RetainedDeviceBufferBytes => (long)palette.Length * sizeof(uint);
 
     internal GlResidentRenderer(GraphicsDevice device)
     {
@@ -41,6 +44,7 @@ internal sealed unsafe class GlResidentRenderer : IDisposable
             radiusUniform = gl.GetUniformLocation(program, "radius");
             paletteUniform = gl.GetUniformLocation(program, "palette");
             paletteCountUniform = gl.GetUniformLocation(program, "paletteCount");
+            visualUniform = gl.GetUniformLocation(program, "visual");
             gl.GenVertexArrays(1, out vertexArray);
             gl.GenBuffers(1, out paletteBuffer);
             gl.GenTextures(1, out paletteTexture);
@@ -112,6 +116,9 @@ internal sealed unsafe class GlResidentRenderer : IDisposable
             gl.EnableVertexAttribArray(1);
             gl.VertexAttribIPointer(1, 1, 0x1405, sizeof(GpuParticle), 24);
             attributeDivisor(1, 1);
+            gl.EnableVertexAttribArray(2);
+            gl.VertexAttribPointer(2, 2, 0x1406, 0, sizeof(GpuParticle), 8);
+            attributeDivisor(2, 1);
             gl.UseProgram(program);
             Viewport viewport = device.Viewport;
             bool renderTarget = device.RenderTargetCount != 0;
@@ -124,13 +131,15 @@ internal sealed unsafe class GlResidentRenderer : IDisposable
             gl.Uniform1f(radiusUniform, radius);
             gl.Uniform1i(paletteUniform, 0);
             gl.Uniform1i(paletteCountUniform, palette.Length);
+            gl.Uniform4f(visualUniform, (float)appearance.Visuals.Opacity, (float)appearance.Visuals.Velocity,
+                (float)appearance.Visuals.SpeedScale, 0);
             gl.Scissor(clip.X, renderTarget ? clip.Y : device.PresentationParameters.BackBufferHeight - clip.Bottom, clip.Width, clip.Height);
             gl.Enable(OpenGlDrawApi.ScissorTest);
             gl.Disable(OpenGlDrawApi.DepthTest);
             gl.Disable(OpenGlDrawApi.CullFace);
             gl.Enable(OpenGlDrawApi.Blend);
             gl.BlendEquationSeparate(0x8006, 0x8006);
-            gl.BlendFuncSeparate(1, 0x0303, 1, 0x0303);
+            gl.BlendFuncSeparate(1, appearance.Visuals.Blend == ParticleBlend.Additive ? 1u : 0x0303u, 1, 0x0303);
             drawInstanced(0x0005, 0, 4, count);
             gl.Check("drawing completed resident particles");
         }
@@ -160,28 +169,41 @@ internal sealed unsafe class GlResidentRenderer : IDisposable
         #version 430
         layout(location=0) in vec2 position;
         layout(location=1) in uint species;
+        layout(location=2) in vec2 velocity;
         uniform dvec4 camera;
         uniform vec4 cornerScale;
         noperspective out vec2 corner;
         flat out uint particleSpecies;
+        flat out vec2 particleVelocity;
         void main() {
             corner=vec2((gl_VertexID&1)==0?-1.0:1.0,(gl_VertexID&2)==0?-1.0:1.0);
             dvec2 centre=dvec2(position)*camera.xy+camera.zw;
             gl_Position=vec4(vec2(centre)+corner*cornerScale.xy,0.0,1.0);
             particleSpecies=species;
+            particleVelocity=velocity;
         }
         """;
     private const string FragmentSource = """
         #version 430
         noperspective in vec2 corner;
         flat in uint particleSpecies;
+        flat in vec2 particleVelocity;
         uniform samplerBuffer palette;
         uniform int paletteCount;
         uniform float radius;
+        uniform vec4 visual;
         out vec4 colour;
         void main() {
             float coverage=clamp((1.0-length(corner))*radius+0.5,0.0,1.0);
             vec3 rgb=texelFetch(palette,int(particleSpecies%uint(paletteCount))).rgb;
+            float speed=min(1.0,length(min(vec2(1.0),abs(particleVelocity)/visual.z)));
+            if(visual.y>0.5 && visual.y<1.5) rgb*=0.2+0.8*speed;
+            if(visual.y>1.5) {
+                float angle=all(equal(particleVelocity,vec2(0.0)))?0.0:atan(particleVelocity.y,particleVelocity.x);
+                float hue=visual.y<2.5?(1.0-speed)*2.0/3.0:(angle+3.14159265359)/6.28318530718;
+                rgb=clamp(abs(fract(hue+vec3(0.0,2.0/3.0,1.0/3.0))*6.0-3.0)-1.0,0.0,1.0);
+            }
+            coverage*=visual.x;
             colour=vec4(rgb*coverage,coverage);
         }
         """;

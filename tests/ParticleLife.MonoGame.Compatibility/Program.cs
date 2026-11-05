@@ -7,6 +7,12 @@ using ParticleLife.Core.State;
 using ParticleLife.MonoGame.Editor;
 using ParticleLife.Viewer;
 
+if (args.Length == 1 && args[0] == "--gpu-measurement-checks")
+{
+    GpuMeasurementChecks.Run();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--save-worker")
 {
     Environment.ExitCode = StorageChecks.RunWorker(args);
@@ -18,6 +24,7 @@ Vector2d position = new(0.25, 0.75);
 Vector2 displayPosition = new((float)position.X, (float)position.Y);
 Console.WriteLine($"Core net10.0 / MonoGame {typeof(Game).Assembly.GetName().Version}: {displayPosition}");
 RenderingChecks.Run();
+GpuMeasurementChecks.Run();
 
 // Exercise the real native numeric widget against the actual editor without creating a Game,
 // SDL window, texture or graphics device. These checks complement native interaction checks.

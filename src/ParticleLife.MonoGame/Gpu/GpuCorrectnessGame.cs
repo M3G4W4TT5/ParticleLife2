@@ -21,6 +21,7 @@ namespace ParticleLife.MonoGame.Gpu;
 internal sealed class GpuCorrectnessGame : Game
 {
     private readonly string outputDirectory;
+    private readonly bool presentationOnly;
     private readonly Stopwatch timeout = Stopwatch.StartNew();
     private readonly List<object> evidence = [];
     private readonly GraphicsDeviceManager graphics;
@@ -31,9 +32,10 @@ internal sealed class GpuCorrectnessGame : Game
     private bool reported;
     internal int ExitCode { get; private set; } = 1;
 
-    internal GpuCorrectnessGame(string outputDirectory)
+    internal GpuCorrectnessGame(string outputDirectory, bool presentationOnly = false)
     {
         this.outputDirectory = Path.GetFullPath(outputDirectory);
+        this.presentationOnly = presentationOnly;
         if (Directory.Exists(this.outputDirectory) && Directory.EnumerateFileSystemEntries(this.outputDirectory).Any())
         {
             throw new IOException("GPU correctness evidence requires a fresh or empty output directory.");
@@ -55,8 +57,15 @@ internal sealed class GpuCorrectnessGame : Game
     {
         try
         {
-            renderer = new(GraphicsDevice);
-            checks = Verify().GetEnumerator();
+            if (presentationOnly)
+            {
+                checks = GpuPresentationChecks.Run(GraphicsDevice, outputDirectory, evidence.Add).GetEnumerator();
+            }
+            else
+            {
+                renderer = new(GraphicsDevice);
+                checks = Verify().GetEnumerator();
+            }
         }
         catch (Exception failure) { Fail(failure); }
     }
@@ -74,7 +83,7 @@ internal sealed class GpuCorrectnessGame : Game
                 {
                     ExitCode = 0;
                     WriteReport(null);
-                    Console.WriteLine("GPU_CORRECTNESS_PASS");
+                    Console.WriteLine(presentationOnly ? "GPU_PRESENTATION_PASS" : "GPU_CORRECTNESS_PASS");
                     Exit();
                     break;
                 }
@@ -414,6 +423,7 @@ internal sealed class GpuCorrectnessGame : Game
         string report = JsonSerializer.Serialize(new
         {
             Passed = failure is null,
+            Mode = presentationOnly ? "presentation" : "numerical",
             Runtime = Environment.Version.ToString(),
             OperatingSystem = Environment.OSVersion.ToString(),
             Execution = provenance,
@@ -422,7 +432,7 @@ internal sealed class GpuCorrectnessGame : Game
             Evidence = evidence,
             Failure = failure
         }, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(Path.Combine(outputDirectory, "gpu-correctness.json"), report);
+        File.WriteAllText(Path.Combine(outputDirectory, presentationOnly ? "gpu-presentation.json" : "gpu-correctness.json"), report);
     }
 
     protected override void Dispose(bool disposing)
