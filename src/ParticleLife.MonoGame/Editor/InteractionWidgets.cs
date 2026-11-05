@@ -6,9 +6,10 @@ using ParticleLife.Viewer;
 namespace ParticleLife.MonoGame.Editor;
 
 /// <summary>Draws a paged directed matrix without copying its immutable values during a frame.</summary>
-internal sealed class InteractionMatrixWidget(ExperimentEditor editor) : UiWidget(
+internal sealed class InteractionMatrixWidget(EditorSession editor) : UiWidget(
     "Rows receive; columns are sources. Select a cell, then edit its coefficient below. Arrow keys move selection. Page buttons expose larger matrices.")
 {
+    internal InteractionMatrixWidget(ExperimentEditor editor) : this(new EditorSession(editor)) { }
     private int firstReceiver;
     private int firstSource;
     private const int Cell = 28;
@@ -137,7 +138,7 @@ internal sealed class InteractionMatrixWidget(ExperimentEditor editor) : UiWidge
 /// <summary>Plots the production radial coefficient, optionally scaled to reduced force units.</summary>
 /// <remarks>The exact overlap point is zero; the open-point limit is shown separately instead of
 /// connecting it to the repulsive branch. The plot is a phenomenological pair law, never potential energy.</remarks>
-internal sealed class ForceGraph(ExperimentEditor editor, InteractionMatrixWidget selection)
+internal sealed class ForceGraph(EditorSession editor, InteractionMatrixWidget selection)
 {
     internal bool ShowCoefficient { get; set; }
     internal bool ShowReverse { get; set; } = true;
