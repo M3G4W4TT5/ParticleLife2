@@ -1,8 +1,8 @@
 using System.Diagnostics;
+using ParticleLife.Core.Execution;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
-using ParticleLife.Core.Execution;
 
 namespace ParticleLife.Viewer;
 
