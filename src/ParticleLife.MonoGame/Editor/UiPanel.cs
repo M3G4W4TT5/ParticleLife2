@@ -62,7 +62,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         synchronizeWheel = true;
     }
 
-    internal void Update(MouseState mouse, float scale, IReadOnlyList<UiInputEvent> input)
+    internal void Update(MouseState mouse, float scale, IReadOnlyList<UiInputEvent> input, bool pointerControl = false, bool pointerShift = false)
     {
         ConsumedKeyboard = false;
         DismissRequested = false;
@@ -144,7 +144,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
                 if (canChangeFocus)
                 {
                     captured = hovered;
-                    Try(() => captured?.Press(point));
+                    Try(() => captured?.Press(point, pointerControl, pointerShift));
                 }
             }
         }

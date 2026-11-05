@@ -55,9 +55,9 @@ public readonly record struct ForceExecution(ForceBackend RequestedBackend, Forc
 public static class ForceWorkerConfiguration
 {
     /// <summary>Gets the maximum supported workers, including the calling thread.</summary>
-    public const int MaximumWorkers = 8;
+    public const int MaximumWorkers = 64;
 
-    /// <summary>Requires 1..8 workers for grid evaluation and exactly one for the direct reference.</summary>
+    /// <summary>Requires 1..64 workers for grid evaluation and exactly one for the direct reference.</summary>
     /// <param name="backend">Exact neighbour search.</param>
     /// <param name="workerCount">Requested workers; never chosen automatically from timings.</param>
     /// <exception cref="ArgumentOutOfRangeException">The backend or worker count is unsupported.</exception>
@@ -66,7 +66,7 @@ public static class ForceWorkerConfiguration
         if (!Enum.IsDefined(backend) || workerCount < 1 || workerCount > MaximumWorkers
             || (backend == ForceBackend.Direct && workerCount != 1))
         {
-            throw new ArgumentOutOfRangeException(nameof(workerCount), "Use 1..8 grid workers or one direct worker.");
+            throw new ArgumentOutOfRangeException(nameof(workerCount), "Use 1..64 grid workers or one direct worker.");
         }
     }
 }

@@ -11,6 +11,7 @@ public readonly struct WorldTransform
 {
     private readonly double worldExtent;
     private readonly double normalizedScale;
+    private static readonly CameraSettings FittedCamera = new();
 
     /// <summary>Fits the nominal world inside a display viewport without stretching either axis.</summary>
     /// <param name="worldWidth">Positive finite nominal width in reduced length units.</param>
@@ -19,9 +20,10 @@ public readonly struct WorldTransform
     /// <param name="viewportY">Finite vertical viewport origin in pixels.</param>
     /// <param name="viewportWidth">Positive finite viewport width in pixels.</param>
     /// <param name="viewportHeight">Positive finite viewport height in pixels.</param>
+    /// <param name="camera">Optional target camera; null fits the nominal rectangle.</param>
     /// <exception cref="ArgumentOutOfRangeException">Dimensions or origins are invalid, or the mapped viewport origin is unrepresentable.</exception>
     public WorldTransform(double worldWidth, double worldHeight, double viewportX, double viewportY,
-        double viewportWidth, double viewportHeight)
+        double viewportWidth, double viewportHeight, CameraSettings? camera = null)
     {
         RequirePositiveFinite(worldWidth, nameof(worldWidth));
         RequirePositiveFinite(worldHeight, nameof(worldHeight));
@@ -35,14 +37,16 @@ public readonly struct WorldTransform
         // At least one normalized extent is exactly one. Its finite viewport dimension bounds the
         // fit scale even if the other normalized extent underflows to zero at an extreme aspect ratio.
         worldExtent = Math.Max(worldWidth, worldHeight);
+        camera ??= FittedCamera;
+        camera.Validate();
         double normalizedWidth = worldWidth / worldExtent;
         double normalizedHeight = worldHeight / worldExtent;
-        normalizedScale = Math.Min(viewportWidth / normalizedWidth, viewportHeight / normalizedHeight);
+        normalizedScale = Math.Min(viewportWidth / normalizedWidth, viewportHeight / normalizedHeight) * camera.Zoom;
         Scale = normalizedScale / worldExtent;
         Width = normalizedWidth * normalizedScale;
         Height = normalizedHeight * normalizedScale;
-        OffsetX = viewportX + (viewportWidth - Width) / 2;
-        OffsetY = viewportY + (viewportHeight - Height) / 2;
+        OffsetX = viewportX + (viewportWidth / 2 - Width * camera.CenterX);
+        OffsetY = viewportY + (viewportHeight / 2 - Height * camera.CenterY);
         if (!double.IsFinite(OffsetX) || !double.IsFinite(OffsetY))
         {
             throw new ArgumentOutOfRangeException(nameof(viewportX), "Mapped viewport origin must be finite.");
@@ -54,6 +58,12 @@ public readonly struct WorldTransform
     /// extreme world and viewport magnitudes. <see cref="ToScreen"/> uses normalized ratios instead,
     /// so callers should use that method rather than multiplying coordinates by this property.</remarks>
     public double Scale { get; }
+
+    /// <summary>Gets the larger nominal world extent used to normalize rendering coordinates.</summary>
+    public double WorldExtent => worldExtent;
+
+    /// <summary>Gets pixels per normalized world extent, including camera zoom.</summary>
+    public double NormalizedScale => normalizedScale;
 
     /// <summary>Gets the horizontal pixel coordinate of the nominal world's origin.</summary>
     public double OffsetX { get; }
@@ -76,6 +86,17 @@ public readonly struct WorldTransform
     public Vector2d ToScreen(Vector2d worldPosition) =>
         new(OffsetX + worldPosition.X / worldExtent * normalizedScale,
             OffsetY + worldPosition.Y / worldExtent * normalizedScale);
+
+    /// <summary>Maps a screen point back to world units without clipping to the nominal rectangle.</summary>
+    /// <param name="screenPosition">Pixel coordinates.</param>
+    /// <returns>World position; an unrepresentable off-world result may be non-finite and must not be applied as an edit.</returns>
+    public Vector2d ToWorld(Vector2d screenPosition) => new(
+        (screenPosition.X - OffsetX) / normalizedScale * worldExtent,
+        (screenPosition.Y - OffsetY) / normalizedScale * worldExtent);
+
+    /// <summary>Maps a reduced-world-unit display radius to pixels without changing physical ranges.</summary>
+    /// <param name="length">Nonnegative reduced length.</param><returns>Pixel length.</returns>
+    public double WorldLengthToPixels(double length) => length / worldExtent * normalizedScale;
 
     private static void RequirePositiveFinite(double value, string name)
     {

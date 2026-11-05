@@ -60,7 +60,7 @@ public sealed partial class ExperimentEditor
     public long Revision { get; private set; }
 
     /// <summary>Gets whether at least one completed editor operation can be undone.</summary>
-    public bool CanUndo => historyPosition > 0 || gestureChanged;
+    public bool CanUndo => historyPosition > 0 || gestureChanged || brushStroke?.Changed == true;
 
     /// <summary>Gets whether an undone operation can be reapplied.</summary>
     public bool CanRedo => historyPosition < history.Count && gestureBefore is null;
@@ -93,6 +93,7 @@ public sealed partial class ExperimentEditor
     {
         EnsureNotReplaying();
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        EndBrushStroke();
         EndGesture();
         gestureBefore = CaptureValues();
         gestureChanged = false;
@@ -220,17 +221,40 @@ public sealed partial class ExperimentEditor
     /// <summary>Atomically edits matrix dimensions, particle membership and species assignments.</summary>
     /// <param name="speciesCount">Positive new species count.</param>
     /// <param name="counts">Desired nonnegative count for each new species.</param>
+    /// <param name="preserveDensity">When true, scale both world extents by sqrt(new population / old population).
+    /// Both populations must be nonzero. Surviving absolute positions and velocities remain unchanged.</param>
     /// <remarks>Removed species map by oldSpecies modulo newSpeciesCount. In storage order, the first
     /// requested particles of each remapped species survive with exact identity, position and velocity.
     /// Shortfalls are appended in species order using the current generation recipe and never-reused
-    /// increasing identities. Retained top-left matrix entries survive; new rows/columns start at zero.</remarks>
-    public void ApplyPopulation(int speciesCount, int[] counts)
+    /// increasing identities. Retained top-left matrix entries survive; new rows/columns start at zero.
+    /// Density-preserving world changes and membership form one saved, undoable operation. The wall
+    /// layer is clamped to half the new shorter extent when necessary; cutoff is unchanged. Additions
+    /// use the resized world. This preserves nominal count/area, not the local density of survivors.</remarks>
+    public void ApplyPopulation(int speciesCount, int[] counts, bool preserveDensity = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(speciesCount);
         ArgumentNullException.ThrowIfNull(counts);
         PresetDefinition.ValidatePopulations(counts, speciesCount);
         ParticleSnapshot before = Snapshot();
         int total = counts.Sum();
+        ModelParameters populationParameters = Configuration.Parameters;
+        if (preserveDensity)
+        {
+            if (before.Count == 0 || total == 0)
+            {
+                throw new ArgumentException("Preserve density requires nonzero old and new populations.", nameof(counts));
+            }
+            double worldScale = Math.Sqrt((double)total / before.Count);
+            double worldWidth = populationParameters.WorldWidth * worldScale;
+            double worldHeight = populationParameters.WorldHeight * worldScale;
+            populationParameters = populationParameters with
+            {
+                WorldWidth = worldWidth,
+                WorldHeight = worldHeight,
+                WallWidth = Math.Min(populationParameters.WallWidth, Math.Min(worldWidth, worldHeight) / 2)
+            };
+            populationParameters.Validate();
+        }
         int[] retainedCounts = new int[speciesCount];
         List<int> retained = new(Math.Min(before.Count, total));
         for (int i = 0; i < before.Count; i++)
@@ -265,14 +289,16 @@ public sealed partial class ExperimentEditor
             for (int count = retainedCounts[species]; count < counts[species]; count++)
             {
                 ids[output] = nextIdentity + generated;
-                (positions[output], velocities[output]) = GenerateParticle(random, generated++, additions, Configuration.Parameters, Generation);
+                (positions[output], velocities[output]) = GenerateParticle(random, generated++, additions, populationParameters, Generation, species, speciesCount);
                 speciesValues[output++] = species;
             }
         }
 
         InteractionMatrix matrix = ResizeMatrix(Configuration.Matrix, speciesCount, Configuration.Parameters);
         ParticleSnapshot after = new(ids, positions, velocities, speciesValues, before.Time, before.Step);
-        Apply(CaptureValues() with { Configuration = WithMatrix(matrix), Populations = (int[])counts.Clone() },
+        SimulationConfiguration populationConfiguration = new(populationParameters, matrix,
+            Configuration.TimeStep, Configuration.Backend, Configuration.WorkerCount);
+        Apply(CaptureValues() with { Configuration = populationConfiguration, Populations = (int[])counts.Clone() },
             after, false, "Apply population", before, additions > 0 ? Metadata($"viewer-{Generation.Placement}-{Generation.Velocity}", Generation.Seed) : null);
     }
 
@@ -304,7 +330,8 @@ public sealed partial class ExperimentEditor
         Random random = new(Generation.Seed);
         for (int i = 0; i < before.Count; i++)
         {
-            (positions[i], velocities[i]) = GenerateParticle(random, i, before.Count, Configuration.Parameters, Generation);
+            (positions[i], velocities[i]) = GenerateParticle(random, i, before.Count, Configuration.Parameters, Generation,
+                before.Species[i], Configuration.Matrix.SpeciesCount);
         }
 
         Apply(CaptureValues(), new ParticleSnapshot(before.Ids, positions, velocities, before.Species, before.Time, before.Step),
@@ -357,6 +384,7 @@ public sealed partial class ExperimentEditor
     public void Undo()
     {
         EnsureNotReplaying();
+        EndBrushStroke();
         EndGesture();
         if (historyPosition == 0)
         {
@@ -372,6 +400,7 @@ public sealed partial class ExperimentEditor
     public void Redo()
     {
         EnsureNotReplaying();
+        EndBrushStroke();
         EndGesture();
         if (!CanRedo)
         {
@@ -448,6 +477,7 @@ public sealed partial class ExperimentEditor
     {
         EnsureNotReplaying();
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        if (brushStroke is not null && !applyingBrushSample) { EndBrushStroke(); }
         EditorValues before = CaptureValues();
         bool physical = !before.Configuration.EquivalentTo(values.Configuration);
         bool structural = state is not null && !SameState(state, Playback.Observe());
@@ -467,7 +497,7 @@ public sealed partial class ExperimentEditor
             events.Add(new SessionEvent(Playback.Observe().Step, values.Configuration, structural ? state : null, label, generator));
         }
 
-        if (structural || separateAction)
+        if ((structural || separateAction) && brushStroke is null)
         {
             CompleteGesture(before);
         }
@@ -483,7 +513,11 @@ public sealed partial class ExperimentEditor
             AdvanceIdentityHighWater(state!.Ids);
         }
 
-        if (gestureBefore is null)
+        if (brushStroke is BrushStroke stroke)
+        {
+            stroke.Changed = true;
+        }
+        else if (gestureBefore is null)
         {
             AddHistory(new UndoEntry(label, before, values, structural ? beforeState : null,
                 structural ? state : null, restoreMotion));
@@ -500,7 +534,7 @@ public sealed partial class ExperimentEditor
     {
         EditorValues target = forward ? entry.After : entry.Before;
         ParticleSnapshot? targetState = forward ? entry.AfterState : entry.BeforeState;
-        ParticleSnapshot? replacement = targetState is null ? null : RestoreStructure(targetState, entry.RestoreMotion);
+        ParticleSnapshot? replacement = targetState is null ? null : RestoreStructure(targetState, entry.RestoreMotion, entry.RestoreIdentities);
         bool physical = !Configuration.EquivalentTo(target.Configuration);
         if (physical || replacement is not null)
         {
@@ -514,12 +548,12 @@ public sealed partial class ExperimentEditor
     }
 
     /// <summary>Reconstructs membership from an undo payload, preserving motion of surviving identities.</summary>
-    private ParticleSnapshot RestoreStructure(ParticleSnapshot target, bool restoreMotion)
+    private ParticleSnapshot RestoreStructure(ParticleSnapshot target, bool restoreMotion, HashSet<long>? restoreIdentities = null)
     {
         ParticleStateView current = Playback.Observe();
         Vector2d[] positions = target.Positions.ToArray();
         Vector2d[] velocities = target.Velocities.ToArray();
-        if (!restoreMotion)
+        if (!restoreMotion || restoreIdentities is not null)
         {
             Dictionary<long, int> indices = new(current.Count);
             for (int i = 0; i < current.Count; i++)
@@ -529,7 +563,7 @@ public sealed partial class ExperimentEditor
 
             for (int i = 0; i < target.Count; i++)
             {
-                if (indices.TryGetValue(target.Ids[i], out int index))
+                if (restoreIdentities?.Contains(target.Ids[i]) != true && indices.TryGetValue(target.Ids[i], out int index))
                 {
                     positions[i] = current.Positions[index];
                     velocities[i] = current.Velocities[index];
@@ -592,6 +626,7 @@ public sealed partial class ExperimentEditor
         historyPosition = 0;
         gestureBefore = null;
         gestureChanged = false;
+        brushStroke = null;
         populations = GetCurrentPopulations();
         nextIdentity = 0;
         identityExhausted = false;
@@ -619,6 +654,7 @@ public sealed partial class ExperimentEditor
         left.ParticleRadius == right.ParticleRadius && left.ShowDiagnostics == right.ShowDiagnostics
         && left.ShowHelp == right.ShowHelp && left.ShowOverlay == right.ShowOverlay
         && left.ShowEditor == right.ShowEditor && left.UiScale == right.UiScale
+        && left.ParticleSizeMode == right.ParticleSizeMode && left.WorldParticleRadius == right.WorldParticleRadius && left.Camera == right.Camera
         && left.SpeciesColors.SequenceEqual(right.SpeciesColors);
 
     private static bool SameState(ParticleSnapshot left, ParticleStateView right) =>
@@ -714,7 +750,7 @@ public sealed partial class ExperimentEditor
             {
                 ids[output] = output;
                 species[output] = group;
-                (positions[output], velocities[output]) = GenerateParticle(random, output, total, configuration.Parameters, generation);
+                (positions[output], velocities[output]) = GenerateParticle(random, output, total, configuration.Parameters, generation, group, counts.Length);
                 output++;
             }
         }
@@ -729,38 +765,10 @@ public sealed partial class ExperimentEditor
     /// <remarks>Disk radius uses sqrt(U) for uniform area. Grid centres use aspect-aware columns;
     /// construction may reject extreme finite recipe arithmetic rather than publish non-finite state.</remarks>
     private static (Vector2d Position, Vector2d Velocity) GenerateParticle(Random random, int index, int count,
-        ModelParameters parameters, GenerationSettings generation)
+        ModelParameters parameters, GenerationSettings generation, int species = 0, int speciesCount = 1)
     {
-        Vector2d position;
-        switch (generation.Placement)
-        {
-            case PlacementKind.Uniform:
-                position = new Vector2d(random.NextDouble() * parameters.WorldWidth, random.NextDouble() * parameters.WorldHeight);
-                break;
-            case PlacementKind.Grid:
-                double aspect = parameters.WorldWidth / parameters.WorldHeight;
-                int columns = (int)Math.Clamp(Math.Ceiling(Math.Sqrt(count * aspect)), 1, Math.Max(1, count));
-                int rows = (int)Math.Ceiling((double)count / columns);
-                position = new Vector2d(((index % columns + 0.5) / columns) * parameters.WorldWidth,
-                    ((index / columns + 0.5) / rows) * parameters.WorldHeight);
-                break;
-            case PlacementKind.Disk:
-                double radius = Math.Sqrt(random.NextDouble()) * (Math.Min(parameters.WorldWidth, parameters.WorldHeight) / 2);
-                double angle = random.NextDouble() * Math.Tau;
-                position = new Vector2d(parameters.WorldWidth / 2 + radius * Math.Cos(angle),
-                    parameters.WorldHeight / 2 + radius * Math.Sin(angle));
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(generation));
-        }
-
-        if (generation.Velocity == VelocityKind.Zero)
-        {
-            return (position, default);
-        }
-
-        double direction = generation.Velocity == VelocityKind.RandomDirection ? random.NextDouble() * Math.Tau : generation.DirectionRadians;
-        return (position, new Vector2d(generation.Speed * Math.Cos(direction), generation.Speed * Math.Sin(direction)));
+        Vector2d position = ParticleGeneration.Position(random, index, count, species, speciesCount, parameters, generation);
+        return (position, ParticleGeneration.Velocity(random, position, parameters, generation));
     }
 
     private static GeneratorMetadata Metadata(string name, int? seed) => new(name, "1", seed, RuntimeInformation.FrameworkDescription);
@@ -769,5 +777,5 @@ public sealed partial class ExperimentEditor
         AppearanceSettings Appearance, PlaybackSettings Playback, int[] Populations);
 
     private sealed record UndoEntry(string Label, EditorValues Before, EditorValues After,
-        ParticleSnapshot? BeforeState, ParticleSnapshot? AfterState, bool RestoreMotion);
+        ParticleSnapshot? BeforeState, ParticleSnapshot? AfterState, bool RestoreMotion, HashSet<long>? RestoreIdentities = null);
 }

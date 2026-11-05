@@ -380,7 +380,7 @@ internal static partial class CommandLine
 
         JSON experiments contain actual initial state, directed matrix values, parameters and provenance.
         New CLI experiments default to grid search. Runs honour the saved backend unless overridden.
-        Grid workers are explicit (1..8 including the caller); direct requires one. Default is serial.
+        Grid workers are explicit (1..64 including the caller); direct requires one. Default is serial.
         Legacy schema-1 experiments retain direct search. Reports retain source and effective settings,
         last actual search and direct fallback counts for coordinate or accumulation range limits.
         The native editor changes rules live and saves presets, current-state experiments and sessions.

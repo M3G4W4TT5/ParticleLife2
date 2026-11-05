@@ -20,9 +20,11 @@ internal sealed class LiveExperimentEditor
     private readonly Action printTimings;
     private readonly InteractionMatrixWidget matrix;
     private readonly ExperimentFileBrowser browser;
+    private readonly ExplorationControls exploration;
     private long observedRevision = -1;
     private bool symmetry;
     private bool populationDraft;
+    private bool preserveDensity;
     private bool worldDraft;
     private int[] populations = [];
     private int populationSpecies;
@@ -48,6 +50,8 @@ internal sealed class LiveExperimentEditor
     private readonly UiSection generation;
     private readonly UiSection simulation;
     private readonly UiSection appearance;
+    private readonly UiSection world;
+    private readonly UiSection discoveries;
     internal ForceGraph Graph { get; }
     internal bool SuppressPlayback { get; private set; }
     internal bool IsModal => browser.IsOpen;
@@ -57,6 +61,9 @@ internal sealed class LiveExperimentEditor
     internal Rectangle PanelBody => panel.Body;
     internal Rectangle BrowserBounds => browser.Bounds;
     internal Rectangle BrowserBody => browser.Body;
+    internal bool BrushEnabled => exploration.BrushEnabled;
+    internal BrushSettings Brush => exploration.Brush;
+    internal void FitCamera() => exploration.Fit();
 
     internal LiveExperimentEditor(ExperimentEditor editor, string saveDirectory, Action<string> report, Action printTimings)
         : this(new EditorSession(editor), saveDirectory, report, printTimings)
@@ -70,6 +77,8 @@ internal sealed class LiveExperimentEditor
         this.printTimings = printTimings;
         panel = new UiPanel(Error);
         matrix = new InteractionMatrixWidget(editor);
+        exploration = new ExplorationControls(editor, matrix, () => symmetry, report);
+        matrix.ColourRequested = SelectColour;
         Graph = new ForceGraph(editor, matrix);
         browser = new ExperimentFileBrowser(editor, saveDirectory, report, () => SuppressPlayback = true, ClearDrafts);
         panel.Toolbar.Add(new UiRow(
@@ -80,10 +89,12 @@ internal sealed class LiveExperimentEditor
         recipes = Section("Starting recipe", true);
         interactions = Section("Interactions");
         forces = Section("Forces and motion", true);
-        population = Section("World and population", true);
-        generation = Section("Generation");
-        simulation = Section("Simulation and execution", true);
+        population = Section("Particles and populations", true);
+        world = Section("World geometry", true);
+        generation = Section("Future recipe and live generators");
+        simulation = Section("Playback", true);
         appearance = Section("Appearance", true);
+        discoveries = Section("Saved discoveries", true);
         SelectRecipe(selectedRecipe);
         BuildRecipes();
         BuildInteractions();
@@ -92,10 +103,26 @@ internal sealed class LiveExperimentEditor
         BuildGeneration();
         BuildSimulation();
         BuildAppearance();
+        world.Children.AddRange(population.Children.Take(4));
+        population.Children.RemoveRange(0, 4);
+        exploration.AddMatrixTools(interactions);
+        exploration.AddPopulationTools(population, species => populationIndex = Math.Min(species, populationSpecies - 1), SelectColour);
+        exploration.AddIndependentGeneration(generation);
+        exploration.AddPaletteTools(appearance);
+        UiSection advanced = new("Advanced CPU and measurements", false);
+        advanced.Children.AddRange(simulation.Children.Skip(2));
+        simulation.Children.RemoveRange(2, simulation.Children.Count - 2);
+        simulation.Children.Add(advanced);
+        discoveries.Children.Add(new UiLabel(() => "Preset: future recipe. From here: exact state. Initial: reset baseline. Session: every applied edit.", 50));
+        discoveries.Children.Add(Button(() => "Browse saved discoveries", OpenFiles, "Open named save/load workflows. Existing destinations are never overwritten."));
         panel.Toolbar.Add(new UiRow(
-            new UiButton(() => "Model", () => SelectTab(0), "Recipes, forces and the directed interaction matrix.", selected: () => selectedTab == 0),
-            new UiButton(() => "World", () => SelectTab(1), "World size, species populations and generation.", selected: () => selectedTab == 1),
-            new UiButton(() => "View", () => SelectTab(2), "Execution, measurements and presentation.", selected: () => selectedTab == 2)));
+            new UiButton(() => "Particles", () => SelectTab(0), "Live populations, independent generators and direct brushes.", selected: () => selectedTab == 0),
+            new UiButton(() => "Interactions", () => SelectTab(1), "Forces and directed matrix editing.", selected: () => selectedTab == 1),
+            new UiButton(() => "World", () => SelectTab(2), "World geometry, camera and display size.", selected: () => selectedTab == 2)));
+        panel.Toolbar.Add(new UiRow(
+            new UiButton(() => "Playback", () => SelectTab(3), "Time controls with expandable execution and measurements.", selected: () => selectedTab == 3),
+            new UiButton(() => "Appearance", () => SelectTab(4), "Palettes, exact species colour pickers and presentation.", selected: () => selectedTab == 4),
+            new UiButton(() => "Discoveries", () => SelectTab(5), "Starting recipes and saved file workflows.", selected: () => selectedTab == 5)));
         SelectTab(0);
         Synchronize();
     }
@@ -107,11 +134,21 @@ internal sealed class LiveExperimentEditor
         panel.Content.Clear();
         panel.Content.AddRange(index switch
         {
-            0 => [recipes, forces, interactions],
-            1 => [population, generation],
-            _ => [simulation, appearance]
+            0 => [population, generation, exploration.Tools],
+            1 => [forces, interactions],
+            2 => [world, exploration.Camera],
+            3 => [simulation],
+            4 => [appearance],
+            _ => [recipes, discoveries]
         });
         panel.ScrollToTop();
+    }
+
+    private void SelectColour(int species)
+    {
+        colourSpecies = Math.Clamp(species, 0, editor.Configuration.Matrix.SpeciesCount - 1);
+        SelectTab(4);
+        report($"Editing display colour for species {colourSpecies}; trajectories are unchanged.");
     }
 
     private UiSection Section(string name, bool expanded = false)
@@ -187,7 +224,7 @@ internal sealed class LiveExperimentEditor
     private void BuildInteractions()
     {
         interactions.Children.Add(matrix);
-        interactions.Children.Add(new UiLabel(() => $"Selected {matrix.Receiver} <- {matrix.Source}   A={editor.Configuration.Matrix[matrix.Receiver, matrix.Source]:G8}", 25, UiCanvas.Accent));
+        interactions.Children.Add(new UiLabel(() => $"Selected {matrix.Receiver} <- {matrix.Source}   A={editor.Configuration.Matrix[matrix.Receiver, matrix.Source]:G17}", 25, UiCanvas.Accent));
         interactions.Children.Add(Number("Coefficient A", () => editor.Configuration.Matrix[matrix.Receiver, matrix.Source],
             value => editor.SetMatrixCoefficient(matrix.Receiver, matrix.Source, value, symmetry), 0, -1, 1,
             "A[receiver,source] is dimensionless, in [-1,1]. Positive outer values attract; negative repel. Core repulsion is independent of A."));
@@ -280,8 +317,16 @@ internal sealed class LiveExperimentEditor
             SuppressPlayback = true;
         }, "Atomically apply these three world/wall drafts. Invalid combinations leave every live parameter unchanged."));
         population.Children.Add(new UiLabel(() => "Population draft: survivors keep their identities and motion.", 32));
+        int[] populationSizes = [500, 10_000, 50_000, 100_000, 250_000, 1_000_000];
+        population.Children.Add(new UiDropdown("Population sizes", ["500", "10,000", "50,000", "100,000", "250,000", "1,000,000 stretch"],
+            () => Math.Max(0, Array.IndexOf(populationSizes, populations.Sum())),
+            index => Distribute(populationSizes[index], populationSpecies),
+            "Choose a draft total, then Apply. Dense worlds can remain expensive at any count. One million is an explicit stretch choice, not an interactive capacity promise."));
         population.Children.Add(Number("Total particles", () => populations.Sum(), value => Distribute(Integer(value), populationSpecies),
-            500, 0, 5000, "Changing this draft distributes the target total evenly. No particle changes until Apply live. Exact larger valid totals can be typed.", integer: true, gesture: false));
+            500, 0, 1_000_000, "Exact total entry and a slider up to one million. Changing this draft distributes the target total evenly. No particle changes until Apply live.", integer: true, gesture: false));
+        population.Children.Add(new UiToggle("Preserve density: resize world", () => preserveDensity,
+            value => preserveDensity = value,
+            "Apply population also scales both world extents by sqrt(new/old count), retaining nominal count per area. Survivors keep absolute positions and motion; additions use the new world. Both totals must be nonzero. Wall layer clamps to half the shorter extent if needed; cutoff stays fixed."));
         population.Children.Add(Number("Species count", () => populationSpecies, value => Distribute(populations.Sum(), Integer(value)),
             7, 1, 32, "Changing this draft redistributes targets evenly. Apply live retains unaffected matrix entries; new entries are zero. Removed species remap modulo the new count.", integer: true, gesture: false));
         population.Children.Add(new UiLabel(() => populationSummary, 50, UiCanvas.Accent));
@@ -308,8 +353,10 @@ internal sealed class LiveExperimentEditor
         {
             int speciesCount = populationSpecies;
             int[] requested = (int[])populations.Clone();
-            ReportCommand("Apply population", owner => owner.ApplyPopulation(speciesCount, requested),
-                "Population applied: surviving identities/state retained; actual additions recorded in the session.", () =>
+            bool requestedPreserveDensity = preserveDensity;
+            ReportCommand("Apply population", owner => owner.ApplyPopulation(speciesCount, requested, requestedPreserveDensity),
+                requestedPreserveDensity ? "Population and world resized to preserve nominal density; surviving motion retained."
+                    : "Population applied: surviving identities/state retained; actual additions recorded in the session.", () =>
                 {
                     if (populationSpecies == speciesCount && populations.AsSpan().SequenceEqual(requested)) { populationDraft = false; }
                 });
@@ -336,11 +383,11 @@ internal sealed class LiveExperimentEditor
         generation.Children.Add(Number("Generation seed", () => editor.Generation.Seed,
             value => editor.SetGeneration(editor.Generation with { Seed = Integer(value) }), 1, 0, 10000,
             "Integer seed for future generation and random matrices. Changing it alone never regenerates the running state. Replay saves actual generated values.", integer: true));
-        generation.Children.Add(new UiDropdown("Placement", ["Uniform", "Regular grid", "Central disk"],
+        generation.Children.Add(new UiDropdown("Future placement", Enum.GetNames<PlacementKind>(),
             () => (int)editor.Generation.Placement,
             index => editor.SetGeneration(editor.Generation with { Placement = (PlacementKind)index }),
             "Placement is used only for explicit new, resampled or added particles."));
-        generation.Children.Add(new UiDropdown("Velocity", ["Zero", "Common direction", "Random direction"],
+        generation.Children.Add(new UiDropdown("Future velocity", Enum.GetNames<VelocityKind>(),
             () => (int)editor.Generation.Velocity,
             index => editor.SetGeneration(editor.Generation with { Velocity = (VelocityKind)index }),
             "Speed and direction are generation settings, not live velocity overrides."));
@@ -370,13 +417,14 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(Number("Playback speed [x]", () => editor.Playback.PlaybackSpeed,
             value => { editor.SetPlayback(editor.Playback.Settings with { Speed = value }); SuppressPlayback = true; }, 1, 0.05, 8,
             "Wall-clock speed only; does not alter dt or equations. Changing speed clears pending playback time.", log: true));
-        simulation.Children.Add(new UiDropdown("Backend", ["Direct reference", "Uniform grid"],
+        simulation.Children.Add(new UiLabel(() => $"Execution: CPU. {Environment.ProcessorCount} logical processors. Worker count is saved explicitly.", 44, UiCanvas.Accent));
+        simulation.Children.Add(new UiDropdown("Neighbour search", ["Direct reference", "Uniform grid"],
             () => editor.Configuration.Backend == ForceBackend.Direct ? 0 : 1,
             index => ConfigurationChange(backend: index == 0 ? ForceBackend.Direct : ForceBackend.UniformGrid, workers: 1),
             "A backend switch selects one worker. Choose grid workers separately. Rules and completed state are retained."));
         simulation.Children.Add(Number("Workers", () => editor.Configuration.WorkerCount,
-            value => ConfigurationChange(workers: Integer(value)), 1, 1, 8,
-            "Explicit worker count including caller, 1..8. Direct requires exactly one; invalid combinations are rejected atomically.", integer: true));
+            value => ConfigurationChange(workers: Integer(value)), 1, 1, ForceWorkerConfiguration.MaximumWorkers,
+            "Explicit CPU workers including caller, 1..64. Direct requires exactly one. More workers can increase overhead; compare your scene. The resolved count is saved and shown below.", integer: true));
         simulation.Children.Add(Number("Max steps / frame", () => editor.Playback.MaxStepsPerFrame,
             value => editor.SetPlayback(editor.Playback.Settings with { MaxStepsPerFrame = Integer(value) }), 8, 1, 32,
             "Positive catch-up cap. Remaining whole-step playback time is dropped and displayed. It does not bound the cost of one numerical step.", integer: true));
@@ -561,7 +609,7 @@ internal sealed class LiveExperimentEditor
     }
 
     internal void Update(Rectangle bounds, Rectangle modalBounds, float scale, MouseState mouse,
-        IReadOnlyList<UiInputEvent> input)
+        IReadOnlyList<UiInputEvent> input, bool pointerControl = false, bool pointerShift = false)
     {
         editor.Pump();
         if (editor.IsBackground)
@@ -628,7 +676,7 @@ internal sealed class LiveExperimentEditor
         else if (editor.Appearance.ShowEditor)
         {
             panel.Bounds = bounds;
-            panel.Update(mouse, scale, input);
+            panel.Update(mouse, scale, input, pointerControl, pointerShift);
             ConsumedKeyboard = panel.ConsumedKeyboard;
         }
         else

@@ -62,7 +62,7 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
     /// <summary>Validates and retains immutable model configuration; storage grows with the first input.</summary>
     /// <param name="parameters">Model quantities in reduced units, including a cutoff with positive finite square.</param>
     /// <param name="matrix">Immutable directed coefficients indexed by receiver then source species.</param>
-    /// <param name="workerCount">Explicit total CPU workers in [1,8], including the calling thread; one is serial.</param>
+    /// <param name="workerCount">Explicit total CPU workers in [1,64], including the calling thread; one is serial.</param>
     /// <exception cref="ArgumentNullException">A configuration object is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A model parameter or worker count is invalid.</exception>
     public UniformGridForceEvaluator(ModelParameters parameters, InteractionMatrix matrix, int workerCount = 1)

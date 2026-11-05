@@ -8,6 +8,56 @@ namespace ParticleLife.Viewer.Tests;
 
 public sealed class LiveEditorTests
 {
+    [Fact]
+    public void PreserveDensityResizesWorldAndPopulationInOneReplayableUndo()
+    {
+        using PlaybackController playback = CreatePlayback();
+        ExperimentEditor editor = new(playback);
+        playback.SingleStep();
+        ParticleSnapshot before = Copy(playback.Observe());
+        ModelParameters parameters = editor.Configuration.Parameters;
+        editor.ApplyPopulation(2, [6, 6], preserveDensity: true);
+        Assert.Equal(parameters.WorldWidth * 2, editor.Configuration.Parameters.WorldWidth);
+        Assert.Equal(parameters.WorldHeight * 2, editor.Configuration.Parameters.WorldHeight);
+        Assert.Equal(parameters.Cutoff, editor.Configuration.Parameters.Cutoff);
+        Assert.Equal(before.Positions[0], playback.Observe().Positions[0]);
+        Assert.Equal(before.Velocities[1], playback.Observe().Velocities[1]);
+        Assert.Equal(before.Time, playback.Observe().Time);
+        Assert.Equal(1, editor.SessionEventCount);
+        using Simulation replay = SessionReplay.Replay(editor.CaptureSession("preserve-density"));
+        Same(Copy(playback.Observe()), replay.Observe());
+        Assert.True(editor.Configuration.EquivalentTo(replay.Configuration));
+        editor.Undo();
+        Same(before, playback.Observe());
+        Assert.Equal(parameters, editor.Configuration.Parameters);
+        Assert.False(editor.CanUndo);
+        editor.Redo();
+        Assert.Equal(12, playback.Observe().Count);
+        Assert.Equal(parameters.WorldWidth * 2, editor.Configuration.Parameters.WorldWidth);
+    }
+
+    [Fact]
+    public void PreserveDensityRejectsZeroAndClampsShrinkingWallLayerAtomically()
+    {
+        using PlaybackController playback = CreatePlayback();
+        ExperimentEditor editor = new(playback);
+        SimulationConfiguration current = editor.Configuration;
+        editor.ApplyConfiguration(new SimulationConfiguration(current.Parameters with { WallWidth = 0.5 },
+            current.Matrix, current.TimeStep));
+        long revision = editor.Revision;
+        Assert.Throws<ArgumentException>(() => editor.ApplyPopulation(2, [0, 0], preserveDensity: true));
+        Assert.Equal(revision, editor.Revision);
+        Assert.Equal(3, playback.Observe().Count);
+        editor.ApplyPopulation(2, [1, 0], preserveDensity: true);
+        Assert.Equal(Math.Min(editor.Configuration.Parameters.WorldWidth, editor.Configuration.Parameters.WorldHeight) / 2,
+            editor.Configuration.Parameters.WallWidth);
+        editor.ApplyPopulation(2, [0, 0]);
+        revision = editor.Revision;
+        Assert.Throws<ArgumentException>(() => editor.ApplyPopulation(2, [1, 1], preserveDensity: true));
+        Assert.Equal(revision, editor.Revision);
+        Assert.Equal(0, playback.Observe().Count);
+    }
+
     [Theory]
     [InlineData(ForceBackend.Direct, 1)]
     [InlineData(ForceBackend.UniformGrid, 1)]
