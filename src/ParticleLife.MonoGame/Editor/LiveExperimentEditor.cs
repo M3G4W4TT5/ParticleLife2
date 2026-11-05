@@ -23,6 +23,7 @@ internal sealed class LiveExperimentEditor
     private long observedRevision = -1;
     private bool symmetry;
     private bool populationDraft;
+    private bool preserveDensity;
     private bool worldDraft;
     private int[] populations = [];
     private int populationSpecies;
@@ -95,7 +96,7 @@ internal sealed class LiveExperimentEditor
         panel.Toolbar.Add(new UiRow(
             new UiButton(() => "Model", () => SelectTab(0), "Recipes, forces and the directed interaction matrix.", selected: () => selectedTab == 0),
             new UiButton(() => "World", () => SelectTab(1), "World size, species populations and generation.", selected: () => selectedTab == 1),
-            new UiButton(() => "View", () => SelectTab(2), "Execution, measurements and presentation.", selected: () => selectedTab == 2)));
+            new UiButton(() => "CPU / View", () => SelectTab(2), "CPU workers, neighbour search, measurements and presentation.", selected: () => selectedTab == 2)));
         SelectTab(0);
         Synchronize();
     }
@@ -280,8 +281,16 @@ internal sealed class LiveExperimentEditor
             SuppressPlayback = true;
         }, "Atomically apply these three world/wall drafts. Invalid combinations leave every live parameter unchanged."));
         population.Children.Add(new UiLabel(() => "Population draft: survivors keep their identities and motion.", 32));
+        int[] populationSizes = [500, 10_000, 50_000, 100_000, 250_000, 1_000_000];
+        population.Children.Add(new UiDropdown("Population sizes", ["500", "10,000", "50,000", "100,000", "250,000", "1,000,000 stretch"],
+            () => Math.Max(0, Array.IndexOf(populationSizes, populations.Sum())),
+            index => Distribute(populationSizes[index], populationSpecies),
+            "Choose a draft total, then Apply. Dense worlds can remain expensive at any count. One million is an explicit stretch choice, not an interactive capacity promise."));
         population.Children.Add(Number("Total particles", () => populations.Sum(), value => Distribute(Integer(value), populationSpecies),
-            500, 0, 5000, "Changing this draft distributes the target total evenly. No particle changes until Apply live. Exact larger valid totals can be typed.", integer: true, gesture: false));
+            500, 0, 1_000_000, "Exact total entry and a slider up to one million. Changing this draft distributes the target total evenly. No particle changes until Apply live.", integer: true, gesture: false));
+        population.Children.Add(new UiToggle("Preserve density: resize world", () => preserveDensity,
+            value => preserveDensity = value,
+            "Apply population also scales both world extents by sqrt(new/old count), retaining nominal count per area. Survivors keep absolute positions and motion; additions use the new world. Both totals must be nonzero. Wall layer clamps to half the shorter extent if needed; cutoff stays fixed."));
         population.Children.Add(Number("Species count", () => populationSpecies, value => Distribute(populations.Sum(), Integer(value)),
             7, 1, 32, "Changing this draft redistributes targets evenly. Apply live retains unaffected matrix entries; new entries are zero. Removed species remap modulo the new count.", integer: true, gesture: false));
         population.Children.Add(new UiLabel(() => populationSummary, 50, UiCanvas.Accent));
@@ -308,8 +317,10 @@ internal sealed class LiveExperimentEditor
         {
             int speciesCount = populationSpecies;
             int[] requested = (int[])populations.Clone();
-            ReportCommand("Apply population", owner => owner.ApplyPopulation(speciesCount, requested),
-                "Population applied: surviving identities/state retained; actual additions recorded in the session.", () =>
+            bool requestedPreserveDensity = preserveDensity;
+            ReportCommand("Apply population", owner => owner.ApplyPopulation(speciesCount, requested, requestedPreserveDensity),
+                requestedPreserveDensity ? "Population and world resized to preserve nominal density; surviving motion retained."
+                    : "Population applied: surviving identities/state retained; actual additions recorded in the session.", () =>
                 {
                     if (populationSpecies == speciesCount && populations.AsSpan().SequenceEqual(requested)) { populationDraft = false; }
                 });
@@ -370,13 +381,14 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(Number("Playback speed [x]", () => editor.Playback.PlaybackSpeed,
             value => { editor.SetPlayback(editor.Playback.Settings with { Speed = value }); SuppressPlayback = true; }, 1, 0.05, 8,
             "Wall-clock speed only; does not alter dt or equations. Changing speed clears pending playback time.", log: true));
-        simulation.Children.Add(new UiDropdown("Backend", ["Direct reference", "Uniform grid"],
+        simulation.Children.Add(new UiLabel(() => $"Execution: CPU. {Environment.ProcessorCount} logical processors. Worker count is saved explicitly.", 44, UiCanvas.Accent));
+        simulation.Children.Add(new UiDropdown("Neighbour search", ["Direct reference", "Uniform grid"],
             () => editor.Configuration.Backend == ForceBackend.Direct ? 0 : 1,
             index => ConfigurationChange(backend: index == 0 ? ForceBackend.Direct : ForceBackend.UniformGrid, workers: 1),
             "A backend switch selects one worker. Choose grid workers separately. Rules and completed state are retained."));
         simulation.Children.Add(Number("Workers", () => editor.Configuration.WorkerCount,
-            value => ConfigurationChange(workers: Integer(value)), 1, 1, 8,
-            "Explicit worker count including caller, 1..8. Direct requires exactly one; invalid combinations are rejected atomically.", integer: true));
+            value => ConfigurationChange(workers: Integer(value)), 1, 1, ForceWorkerConfiguration.MaximumWorkers,
+            "Explicit CPU workers including caller, 1..64. Direct requires exactly one. More workers can increase overhead; compare your scene. The resolved count is saved and shown below.", integer: true));
         simulation.Children.Add(Number("Max steps / frame", () => editor.Playback.MaxStepsPerFrame,
             value => editor.SetPlayback(editor.Playback.Settings with { MaxStepsPerFrame = Integer(value) }), 8, 1, 32,
             "Positive catch-up cap. Remaining whole-step playback time is dropped and displayed. It does not bound the cost of one numerical step.", integer: true));
