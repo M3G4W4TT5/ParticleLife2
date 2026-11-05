@@ -65,7 +65,54 @@ public sealed class MediaCaptureTests : IDisposable
         Assert.Equal(width, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(6, 2)));
         Assert.Equal(height, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(8, 2)));
         Assert.Equal((byte)0x3B, bytes[^1]);
+        Assert.Equal(new[] { 10, 25 }, ReadDelays(bytes));
         Assert.Equal(new[] { path }, Directory.GetFiles(directory));
+    }
+
+    [Fact]
+    public async Task AnimationQuantizesCumulativeTimeWithoutShorteningIrregularFourSecondCapture()
+    {
+        string path = Path.Combine(directory, "irregular.gif");
+        AnimationCapture capture = new(path, 1, 1);
+        using CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            for (int frame = 0; frame < 39; frame++)
+            {
+                double timestamp = 1000 + frame * 0.103 + (frame % 2 == 0 ? 0 : 0.001);
+                Assert.True(capture.TryAddFrame([192, 128, 64, 255], timestamp));
+                // Let the previous image finish before submitting again, so this isolates timestamp
+                // quantization without relying on thread timing or intentionally dropping images.
+                while (capture.WrittenFrames < frame)
+                {
+                    if (capture.Completion.IsCompleted) { await capture.Completion; }
+                    await Task.Delay(1, deadline.Token);
+                }
+            }
+        }
+        finally
+        {
+            capture.Finish(1004);
+            await capture.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+        int[] delays = ReadDelays(File.ReadAllBytes(path));
+        Assert.Equal(39, delays.Length);
+        Assert.Equal(400, delays.Sum());
+        Assert.Contains(11, delays);
+        Assert.Equal(0, capture.SkippedFrames);
+    }
+
+    [Fact]
+    public async Task AnimationPreservesUnequalExactCentisecondIntervals()
+    {
+        string path = Path.Combine(directory, "unequal.gif");
+        AnimationCapture capture = new(path, 1, 1);
+        Assert.True(capture.TryAddFrame([255, 0, 0, 255], 12));
+        Assert.True(capture.TryAddFrame([0, 255, 0, 255], 12.07));
+        capture.Finish(12.20);
+        await capture.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(new[] { 7, 13 }, ReadDelays(File.ReadAllBytes(path)));
     }
 
     [Fact]
@@ -108,4 +155,30 @@ public sealed class MediaCaptureTests : IDisposable
     }
 
     public void Dispose() => Directory.Delete(directory, recursive: true);
+
+    private static int[] ReadDelays(byte[] bytes)
+    {
+        List<int> delays = [];
+        int offset = 13 + ((bytes[10] & 0x80) != 0 ? 3 * (1 << ((bytes[10] & 7) + 1)) : 0);
+        while (bytes[offset] != 0x3B)
+        {
+            if (bytes[offset] == 0x21)
+            {
+                if (bytes[offset + 1] == 0xF9)
+                { delays.Add(BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 4, 2))); }
+                offset += 2;
+            }
+            else
+            {
+                Assert.Equal(0x2C, bytes[offset]);
+                byte packed = bytes[offset + 9];
+                offset += 10;
+                if ((packed & 0x80) != 0) { offset += 3 * (1 << ((packed & 7) + 1)); }
+                offset++; // LZW minimum code size.
+            }
+            while (bytes[offset] != 0) { offset += 1 + bytes[offset]; }
+            offset++;
+        }
+        return delays.ToArray();
+    }
 }
