@@ -5,14 +5,15 @@ using ParticleLife.Viewer;
 
 namespace ParticleLife.MonoGame.Rendering;
 
-/// <summary>Stores presentation-only normalized coordinates and exact species for one native point.</summary>
-/// <remarks>The 12-byte layout is independent of the CPU solver's double precision storage.
+/// <summary>Stores presentation-only normalized coordinates, species and velocity for one native point.</summary>
+/// <remarks>The 20-byte layout is independent of the CPU solver's double precision storage.
 /// No converted value is written back to the simulation or persisted as scientific state.</remarks>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal struct ParticleDisplayVertex
 {
     internal float X, Y;
     internal uint Species;
+    internal float VelocityX, VelocityY;
 }
 
 /// <summary>Maps normalized world coordinates to pixels using the supplied 2D camera.</summary>
@@ -50,7 +51,7 @@ internal static class ParticleDisplayData
     /// <summary>Packs a completed CPU observation without retaining any borrowed span.</summary>
     /// <returns>The largest absolute normalized coordinate, or infinity if float packing is unsupported.</returns>
     internal static double Pack(ReadOnlySpan<Vector2d> positions, ReadOnlySpan<int> species,
-        double extent, Span<ParticleDisplayVertex> destination)
+        double extent, Span<ParticleDisplayVertex> destination, ReadOnlySpan<Vector2d> velocities = default)
     {
         double magnitude = 0;
         for (int index = 0; index < positions.Length; index++)
@@ -58,7 +59,21 @@ internal static class ParticleDisplayData
             double x = positions[index].X / extent;
             double y = positions[index].Y / extent;
             magnitude = Math.Max(magnitude, Math.Max(Math.Abs(x), Math.Abs(y)));
-            destination[index] = new ParticleDisplayVertex { X = (float)x, Y = (float)y, Species = (uint)species[index] };
+            Vector2d velocity = velocities.IsEmpty ? default : velocities[index];
+            double largestVelocity = Math.Max(Math.Abs(velocity.X), Math.Abs(velocity.Y));
+            // Scale the whole vector at extreme display magnitudes so direction is retained.
+            // Both limits are far beyond the supported speed-colour reference range.
+            if (largestVelocity > float.MaxValue || largestVelocity is > 0 and < 1.1754943508222875e-38)
+            {
+                double displayMagnitude = Math.Clamp(largestVelocity, 1.1754943508222875e-38, float.MaxValue);
+                velocity = velocity / largestVelocity * displayMagnitude;
+            }
+            destination[index] = new ParticleDisplayVertex
+            {
+                X = (float)x, Y = (float)y, Species = (uint)species[index],
+                VelocityX = (float)velocity.X,
+                VelocityY = (float)velocity.Y
+            };
         }
         return magnitude;
     }

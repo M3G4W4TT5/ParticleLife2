@@ -126,7 +126,11 @@ internal sealed class ResidentExperiment : IDisposable
                         if (!Editor.Playback.IsPaused) { Faulted = false; }
                         activeExecuted = true;
                         // CPU action replay runs on the CPU worker after transfer, never in this pump.
-                        if (Editor.IsReplaying && Editor.Playback.Resident is not null) { Editor.ReturnToCpu(); }
+                        if (Editor.IsReplaying && Editor.Playback.Resident is not null)
+                        {
+                            try { Editor.ReturnToCpu(); }
+                            catch { Editor.CancelSessionReplay(); throw; }
+                        }
                         if (Editor.Playback.Resident?.IsStepPending != true) { CompleteCommand(null); }
                     }
                     catch (Exception failure) { CompleteCommand(failure); }
@@ -221,6 +225,8 @@ internal sealed class ResidentExperiment : IDisposable
             Editor.IsReplaying, Editor.ReplayCompletedStep, Editor.ReplayTerminalStep, applied, error, stepsPerSecond, simulationSpeed)
         {
             Execution = Editor.Playback.Execution,
+            Recording = Editor.Recording,
+            BaselineVersion = Editor.BaselineVersion,
             CaptureRecording = Editor.CaptureRecording,
             ResidentSummary = Editor.Playback.Resident?.LatestSummary,
             FullStateReadbacks = Editor.Playback.Resident?.FullStateReadbacks ?? 0,

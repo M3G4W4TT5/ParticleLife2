@@ -25,6 +25,7 @@ internal sealed class QuadParticleRenderer : IDisposable
     private ParticleDisplayTransform previousTransform;
     private Rectangle previousClip;
     private float previousRadius;
+    private VisualSettings? previousVisuals;
     private int visibleCount;
     private bool disposed;
 
@@ -74,7 +75,7 @@ internal sealed class QuadParticleRenderer : IDisposable
         ParticleDisplayTransform mapping = ParticleDisplayTransform.Create(frame, transform);
         bool paletteChanged = !appearance.SpeciesColors.SequenceEqual(palette);
         if (sequence != frame.Sequence || mapping != previousTransform || clip != previousClip
-            || radius != previousRadius || paletteChanged)
+            || radius != previousRadius || paletteChanged || appearance.Visuals != previousVisuals)
         {
             long started = Stopwatch.GetTimestamp();
             int required = checked(frame.Count * 4);
@@ -93,7 +94,8 @@ internal sealed class QuadParticleRenderer : IDisposable
                     continue;
                 }
                 uint rgb = appearance.ColorForSpecies(species[index]);
-                Color colour = new((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
+                (float red, float green, float blue) = ParticleColour.Evaluate(rgb, frame.Velocities[index], appearance.Visuals);
+                Color colour = new Color(red, green, blue) * (float)appearance.Visuals.Opacity;
                 float x = (float)mapped.X;
                 float y = (float)mapped.Y;
                 int vertex = visibleCount++ * 4;
@@ -130,6 +132,7 @@ internal sealed class QuadParticleRenderer : IDisposable
             previousTransform = mapping;
             previousClip = clip;
             previousRadius = radius;
+            previousVisuals = appearance.Visuals;
         }
 
         long submitted = Stopwatch.GetTimestamp();
@@ -138,7 +141,7 @@ internal sealed class QuadParticleRenderer : IDisposable
             Viewport viewport = device.Viewport;
             effect.Projection = Matrix.CreateOrthographicOffCenter(viewport.X, viewport.X + viewport.Width,
                 viewport.Y + viewport.Height, viewport.Y, 0, 1);
-            device.BlendState = BlendState.AlphaBlend;
+            device.BlendState = appearance.Visuals.Blend == ParticleBlend.Additive ? PremultipliedAdditive : BlendState.AlphaBlend;
             device.DepthStencilState = DepthStencilState.None;
             device.RasterizerState = rasterizer;
             device.ScissorRectangle = clip;
@@ -160,6 +163,12 @@ internal sealed class QuadParticleRenderer : IDisposable
             "MonoGame bulk quads", fallbackReason);
     }
 
+    private readonly BlendState PremultipliedAdditive = new()
+    {
+        ColorSourceBlend = Blend.One, ColorDestinationBlend = Blend.One,
+        AlphaSourceBlend = Blend.One, AlphaDestinationBlend = Blend.InverseSourceAlpha
+    };
+
     public void Dispose()
     {
         if (!disposed)
@@ -168,6 +177,7 @@ internal sealed class QuadParticleRenderer : IDisposable
             indices.Dispose();
             effect.Dispose();
             rasterizer.Dispose();
+            PremultipliedAdditive.Dispose();
             disposed = true;
         }
     }

@@ -87,11 +87,12 @@ internal sealed record GenerationData(int Seed, string Placement, string Velocit
 
 internal sealed record AppearanceData(uint[] SpeciesColors, double ParticleRadius, bool ShowDiagnostics,
     bool ShowHelp, bool ShowOverlay, bool ShowEditor, double UiScale,
-    CameraSettings? Camera = null, string? ParticleSizeMode = null, double? WorldParticleRadius = null)
+    CameraSettings? Camera = null, string? ParticleSizeMode = null, double? WorldParticleRadius = null,
+    VisualSettings? Visuals = null)
 {
     internal static AppearanceData From(AppearanceSettings settings) => new(settings.SpeciesColors.ToArray(), settings.ParticleRadius,
         settings.ShowDiagnostics, settings.ShowHelp, settings.ShowOverlay, settings.ShowEditor, settings.UiScale,
-        settings.Camera, settings.ParticleSizeMode.ToString(), settings.WorldParticleRadius);
+        settings.Camera, settings.ParticleSizeMode.ToString(), settings.WorldParticleRadius, settings.Visuals);
 
     internal AppearanceSettings ToSettings()
     {
@@ -108,7 +109,8 @@ internal sealed record AppearanceData(uint[] SpeciesColors, double ParticleRadiu
             UiScale = UiScale,
             Camera = Camera ?? new CameraSettings(),
             ParticleSizeMode = mode,
-            WorldParticleRadius = WorldParticleRadius ?? 0.003
+            WorldParticleRadius = WorldParticleRadius ?? 0.003,
+            Visuals = Visuals ?? new VisualSettings()
         };
         settings.Validate();
         return settings;

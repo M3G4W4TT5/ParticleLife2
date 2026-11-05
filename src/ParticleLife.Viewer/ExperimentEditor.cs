@@ -59,6 +59,10 @@ public sealed partial class ExperimentEditor
     /// <summary>Gets a change counter for UI cache invalidation; completed numerical steps do not increment it.</summary>
     public long Revision { get; private set; }
 
+    /// <summary>Gets the baseline epoch, incremented by successful reset, replacement, restore or completed replay.</summary>
+    /// <remarks>Presentation caches use this explicit boundary even when both states have the same clock and configuration.</remarks>
+    public long BaselineVersion { get; private set; }
+
     /// <summary>Gets whether at least one completed editor operation can be undone.</summary>
     public bool CanUndo => historyPosition > 0 || gestureChanged || brushStroke?.Changed == true;
 
@@ -131,23 +135,8 @@ public sealed partial class ExperimentEditor
             throw new ArgumentException("Use Apply population to change species and matrix dimensions together.", nameof(configuration));
         }
 
-        ModelParameters previous = Configuration.Parameters;
-        ModelParameters next = configuration.Parameters;
-        bool mapWorld = next.Boundary is BoundaryKind.Periodic or BoundaryKind.Reflecting
-            && (previous.Boundary != next.Boundary || previous.WorldWidth != next.WorldWidth || previous.WorldHeight != next.WorldHeight);
-        ParticleSnapshot? before = mapWorld ? Snapshot() : null;
-        ParticleSnapshot? mapped = null;
-        if (before is not null)
-        {
-            Vector2d[] positions = before.Positions.ToArray();
-            Vector2d[] velocities = before.Velocities.ToArray();
-            for (int index = 0; index < before.Count; index++)
-            {
-                WorldBoundary.Map(ref positions[index], ref velocities[index], next);
-            }
-            mapped = new(before.Ids, positions, velocities, before.Species, before.Time, before.Step);
-        }
-        Apply(CaptureValues() with { Configuration = configuration }, mapped, mapWorld, label, before);
+        (ParticleSnapshot? before, ParticleSnapshot? mapped) = MapLiveWorld(configuration);
+        Apply(CaptureValues() with { Configuration = configuration }, mapped, mapped is not null, label, before);
     }
 
     /// <summary>Changes one directed coefficient, optionally linking its reverse as an explicit edit choice.</summary>
@@ -437,7 +426,8 @@ public sealed partial class ExperimentEditor
         return new ExperimentDefinition(name, configuration.Parameters, configuration.Matrix,
             new ParticleSnapshot(state.Ids, state.Positions, state.Velocities, state.Species), configuration.TimeStep,
             Metadata("viewer-current-state", null), configuration.Backend, configuration.WorkerCount,
-            new ExperimentProvenance(state.Time, state.Step, "current-state-rebase", Playback.Experiment.Generator, Playback.Experiment.Name));
+            new ExperimentProvenance(state.Time, state.Step, "current-state-rebase", Playback.Experiment.Generator,
+                Playback.Experiment.Name, Playback.Execution));
     }
 
     /// <summary>Captures current reusable settings and future population recipe, without evolving particle state.</summary>
@@ -449,14 +439,7 @@ public sealed partial class ExperimentEditor
     /// <summary>Captures exact initial conditions and all applied edits through the current terminal boundary.</summary>
     /// <param name="name">Human-readable label applied to the saved initial experiment, retaining exact state and provenance.</param>
     /// <returns>Pure headless session independent of presentation and wall-clock timing.</returns>
-    public SessionDefinition CaptureSession(string name)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ExperimentDefinition baseline = Playback.Experiment;
-        ExperimentDefinition named = new(name, baseline.Parameters, baseline.Matrix, baseline.InitialState, baseline.TimeStep,
-            baseline.Generator, baseline.Backend, baseline.WorkerCount, baseline.Provenance);
-        return new SessionDefinition(named, events, Playback.Boundary.Step);
-    }
+    public SessionDefinition CaptureSession(string name) => FreezeActionSession(name).Build();
 
     /// <summary>Applies a reusable preset live or explicitly generates a new population and baseline.</summary>
     /// <param name="preset">Validated reusable settings.</param>
@@ -483,8 +466,26 @@ public sealed partial class ExperimentEditor
             throw new ArgumentException("Live preset application requires the same species count. Use New population from preset explicitly.");
         }
 
+        (ParticleSnapshot? before, ParticleSnapshot? mapped) = MapLiveWorld(preset.Configuration);
         Apply(new EditorValues(preset.Configuration, preset.Generation, preset.Appearance, preset.Playback,
-            preset.Populations.ToArray()), null, false, "Apply preset live", separateAction: true);
+            preset.Populations.ToArray()), mapped, mapped is not null, "Apply preset live", before, separateAction: true);
+    }
+
+    /// <summary>Prepares the same explicit world remapping for scalar controls and complete live presets.</summary>
+    /// <remarks>Only entering/resizing a bounded world needs particle state. The returned owned
+    /// before/after payloads let one atomic action record the actual mapping and its motion undo.</remarks>
+    private (ParticleSnapshot? Before, ParticleSnapshot? Mapped) MapLiveWorld(SimulationConfiguration configuration)
+    {
+        ModelParameters previous = Configuration.Parameters;
+        ModelParameters next = configuration.Parameters;
+        if (next.Boundary is not (BoundaryKind.Periodic or BoundaryKind.Reflecting)
+            || previous.Boundary == next.Boundary && previous.WorldWidth == next.WorldWidth && previous.WorldHeight == next.WorldHeight)
+        { return (null, null); }
+        ParticleSnapshot before = Snapshot();
+        Vector2d[] positions = before.Positions.ToArray();
+        Vector2d[] velocities = before.Velocities.ToArray();
+        for (int index = 0; index < before.Count; index++) { WorldBoundary.Map(ref positions[index], ref velocities[index], next); }
+        return (before, new(before.Ids, positions, velocities, before.Species, before.Time, before.Step));
     }
 
     private void Apply(EditorValues values, ParticleSnapshot? state, bool restoreMotion, string label,
@@ -510,8 +511,9 @@ public sealed partial class ExperimentEditor
 
         if (physical || structural)
         {
+            SessionEvent change = PrepareRecordedEvent(values.Configuration, structural ? state : null, beforeState, label, generator);
             Playback.Reconfigure(values.Configuration, structural ? state : null);
-            events.Add(new SessionEvent(Playback.Boundary.Step, values.Configuration, structural ? state : null, label, generator));
+            AppendRecordedEvent(change);
         }
 
         if ((structural || separateAction) && brushStroke is null)
@@ -520,10 +522,7 @@ public sealed partial class ExperimentEditor
         }
 
         PublishValues(values);
-        if (historyPosition < history.Count)
-        {
-            history.RemoveRange(historyPosition, history.Count - historyPosition);
-        }
+        RemoveRedoHistory();
 
         if (structural)
         {
@@ -550,15 +549,16 @@ public sealed partial class ExperimentEditor
     private void RestoreHistory(UndoEntry entry, bool forward)
     {
         EditorValues target = forward ? entry.After : entry.Before;
-        ParticleSnapshot? targetState = forward ? entry.AfterState : entry.BeforeState;
+        ParticleSnapshot? targetState = (forward ? entry.AfterState : entry.BeforeState)?.Restore();
         ParticleSnapshot? replacement = targetState is null ? null : RestoreStructure(targetState, entry.RestoreMotion, entry.RestoreIdentities);
         replacement = Playback.PrepareReplacement(replacement);
         bool physical = !Configuration.EquivalentTo(target.Configuration);
         if (physical || replacement is not null)
         {
+            SessionEvent change = PrepareRecordedEvent(target.Configuration, replacement,
+                replacement is null ? null : Snapshot(), $"{(forward ? "Redo" : "Undo")}: {entry.Label}");
             Playback.Reconfigure(target.Configuration, replacement);
-            events.Add(new SessionEvent(Playback.Boundary.Step, target.Configuration, replacement,
-                $"{(forward ? "Redo" : "Undo")}: {entry.Label}"));
+            AppendRecordedEvent(change);
         }
 
         PublishValues(target);
@@ -617,13 +617,11 @@ public sealed partial class ExperimentEditor
 
     private void AddHistory(UndoEntry entry)
     {
-        if (historyPosition < history.Count)
-        {
-            history.RemoveRange(historyPosition, history.Count - historyPosition);
-        }
-
+        RemoveRedoHistory();
         history.Add(entry);
+        retainedUndoBytes += entry.StorageBytes;
         historyPosition++;
+        TrimUndoBudget();
     }
 
     private void ReplaceBaseline(ExperimentDefinition experiment, bool pause)
@@ -639,7 +637,11 @@ public sealed partial class ExperimentEditor
 
     private void ClearTimeline()
     {
+        BaselineVersion++;
         events.Clear();
+        recordedBytes = 0;
+        evictedUndoActions = 0;
+        retainedUndoBytes = 0;
         ClearCapturedTimeline();
         history.Clear();
         historyPosition = 0;
@@ -675,6 +677,7 @@ public sealed partial class ExperimentEditor
         && left.ShowHelp == right.ShowHelp && left.ShowOverlay == right.ShowOverlay
         && left.ShowEditor == right.ShowEditor && left.UiScale == right.UiScale
         && left.ParticleSizeMode == right.ParticleSizeMode && left.WorldParticleRadius == right.WorldParticleRadius && left.Camera == right.Camera
+        && left.Visuals == right.Visuals
         && left.SpeciesColors.SequenceEqual(right.SpeciesColors);
 
     private static bool SameState(ParticleSnapshot left, ParticleStateView right) =>
@@ -798,6 +801,18 @@ public sealed partial class ExperimentEditor
     private sealed record EditorValues(SimulationConfiguration Configuration, GenerationSettings Generation,
         AppearanceSettings Appearance, PlaybackSettings Playback, int[] Populations);
 
-    private sealed record UndoEntry(string Label, EditorValues Before, EditorValues After,
-        ParticleSnapshot? BeforeState, ParticleSnapshot? AfterState, bool RestoreMotion, HashSet<long>? RestoreIdentities = null);
+    /// <summary>Keeps exact independent structural checkpoints compressed outside numerical stepping.</summary>
+    private sealed class UndoEntry(string label, EditorValues before, EditorValues after,
+        ParticleSnapshot? beforeState, ParticleSnapshot? afterState, bool restoreMotion, HashSet<long>? restoreIdentities = null)
+    {
+        internal string Label { get; } = label;
+        internal EditorValues Before { get; } = before;
+        internal EditorValues After { get; } = after;
+        internal CompressedParticleSnapshot? BeforeState { get; } = beforeState is null ? null : CompressedParticleSnapshot.Pack(beforeState);
+        internal CompressedParticleSnapshot? AfterState { get; } = afterState is null ? null : CompressedParticleSnapshot.Pack(afterState);
+        internal bool RestoreMotion { get; } = restoreMotion;
+        internal HashSet<long>? RestoreIdentities { get; } = restoreIdentities is null ? null : new(restoreIdentities);
+        internal long StorageBytes => 256 + (BeforeState?.StorageBytes ?? 0) + (AfterState?.StorageBytes ?? 0)
+            + 8L * (RestoreIdentities?.Count ?? 0);
+    }
 }

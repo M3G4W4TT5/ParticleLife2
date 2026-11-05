@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using ParticleLife.Core.Experiments;
@@ -6,9 +7,21 @@ using ParticleLife.Core.State;
 using ParticleLife.MonoGame.Editor;
 using ParticleLife.Viewer;
 
+if (args.Length == 1 && args[0] == "--gpu-measurement-checks")
+{
+    GpuMeasurementChecks.Run();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--save-worker")
 {
     Environment.ExitCode = StorageChecks.RunWorker(args);
+    return;
+}
+
+if (args.Length > 0 && args[0] == "--replay-completion-checks")
+{
+    ReplayCompletionChecks.Run();
     return;
 }
 
@@ -17,6 +30,7 @@ Vector2d position = new(0.25, 0.75);
 Vector2 displayPosition = new((float)position.X, (float)position.Y);
 Console.WriteLine($"Core net10.0 / MonoGame {typeof(Game).Assembly.GetName().Version}: {displayPosition}");
 RenderingChecks.Run();
+GpuMeasurementChecks.Run();
 
 // Exercise the real native numeric widget against the actual editor without creating a Game,
 // SDL window, texture or graphics device. These checks complement native interaction checks.
@@ -320,12 +334,14 @@ presentedPanel.PrepareForOpen(pointerHeld: false);
 presentedPanel.Update(MouseAt(presentedPoint, pressed: true, wheel: -960), 1, []);
 Require(presentedActions == 2, "Keyboard opening discarded the first fresh pointer click.");
 
-// Reproduce the actual small-window overlap: Files at y218 sits above Save from here after opening.
+// A held Files press must not activate the newly opened compact library. Then exercise
+// its current keyboard Save pattern workflow, including scrolling a short modal.
 string modalDirectory = Path.GetFullPath(Path.Combine("artifacts", "modal-pointer-check", Guid.NewGuid().ToString("N")));
+Directory.CreateDirectory(modalDirectory);
 using (PlaybackController modalPlayback = new(PresetGenerator.Create(PresetKind.Random, 4, 2, 31)))
 {
     ExperimentEditor modalEditor = new(modalPlayback);
-    LiveExperimentEditor modalSurface = new(modalEditor, modalDirectory, _ => { }, () => { });
+    using LiveExperimentEditor modalSurface = new(modalEditor, modalDirectory, _ => { }, () => { });
     Rectangle smallInspector = new(14, 165, 392, 121);
     Rectangle smallBrowser = new(14, 60, 392, 264);
     Point filesAndSave = new(330, 218);
@@ -336,9 +352,35 @@ using (PlaybackController modalPlayback = new(PresetGenerator.Create(PresetKind.
     Require(Directory.GetFiles(modalDirectory, "*.json").Length == 0,
         "Holding the compact Files opening click accidentally saved an experiment.");
     modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
-    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave, pressed: true), []);
-    Require(Directory.GetFiles(modalDirectory, "*.json").Length == 2,
-        "A real subsequent Save from here click did not save the experiment and companion.");
+    for (int index = 0; index < 8; index++)
+    {
+        modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+            [UiInputEvent.KeyPress(Keys.Tab, false, false)]);
+    }
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+        [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
+    for (int index = 0; index < 5; index++)
+    {
+        modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+            [UiInputEvent.KeyPress(Keys.Tab, false, false)]);
+    }
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+        [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
+    // File encoding/publication is asynchronous. Closing the modal must not strand completion.
+    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
+        [UiInputEvent.KeyPress(Keys.Escape, false, false)]);
+    Require(!modalSurface.IsModal, "The library did not close while its save completed in the background.");
+    long saveStarted = Stopwatch.GetTimestamp();
+    while (Directory.GetFiles(modalDirectory, "*.discovery.json").Length == 0
+        && Stopwatch.GetElapsedTime(saveStarted).TotalSeconds < 10)
+    {
+        modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
+        Thread.Sleep(1);
+    }
+    Require(Directory.GetFiles(modalDirectory, "*.experiment.json").Length == 1
+        && Directory.GetFiles(modalDirectory, "*.viewer.json").Length == 1
+        && Directory.GetFiles(modalDirectory, "*.discovery.json").Length == 1,
+        "The compact library's keyboard Save pattern workflow did not save the experiment, companion and preview.");
 }
 
 // At high UI scale a small native pane can be only 80 logical pixels high.
@@ -412,6 +454,7 @@ Require(editor.Configuration.Matrix.SpeciesCount == 2 && recipePanel.Graph is no
     "Native recipe switch failed to refresh the smaller matrix.");
 Console.WriteLine("Native widget integration: compact exact input, dropdown routing, validation, live slider/replay/undo, matrix navigation and built-in recipes passed without graphics.");
 StartupChecks.Run();
+ReplayCompletionChecks.Run();
 await StorageChecks.RunAsync();
 
 static MouseState MouseAt(Point point, bool pressed = false, int wheel = 0) => new(point.X, point.Y, wheel,

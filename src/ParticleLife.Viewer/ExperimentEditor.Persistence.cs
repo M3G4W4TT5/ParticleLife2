@@ -213,6 +213,7 @@ public sealed partial class ExperimentEditor
             Playback.AdoptReplay(completed, session.InitialExperiment);
             ClearTimeline();
             events.AddRange(session.Events);
+            recordedBytes = session.Events.Sum(EstimateActionBytes);
             AdvanceRecordedIdentities(session);
 
             if (pendingReplaySettings is ViewerSettings settings)

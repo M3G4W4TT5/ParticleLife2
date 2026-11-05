@@ -10,11 +10,18 @@ try
         return 0;
     }
 
-    if (args.Length == 2 && args[0] == "--gpu-checks")
+    if (args.Length == 2 && args[0] is "--gpu-checks" or "--gpu-presentation-checks")
     {
-        using GpuCorrectnessGame checks = new(args[1]);
+        using GpuCorrectnessGame checks = new(args[1], presentationOnly: args[0] == "--gpu-presentation-checks");
         checks.Run();
         return checks.ExitCode;
+    }
+
+    if (args.Length == 4 && args[0] is "--gpu-capacity" or "--gpu-profile-first-step")
+    {
+        using GpuCapacityGame capacity = new(args[1], args[2], args[3], profileFirstStep: args[0] == "--gpu-profile-first-step");
+        capacity.Run();
+        return capacity.ExitCode;
     }
 
     ViewerOptions options = ViewerOptions.Parse(args);

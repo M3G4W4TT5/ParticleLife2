@@ -46,6 +46,15 @@ Give each case an exact setup and repeatable actions before execution. Use Pendi
 
 ## Findings and follow-up checks
 
+### P6 observation and capture cases (pending)
+
+Repeat these cases on CPU and GPU after integration, with a two-species asymmetric pattern and a practical large evolved fixture. They remain **Pending**.
+
+- V15: enable population and spatial-bin maps, change cadence from 0.1 to 2 seconds and toggle sampled speed statistics. Check the source step/time, receipt age, outside count and cost. Disable observations and tracking together and confirm sampling/readback stops. On GPU verify bounded histogram metadata reads rather than full particle captures.
+- V16: compare opacity 0/0.4/1, both blends and all four velocity shading modes. Enable trails, pause for ten seconds, then resume; the pause must not erase trails through elapsed wall time. Pan/zoom/recolour to clear stale trails, vary glow strength/spread and disable both effects. Numerical timestep and count must remain unchanged.
+- V17: pick a moving region, follow it across a periodic seam, pan/zoom away, recenter, stop, and select an empty or too-small region. The indicator and lost-contact message must agree with the sampled bins; the camera never changes particle values.
+- V21: save PNG and a four-second 720px/10fps GIF, resize during recording, and finish a second recording early. Inspect both files with an independent image viewer/decoder for orientation, colour, framing, animation duration and letterboxing. Compare displayed skipped-frame/readback-cost counters. Close during a recording and confirm either a complete published GIF or a clear failure, with no partial file presented as successful. Reject an over-budget quality request without starting it.
+
 ### P4 concrete pending cases
 
 All cases remain **Pending** until the consolidated review, on CPU and GPU after integration.

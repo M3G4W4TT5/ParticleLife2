@@ -43,13 +43,7 @@ public sealed partial class ExperimentEditor
     /// <summary>Captures the mandatory terminal boundary after its owner has explicitly made state observable.</summary>
     /// <param name="name">Saved action-session name.</param>
     /// <returns>Actual values plus action history and precision/device provenance; no numerical replay occurs.</returns>
-    public CapturedSessionDefinition CaptureRecordedSession(string name)
-    {
-        SimulationCapture terminal = new(Configuration, Snapshot(), Playback.Execution, events.Count, "terminal");
-        List<SimulationCapture> recorded = captures.Select(capture => capture.Restore()).ToList();
-        recorded.Add(terminal);
-        return new(CaptureSession(name), recorded, executionTransitions);
-    }
+    public CapturedSessionDefinition CaptureRecordedSession(string name) => FreezeCapturedSession(name).Build();
 
     /// <summary>Restores the exact terminal values on CPU, retaining the source action history and its clock.</summary>
     /// <param name="session">Already validated captured session; float32 widens exactly to CPU double storage.</param>
@@ -59,26 +53,57 @@ public sealed partial class ExperimentEditor
     {
         ArgumentNullException.ThrowIfNull(session);
         EnsureNotReplaying();
+        ApplyCapturedRestore(PrepareCapturedRestore(session));
+    }
+
+    /// <summary>Freezes only immutable references/arrays and the actual terminal copy at the completed owner boundary.</summary>
+    /// <remarks>Checkpoint decompression, action validation and full capture validation belong to Build on the file worker.</remarks>
+    private FrozenCapturedSession FreezeCapturedSession(string name) => new(FreezeActionSession(name), captures.ToArray(),
+        executionTransitions.ToArray(), Configuration, Snapshot(), Playback.Execution);
+
+    /// <summary>Packs retained capture storage and validates its budget without accessing any active editor or creating CPU resources.</summary>
+    private static PreparedCapturedRestore PrepareCapturedRestore(CapturedSessionDefinition session)
+    {
         SimulationCapture terminal = session.TerminalCapture;
-        List<RecordedCapture> restoredCaptures = session.Captures.Select(capture => new RecordedCapture(capture.Configuration,
-            CompressedParticleSnapshot.Pack(capture.State), capture.Execution, capture.AppliedEventCount, capture.Reason)).ToList();
-        ExecutionProvenance destination = ExecutionProvenance.Cpu(terminal.Configuration);
-        restoredCaptures.Add(new(terminal.Configuration, restoredCaptures[^1].State, destination, session.Actions.Events.Count, "transfer"));
-        long restoredBytes = restoredCaptures.Sum(capture => capture.StorageBytes);
-        if (restoredBytes > CaptureBudgetBytes)
+        List<RecordedCapture> restoredCaptures = [];
+        long restoredBytes = 0;
+        foreach (SimulationCapture capture in session.Captures)
         {
-            throw new InvalidOperationException("The captured session exceeds the 64 MiB retained checkpoint budget; the active experiment is unchanged.");
+            Include(new(capture.Configuration, CompressedParticleSnapshot.Pack(capture.State),
+                capture.Execution, capture.AppliedEventCount, capture.Reason));
         }
+        ExecutionProvenance destination = ExecutionProvenance.Cpu(terminal.Configuration);
+        Include(new(terminal.Configuration, restoredCaptures[^1].State, destination, session.Actions.Events.Count, "transfer"));
+        ExecutionTransition transfer = new(terminal.State.Step, terminal.State.Time, session.Actions.Events.Count, terminal.Execution, destination, false);
+        return new(session.Actions, terminal, restoredCaptures.ToArray(), session.Transitions.Append(transfer).ToArray(), restoredBytes,
+            session.Actions.Events.Sum(EstimateActionBytes), GreatestRecordedIdentity(session.Actions));
+
+        void Include(RecordedCapture capture)
+        {
+            if (capture.StorageBytes > CaptureBudgetBytes - restoredBytes)
+            {
+                throw new InvalidOperationException("The captured session exceeds the 64 MiB retained checkpoint budget; the active experiment is unchanged.");
+            }
+            restoredCaptures.Add(capture);
+            restoredBytes += capture.StorageBytes;
+        }
+    }
+
+    /// <summary>Creates CPU resources and publishes only already packed/validated immutable restore data on the owner.</summary>
+    private void ApplyCapturedRestore(PreparedCapturedRestore prepared)
+    {
+        EnsureNotReplaying();
+        SimulationCapture terminal = prepared.Terminal;
         Simulation candidate = new(terminal.State, terminal.Configuration.Parameters, terminal.Configuration.Matrix,
             terminal.Configuration.TimeStep, terminal.Configuration.Backend, terminal.Configuration.WorkerCount);
-        Playback.AdoptReplay(candidate, session.Actions.InitialExperiment);
+        Playback.AdoptReplay(candidate, prepared.Actions.InitialExperiment);
         ClearTimeline();
-        events.AddRange(session.Actions.Events);
-        AdvanceRecordedIdentities(session.Actions);
-        captures.AddRange(restoredCaptures);
-        captureBytes = restoredBytes;
-        executionTransitions.AddRange(session.Transitions);
-        executionTransitions.Add(new(terminal.State.Step, terminal.State.Time, events.Count, terminal.Execution, destination, false));
+        events.AddRange(prepared.Actions.Events);
+        recordedBytes = prepared.ActionBytes;
+        if (prepared.GreatestIdentity >= 0) { AdvanceIdentityHighWater([prepared.GreatestIdentity]); }
+        captures.AddRange(prepared.Captures);
+        captureBytes = prepared.CaptureBytes;
+        executionTransitions.AddRange(prepared.Transitions);
         Playback.SetPaused(true);
         Revision++;
     }
@@ -92,10 +117,15 @@ public sealed partial class ExperimentEditor
             ExecutionProvenance.Cpu(capture.Configuration), capture.AppliedEventCount, "transfer"), required: true)!;
         Playback.ReturnToCpu(capture.State, capture.Configuration);
         if (events.Count > capture.AppliedEventCount) { events.RemoveRange(capture.AppliedEventCount, events.Count - capture.AppliedEventCount); }
+        recordedBytes = events.Sum(EstimateActionBytes);
         history.Clear();
+        retainedUndoBytes = 0;
+        evictedUndoActions = 0;
         historyPosition = 0;
         gestureBefore = null;
+        gestureChanged = false;
         brushStroke = null;
+        BaselineVersion++;
         Playback.SetPaused(true);
         populations = GetCurrentPopulations();
         captureNotice = $"Recovered captured step {capture.State.Step}; uncaptured continuation was discarded.";
@@ -116,10 +146,12 @@ public sealed partial class ExperimentEditor
         ExecutionProvenance source = Playback.Execution;
         ParticleSnapshot actual = SnapshotOf(candidate.ObserveCaptured());
         bool converted = !SameState(actual, Playback.Observe());
+        SessionEvent? conversion = converted ? PrepareRecordedEvent(Configuration, actual, Snapshot(),
+            "Convert particle state to GPU float32") : null;
         SimulationCapture destination = new(Configuration, actual, candidate.Execution, events.Count + (converted ? 1 : 0), "transfer");
         RecordedCapture packed = PrepareCapture(destination, required: true)!;
         Playback.AdoptResident(candidate);
-        if (converted) { events.Add(new(Playback.Boundary.Step, Configuration, actual, "Convert particle state to GPU float32")); }
+        if (conversion is not null) { AppendRecordedEvent(conversion); }
         AddCapture(packed);
         executionTransitions.Add(new(actual.Step, actual.Time, events.Count, source, candidate.Execution, converted));
         Revision++;
@@ -140,21 +172,34 @@ public sealed partial class ExperimentEditor
     private static ParticleSnapshot SnapshotOf(ParticleStateView state) =>
         new(state.Ids, state.Positions, state.Velocities, state.Species, state.Time, state.Step);
 
-    /// <summary>Reserves every recorded identity, including particles removed before the restored boundary.</summary>
-    /// <remarks>Integration does not allocate identities. Loading only terminal membership would reuse
-    /// previously allocated identities after a removal, making later edits ambiguous in the same timeline.</remarks>
+    /// <summary>Reserves recorded identities after CPU action replay has published its terminal state.</summary>
     private void AdvanceRecordedIdentities(SessionDefinition session)
     {
-        AdvanceIdentityHighWater(session.InitialExperiment.InitialState.Ids);
+        long greatest = GreatestRecordedIdentity(session);
+        if (greatest >= 0) { AdvanceIdentityHighWater([greatest]); }
+    }
+
+    /// <summary>Finds the identity high-water mark, including particles removed before the restored boundary.</summary>
+    /// <remarks>Integration does not allocate identities. Loading only terminal membership would reuse
+    /// previously allocated identities after a removal, making later edits ambiguous in the same timeline.</remarks>
+    private static long GreatestRecordedIdentity(SessionDefinition session)
+    {
+        long maximum = -1;
+        Include(session.InitialExperiment.InitialState.Ids);
         foreach (SessionEvent change in session.Events)
         {
-            if (change.ReplacementState is { } replacement) { AdvanceIdentityHighWater(replacement.Ids); }
+            if (change.ReplacementState is { } replacement) { Include(replacement.Ids); }
             if (change.StateDelta is { } delta)
             {
-                AdvanceIdentityHighWater(delta.RemovedIds);
-                AdvanceIdentityHighWater(delta.Updates.Ids);
-                AdvanceIdentityHighWater(delta.Additions.Ids);
+                Include(delta.RemovedIds);
+                Include(delta.Updates.Ids);
+                Include(delta.Additions.Ids);
             }
+        }
+        return maximum;
+        void Include(ReadOnlySpan<long> identities)
+        {
+            foreach (long identity in identities) { maximum = Math.Max(maximum, identity); }
         }
     }
 
@@ -172,7 +217,10 @@ public sealed partial class ExperimentEditor
         ParticleSnapshot actual = Snapshot();
         if (!SameState(actual, Playback.Experiment.InitialState.Observe()))
         {
-            events.Add(new(actual.Step, Configuration, actual, "Convert initial particle state to GPU float32"));
+            // A fresh baseline must retain its actual precision conversion even when a previously
+            // selected recording limit is smaller. Its accounted payload blocks later physical edits;
+            // neither the baseline nor an already-applied conversion is silently omitted.
+            AppendRecordedEvent(new(actual.Step, Configuration, actual, "Convert initial particle state to GPU float32"));
         }
         StoreCapture(new(Configuration, actual, resident.Execution, events.Count, "transfer"), required: true);
     }
@@ -216,4 +264,21 @@ public sealed partial class ExperimentEditor
         internal long StorageBytes => State.StorageBytes + 256;
         internal SimulationCapture Restore() => new(Configuration, State.Restore(), Execution, AppliedEvents, Reason);
     }
+
+    /// <summary>Owns one save boundary without retaining an editor or eagerly decompressing its checkpoint history.</summary>
+    private sealed record FrozenCapturedSession(FrozenActionSession Actions, RecordedCapture[] Captures, ExecutionTransition[] Transitions,
+        SimulationConfiguration Configuration, ParticleSnapshot TerminalState, ExecutionProvenance Execution)
+    {
+        internal CapturedSessionDefinition Build()
+        {
+            SessionDefinition actions = Actions.Build();
+            List<SimulationCapture> restored = Captures.Select(capture => capture.Restore()).ToList();
+            restored.Add(new(Configuration, TerminalState, Execution, Actions.Events.Length, "terminal"));
+            return new(actions, restored, Transitions);
+        }
+    }
+
+    /// <summary>Contains no simulation resource; worker preparation owns packing/budget checks before owner publication.</summary>
+    private sealed record PreparedCapturedRestore(SessionDefinition Actions, SimulationCapture Terminal, RecordedCapture[] Captures,
+        ExecutionTransition[] Transitions, long CaptureBytes, long ActionBytes, long GreatestIdentity);
 }

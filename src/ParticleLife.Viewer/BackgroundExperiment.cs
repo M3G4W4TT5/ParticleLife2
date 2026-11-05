@@ -373,7 +373,7 @@ public sealed class BackgroundExperiment : IDisposable
             }
         }
         if (destination is null) { return; }
-        destination.Copy(state, editor.Configuration, editor.Playback.PublicationVersion, ++frameSequence);
+        destination.Copy(state, editor.Configuration, editor.Playback.PublicationVersion, ++frameSequence, editor.BaselineVersion);
         lock (gate) { publishedFrame = destination; }
         Interlocked.Exchange(ref renderRequested, 0);
     }
@@ -411,7 +411,10 @@ public sealed class BackgroundExperiment : IDisposable
             editor.Playback.DirectFallbackSteps, editor.Playback.AccumulationFallbackSteps, editor.Playback.LastStatistics,
             editor.Playback.LatestDiagnostic, editor.Playback.DroppedPlaybackSeconds, editor.IsReplaying,
             editor.ReplayCompletedStep, editor.ReplayTerminalStep, applied, error, stepsPerSecond, simulationSpeed)
-        { Execution = editor.Playback.Execution, CaptureRecording = editor.CaptureRecording };
+        {
+            Recording = editor.Recording, BaselineVersion = editor.BaselineVersion,
+            Execution = editor.Playback.Execution, CaptureRecording = editor.CaptureRecording
+        };
     }
 
     /// <summary>Cancels queued work and joins the worker after its current completed boundary.</summary>
@@ -448,6 +451,10 @@ public sealed record EditorPublication(
     long ReplayCompletedStep, long ReplayTerminalStep, long AppliedCommand, string? Error,
     double StepsPerSecond, double SimulationSpeed)
 {
+    /// <summary>Gets storage policy and retained action/undo payload at this completed publication.</summary>
+    public RecordingStatus Recording { get; init; } = RecordingStatus.Empty;
+    /// <summary>Gets the baseline epoch of this completed publication, independent of frame sequence.</summary>
+    public long BaselineVersion { get; init; }
     /// <summary>Gets actual hardware and precision; CPU search settings remain in Configuration.</summary>
     public ExecutionProvenance Execution { get; init; } = ExecutionProvenance.Cpu(Configuration);
     /// <summary>Gets explicit capture cadence, storage and latest recoverable boundary.</summary>
@@ -490,6 +497,8 @@ public sealed class RenderFrameLease : IDisposable
     public double Time => storage.Time;
     /// <summary>Gets the monotonically increasing CPU publication sequence.</summary>
     public long Sequence => storage.Sequence;
+    /// <summary>Gets the baseline epoch belonging to this exact particle copy.</summary>
+    public long BaselineVersion => storage.BaselineVersion;
     /// <summary>Gets the configuration belonging to this exact particle copy.</summary>
     public SimulationConfiguration Configuration => storage.Configuration!;
     /// <summary>Releases the storage for later reuse; repeated disposal is harmless.</summary>
@@ -504,10 +513,10 @@ internal sealed class RenderFrameStorage
     internal Vector2d[] Velocities = [];
     internal int[] Species = [];
     internal int Count, Readers;
-    internal long Step = -1, Version, Sequence;
+    internal long Step = -1, Version, Sequence, BaselineVersion;
     internal double Time;
     internal SimulationConfiguration? Configuration;
-    internal void Copy(ParticleStateView state, SimulationConfiguration configuration, long version, long sequence)
+    internal void Copy(ParticleStateView state, SimulationConfiguration configuration, long version, long sequence, long baselineVersion = 0)
     {
         if (Positions.Length < state.Count)
         {
@@ -525,6 +534,7 @@ internal sealed class RenderFrameStorage
         Step = state.Step;
         Version = version;
         Sequence = sequence;
+        BaselineVersion = baselineVersion;
         Configuration = configuration;
     }
 }

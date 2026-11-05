@@ -14,7 +14,7 @@ namespace ParticleLife.MonoGame.Editor;
 /// <summary>Connects retained native controls to the shared, graphics-free experiment editor.</summary>
 /// <remarks>Owns only UI drafts and selection. The controller validates and owns numerical changes,
 /// undo payloads and replay events. Draw never edits a model or retains a state observation.</remarks>
-internal sealed class LiveExperimentEditor
+internal sealed class LiveExperimentEditor : IDisposable
 {
     private readonly EditorSession editor;
     private readonly UiPanel panel;
@@ -25,6 +25,7 @@ internal sealed class LiveExperimentEditor
     private readonly ExperimentFileBrowser browser;
     private readonly ExplorationControls exploration;
     private long observedRevision = -1;
+    private long observedBaseline = -1;
     private bool symmetry;
     private bool populationDraft;
     private bool preserveDensity;
@@ -43,8 +44,6 @@ internal sealed class LiveExperimentEditor
     private string recipePopulationSummary = string.Empty;
     private int selectedTab;
     private ButtonState currentMouseButton;
-    private bool observedReplay;
-    private bool replayCancelPending;
     private readonly UiSection recipes;
     private readonly UiSection interactions;
     private readonly UiSection forces;
@@ -65,6 +64,7 @@ internal sealed class LiveExperimentEditor
     internal Rectangle BrowserBody => browser.Body;
     internal bool BrushEnabled => exploration.BrushEnabled;
     internal BrushSettings Brush => exploration.Brush;
+    internal VisualToolsControls VisualTools { get; }
     internal void FitCamera() => exploration.Fit();
 
     /// <summary>Installs optional native creation only after the graphics context exists.</summary>
@@ -75,7 +75,8 @@ internal sealed class LiveExperimentEditor
     {
     }
 
-    internal LiveExperimentEditor(EditorSession editor, string saveDirectory, Action<string> report, Action printTimings)
+    internal LiveExperimentEditor(EditorSession editor, string saveDirectory, Action<string> report, Action printTimings,
+        Func<string, string?>? updateRecent = null)
     {
         this.editor = editor;
         this.report = report;
@@ -85,7 +86,7 @@ internal sealed class LiveExperimentEditor
         exploration = new ExplorationControls(editor, matrix, () => symmetry, report);
         matrix.ColourRequested = SelectColour;
         Graph = new ForceGraph(editor, matrix);
-        browser = new ExperimentFileBrowser(editor, saveDirectory, report, () => SuppressPlayback = true, ClearDrafts);
+        browser = new ExperimentFileBrowser(editor, saveDirectory, report, () => SuppressPlayback = true, ClearDrafts, updateRecent);
         panel.Toolbar.Add(new UiRow(
             new UiButton(() => "Undo", () => editor.Undo(), "Undo at the current clock. Membership undo preserves surviving motion and restores removed particles from saved state; resampling undo restores captured positions/velocities.", () => editor.CanUndo),
             new UiButton(() => "Redo", () => editor.Redo(), "Reapply an undone editor operation at the current boundary. A new edit clears redo.", () => editor.CanRedo),
@@ -108,6 +109,7 @@ internal sealed class LiveExperimentEditor
         BuildGeneration();
         BuildSimulation();
         BuildAppearance();
+        VisualTools = new VisualToolsControls(editor, appearance, discoveries);
         world.Children.AddRange(population.Children.Take(5));
         population.Children.RemoveRange(0, 5);
         world.Children.Insert(0, new UiDropdown("World boundary", ["Soft walls", "Open", "Reflecting", "Periodic"],
@@ -125,12 +127,13 @@ internal sealed class LiveExperimentEditor
         exploration.AddPopulationTools(population, species => populationIndex = Math.Min(species, populationSpecies - 1), SelectColour);
         exploration.AddIndependentGeneration(generation);
         exploration.AddPaletteTools(appearance);
-        UiSection advanced = new("Advanced CPU and measurements", false);
-        advanced.Children.AddRange(simulation.Children.Skip(2));
-        simulation.Children.RemoveRange(2, simulation.Children.Count - 2);
+        UiSection advanced = new("CPU search and measurements", false);
+        advanced.Children.AddRange(simulation.Children.Skip(7));
+        simulation.Children.RemoveRange(7, simulation.Children.Count - 7);
         simulation.Children.Add(advanced);
         discoveries.Children.Add(new UiLabel(() => "Preset: future recipe. From here: exact state. Initial: reset baseline. Session: every applied edit.", 50));
         discoveries.Children.Add(Button(() => "Browse saved discoveries", OpenFiles, "Open named save/load workflows. Existing destinations are never overwritten."));
+        RecordingControls.AddTo(discoveries, editor, report);
         panel.Toolbar.Add(new UiRow(
             new UiButton(() => "Particles", () => SelectTab(0), "Live populations, independent generators and direct brushes.", selected: () => selectedTab == 0),
             new UiButton(() => "Interactions", () => SelectTab(1), "Forces and directed matrix editing.", selected: () => selectedTab == 1),
@@ -427,7 +430,8 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(Number("Playback speed [x]", () => editor.Playback.PlaybackSpeed,
             value => { editor.SetPlayback(editor.Playback.Settings with { Speed = value }); SuppressPlayback = true; }, 1, 0.05, 8,
             "Wall-clock speed only; does not alter dt or equations. Changing speed clears pending playback time.", log: true));
-        simulation.Children.Add(new UiLabel(() => $"Execution: {editor.Publication.Execution.Hardware} / {editor.Publication.Execution.Precision}. {Environment.ProcessorCount} logical CPU processors.", 44, UiCanvas.Accent));
+        simulation.Children.Add(new UiLabel(() => $"Execution: {editor.Publication.Execution.Hardware} / {editor.Publication.Execution.Precision}. "
+            + (editor.Publication.Execution.Device ?? $"{Environment.ProcessorCount} logical CPU processors."), 64, UiCanvas.Accent));
         simulation.Children.Add(new UiRow(
             new UiButton(() => "CPU double", () => editor.SwitchToCpu(),
                 "Pause, explicitly capture actual GPU values, then continue on CPU. Float values widen exactly; future trajectories may differ.",
@@ -446,10 +450,10 @@ internal sealed class LiveExperimentEditor
             "Explicit periodic full-state capture cadence in completed steps; zero disables periodic copies. Saving a GPU session always captures its terminal state.", integer: true));
         simulation.Children.Add(new UiLabel(() => editor.Publication.CaptureRecording is { } status
             ? $"Capture: step {status.LatestStep?.ToString() ?? "none"}; {status.Count} retained, {status.StorageBytes / 1048576.0:F1} MiB. Full GPU reads {editor.Publication.FullStateReadbacks}. {status.Notice}" : "No captured state yet.", 68));
-        simulation.Children.Add(new UiDropdown("Neighbour search", ["Direct reference", "Uniform grid"],
+        simulation.Children.Add(new UiDropdown("CPU neighbour search", ["Direct reference", "Uniform grid"],
             () => editor.Configuration.Backend == ForceBackend.Direct ? 0 : 1,
             index => ConfigurationChange(backend: index == 0 ? ForceBackend.Direct : ForceBackend.UniformGrid, workers: 1),
-            "A backend switch selects one worker. Choose grid workers separately. Rules and completed state are retained."));
+            "Selects CPU search and one CPU worker. GPU execution uses its resident grid; this CPU choice is retained for a later CPU transfer. Rules and completed state are unchanged."));
         simulation.Children.Add(Number("Workers", () => editor.Configuration.WorkerCount,
             value => ConfigurationChange(workers: Integer(value)), 1, 1, ForceWorkerConfiguration.MaximumWorkers,
             "Explicit CPU workers including caller, 1..64. Direct requires exactly one. More workers can increase overhead; compare your scene. The resolved count is saved and shown below.", integer: true));
@@ -467,7 +471,9 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(Number("Connectivity R [L]", () => editor.Playback.DiagnosticRadius ?? Parameters.Cutoff,
             value => editor.SetPlayback(editor.Playback.Settings with { DiagnosticRadius = value }), 0.1, 0.001, 2,
             "Finite positive diagnostic connection length. Entering a value selects an independent radius and clears previous samples.", log: true));
-        simulation.Children.Add(new UiLabel(() => $"Requested {editor.Configuration.Backend}/{editor.Configuration.WorkerCount}; applied {editor.Publication.Configuration.Backend}/{editor.Publication.Configuration.WorkerCount}; actual {editor.Playback.LastExecution?.ActualBackend.ToString() ?? "UNSTEPPED"}/{editor.Playback.LastExecution?.ActualWorkerCount.ToString() ?? "-"}. Fallback {editor.Playback.LastExecution?.FallbackReason.ToString() ?? "NONE"}.", 78));
+        simulation.Children.Add(new UiLabel(() => editor.Resident is not null
+            ? $"GPU resident grid / float32. Saved CPU choice: {editor.Configuration.Backend}/{editor.Configuration.WorkerCount}. GPU summaries report speed; CPU connectivity analysis is inactive."
+            : $"CPU requested {editor.Configuration.Backend}/{editor.Configuration.WorkerCount}; applied {editor.Publication.Configuration.Backend}/{editor.Publication.Configuration.WorkerCount}; actual {editor.Playback.LastExecution?.ActualBackend.ToString() ?? "UNSTEPPED"}/{editor.Playback.LastExecution?.ActualWorkerCount.ToString() ?? "-"}. Fallback {editor.Playback.LastExecution?.FallbackReason.ToString() ?? "NONE"}.", 78));
         simulation.Children.Add(new UiLabel(() => editor.HasPendingCommands
             ? $"Queued: {editor.PendingCommands} commands. Apply after the current completed boundary."
             : editor.IsBusy ? "Simulation work in progress; controls remain available." : "Completed boundary ready.", 42, UiCanvas.Accent));
@@ -620,6 +626,14 @@ internal sealed class LiveExperimentEditor
 
     private void Synchronize()
     {
+        long baseline = editor.Publication.BaselineVersion;
+        if (observedBaseline != baseline)
+        {
+            // Successful reset/load/replay publishes a new baseline even if no UI frame saw it running.
+            // Ordinary edits, rejected actions and cancelled/failed replay retain their original epoch.
+            observedBaseline = baseline;
+            ClearDrafts();
+        }
         if (observedRevision == editor.Revision)
         {
             return;
@@ -646,22 +660,7 @@ internal sealed class LiveExperimentEditor
         IReadOnlyList<UiInputEvent> input, bool pointerControl = false, bool pointerShift = false)
     {
         editor.Pump();
-        if (editor.IsBackground)
-        {
-            bool replaying = editor.IsReplaying;
-            if (observedReplay && !replaying)
-            {
-                string status = editor.Publication.Error is not null
-                    ? "Replay failed: " + editor.Publication.Error + ". Previous completed experiment retained."
-                    : replayCancelPending ? "Replay cancelled. Previous completed experiment retained, paused."
-                    : "Replay completed at the recorded terminal boundary, paused.";
-                browser.SetStatus(status);
-                report(status);
-                if (!replayCancelPending && editor.Publication.Error is null) { ClearDrafts(); }
-                replayCancelPending = false;
-            }
-            observedReplay = replaying;
-        }
+        browser.Pump();
         currentMouseButton = mouse.LeftButton;
         SuppressPlayback = false;
         ConsumedKeyboard = false;
@@ -674,12 +673,7 @@ internal sealed class LiveExperimentEditor
             SuppressPlayback = true;
             if (input.Any(entry => !entry.IsText && entry.Key == Keys.Escape))
             {
-                editor.CancelSessionReplay();
-                replayCancelPending = editor.IsBackground;
-                string status = editor.IsBackground ? "Replay cancellation queued; waiting for the current step to finish."
-                    : "Replay cancelled. Previous completed experiment retained, paused.";
-                browser.SetStatus(status);
-                report(status);
+                browser.CancelReplay();
             }
             else
             {
@@ -688,16 +682,14 @@ internal sealed class LiveExperimentEditor
                     bool complete = editor.AdvanceSessionReplay(8);
                     if (complete)
                     {
-                        browser.SetStatus("Replay complete at the recorded terminal boundary, paused. Close the library to inspect or continue experimenting.");
-                        report("Session replay completed at the recorded terminal boundary; paused. Continue experimenting or reset to its starting baseline.");
-                        ClearDrafts();
+                        browser.RefreshReplayStatus();
                         Synchronize();
                     }
                 }
                 catch (Exception exception) when (ViewerErrors.IsExpected(exception))
                 {
                     editor.CancelSessionReplay();
-                    browser.SetStatus("Replay failed: " + exception.Message + ". Previous completed experiment retained.");
+                    browser.ReportReplayFailure(exception.Message);
                     throw;
                 }
             }
@@ -725,6 +717,9 @@ internal sealed class LiveExperimentEditor
         panel.ClearFocus();
         editor.EndGesture();
     }
+
+    /// <summary>Finishes dispatched file writes and cancels library scanning before graphics/owner shutdown.</summary>
+    public void Dispose() => browser.Dispose();
 
     internal void OpenFiles()
     {

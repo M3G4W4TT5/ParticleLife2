@@ -109,6 +109,36 @@ public sealed class ResidentExecutionTests
         Assert.True(CaptureTransfer.IsExactFloat32(restored.TerminalCapture.State));
         Assert.Equal(new long[] { long.MinValue, long.MaxValue }, restored.TerminalCapture.State.Ids.ToArray());
         Assert.False(restored.TerminalCapture.Execution.RepeatableActions);
+        ExperimentDefinition? pattern = null;
+        Task patternCapture = session.Run("Save GPU pattern", owner => pattern = owner.CaptureCurrentExperiment("GPU pattern"));
+        await PumpUntil(session, () => patternCapture.IsCompleted);
+        await patternCapture;
+        ExperimentDefinition loadedPattern = ExperimentFile.Deserialize(ExperimentFile.Serialize(pattern!));
+        Assert.Equal(StatePrecision.Float32, loadedPattern.Provenance!.SourceExecution!.Precision);
+        Assert.Equal(ExecutionHardware.Gpu, loadedPattern.Provenance.SourceExecution.Hardware);
+        Assert.Equal(restored.TerminalCapture.State.Positions.ToArray(), loadedPattern.InitialState.Positions.ToArray());
+    }
+
+    [Fact]
+    public async Task PrecisionTransferRejectsAnExceededRecordingBudgetBeforeAdoption()
+    {
+        ExperimentEditor original = CreateEditor();
+        original.SetRecordingBudgets(1024, 1024);
+        SetForce(original, 1); SetForce(original, 2); SetForce(original, 3);
+        long recorded = original.Recording.ActionBytes;
+        using EditorSession session = new(original, runInBackground: true);
+        Task transfer = session.SwitchToGpu((configuration, state) => new FakeResident(configuration, state), true);
+        await PumpUntil(session, () => transfer.IsCompleted);
+        Assert.True(transfer.IsFaulted);
+        Assert.Null(session.Resident);
+        Assert.Equal(ExecutionHardware.Cpu, session.Publication.Execution.Hardware);
+        Assert.Equal(recorded, session.Recording.ActionBytes);
+        Assert.Equal(3, session.SessionEventCount);
+        double retainedX = 0;
+        Task observed = session.Run("Observe retained CPU state", owner => retainedX = owner.Playback.Observe().Positions[0].X);
+        await PumpUntil(session, () => observed.IsCompleted);
+        await observed;
+        Assert.Equal(0.1, retainedX);
     }
 
     [Fact]
@@ -119,8 +149,13 @@ public sealed class ResidentExecutionTests
         Task transfer = session.SwitchToGpu((configuration, state) => resident = new(configuration, state), true);
         await PumpUntil(session, () => transfer.IsCompleted);
         await transfer;
+        long checkpointActionBytes = session.Recording.ActionBytes;
+        long baseline = session.Publication.BaselineVersion;
         session.Playback.SingleStep();
         await PumpUntil(session, () => session.Publication.Step == 1 && !session.HasPendingCommands);
+        session.ApplyConfiguration(new(session.Configuration.Parameters with { ForceScale = 2 }, session.Configuration.Matrix, session.Configuration.TimeStep));
+        await PumpUntil(session, () => !session.HasPendingCommands);
+        Assert.True(session.Recording.ActionBytes > checkpointActionBytes);
         resident!.Lost = true;
         session.Playback.SingleStep();
         await PumpUntil(session, () => session.Publication.DeviceFaulted);
@@ -133,6 +168,9 @@ public sealed class ResidentExecutionTests
         Assert.Equal(0, session.Publication.Step);
         Assert.Contains("uncaptured continuation was discarded", session.Publication.CaptureRecording!.Notice);
         Assert.Equal(0, resident.FullStateReadbacks);
+        Assert.Equal(checkpointActionBytes, session.Recording.ActionBytes);
+        Assert.Equal(0, session.Recording.UndoBytes);
+        Assert.True(session.Publication.BaselineVersion > baseline);
     }
 
     [Fact]
