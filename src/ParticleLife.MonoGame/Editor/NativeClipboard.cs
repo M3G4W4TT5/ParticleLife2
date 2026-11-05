@@ -5,6 +5,8 @@ namespace ParticleLife.MonoGame.Editor;
 /// <summary>Uses the already bundled SDL clipboard for native text fields without a UI dependency.</summary>
 /// <remarks>Called only on an explicit copy/paste gesture on the window thread. SDL returns owned
 /// UTF-8 clipboard memory; every read frees it with SDL_free, including an empty/error result.
+/// Failures retain the native explanation for the viewer; return details and the selected library
+/// path are written only to the launch console. An error is reported without assuming its cause.
 /// See https://wiki.libsdl.org/SDL2/SDL_GetClipboardText and SDL_SetClipboardText.</remarks>
 internal static class NativeClipboard
 {
@@ -77,8 +79,12 @@ internal static class NativeClipboard
         // SDL owns this thread-local error string; unlike clipboard text it must not be freed.
         internal string ErrorText() => Marshal.PtrToStringUTF8(getError()) ?? string.Empty;
 
-        internal InvalidOperationException Failure(string operation, string result, string error) => new(
-            $"Clipboard {operation} failed (SDL {result}): {(error.Length == 0 ? "no native error details" : error)}. SDL library: {libraryPath}");
+        internal InvalidOperationException Failure(string operation, string result, string error)
+        {
+            string detail = string.IsNullOrWhiteSpace(error) ? "The system clipboard is unavailable." : error.Trim();
+            Console.Error.WriteLine($"Clipboard {operation} failed (SDL {result}): {detail} SDL library: {libraryPath}");
+            return new InvalidOperationException($"Clipboard {operation} failed: {detail}");
+        }
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
