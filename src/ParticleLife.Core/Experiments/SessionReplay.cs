@@ -32,6 +32,7 @@ public static class SessionReplay
             throw new ArgumentException("Apply a session edit only at its recorded completed-step boundary.", nameof(change));
         }
 
-        simulation.Reconfigure(overrides?.Apply(change.Configuration) ?? change.Configuration, change.ReplacementState);
+        simulation.Reconfigure(overrides?.Apply(change.Configuration) ?? change.Configuration,
+            change.ReplacementState ?? change.StateDelta?.Apply(simulation.Observe()));
     }
 }

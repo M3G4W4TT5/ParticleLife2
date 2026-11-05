@@ -59,6 +59,9 @@ internal sealed unsafe class OpenGlDrawApi : IDisposable
     internal int MaximumViewportWidth { get; }
     internal int MaximumViewportHeight { get; }
 
+    /// <summary>Reports whether native cleanup is safe; a lost context must not replace the original failure.</summary>
+    internal bool CanUseOwner => !disposed && Environment.CurrentManagedThreadId == ownerThread && getCurrentContext() == context;
+
     internal OpenGlDrawApi()
     {
         if (!OperatingSystem.IsWindows())

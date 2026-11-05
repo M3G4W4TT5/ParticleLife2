@@ -2,9 +2,11 @@ using System.Globalization;
 using System.Security.Cryptography;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
+using ParticleLife.Core.Execution;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Models;
 using ParticleLife.Core.Numerics;
+using ParticleLife.Core.State;
 using ParticleLife.Viewer;
 
 namespace ParticleLife.MonoGame.Editor;
@@ -18,6 +20,7 @@ internal sealed class LiveExperimentEditor
     private readonly UiPanel panel;
     private readonly Action<string> report;
     private readonly Action printTimings;
+    private Func<SimulationConfiguration, ParticleSnapshot, IResidentSimulation>? residentFactory;
     private readonly InteractionMatrixWidget matrix;
     private readonly ExperimentFileBrowser browser;
     private readonly ExplorationControls exploration;
@@ -63,6 +66,9 @@ internal sealed class LiveExperimentEditor
     internal bool BrushEnabled => exploration.BrushEnabled;
     internal BrushSettings Brush => exploration.Brush;
     internal void FitCamera() => exploration.Fit();
+
+    /// <summary>Installs optional native creation only after the graphics context exists.</summary>
+    internal void ConfigureResidentFactory(Func<SimulationConfiguration, ParticleSnapshot, IResidentSimulation> factory) => residentFactory = factory;
 
     internal LiveExperimentEditor(ExperimentEditor editor, string saveDirectory, Action<string> report, Action printTimings)
         : this(new EditorSession(editor), saveDirectory, report, printTimings)
@@ -421,7 +427,25 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(Number("Playback speed [x]", () => editor.Playback.PlaybackSpeed,
             value => { editor.SetPlayback(editor.Playback.Settings with { Speed = value }); SuppressPlayback = true; }, 1, 0.05, 8,
             "Wall-clock speed only; does not alter dt or equations. Changing speed clears pending playback time.", log: true));
-        simulation.Children.Add(new UiLabel(() => $"Execution: CPU. {Environment.ProcessorCount} logical processors. Worker count is saved explicitly.", 44, UiCanvas.Accent));
+        simulation.Children.Add(new UiLabel(() => $"Execution: {editor.Publication.Execution.Hardware} / {editor.Publication.Execution.Precision}. {Environment.ProcessorCount} logical CPU processors.", 44, UiCanvas.Accent));
+        simulation.Children.Add(new UiRow(
+            new UiButton(() => "CPU double", () => editor.SwitchToCpu(),
+                "Pause, explicitly capture actual GPU values, then continue on CPU. Float values widen exactly; future trajectories may differ.",
+                () => editor.Resident is not null && !editor.IsSwitchingExecution && !editor.Publication.DeviceFaulted),
+            new UiButton(() => "GPU float", () =>
+            {
+                editor.SwitchToGpu(residentFactory!, allowPrecisionConversion: true);
+                report("Switching at a completed boundary. GPU float32 rounds particle values; captures preserve actual values, while action replay may diverge.");
+            }, "Explicitly convert state to float32 and use native GPU execution. Failed creation retains the paused CPU editor and history.",
+                () => residentFactory is not null && editor.Resident is null && !editor.IsSwitchingExecution)));
+        simulation.Children.Add(new UiButton(() => "Recover CPU from latest capture", () => editor.SwitchToCpu(recoverLatestCapture: true),
+            "Discard uncaptured continuation and restore the latest owned checkpoint on CPU. This is an explicit rollback after device failure.",
+            () => editor.Publication.DeviceFaulted && editor.Publication.CaptureRecording?.LatestStep is not null && !editor.IsSwitchingExecution));
+        simulation.Children.Add(Number("GPU capture cadence", () => editor.Publication.CaptureRecording?.EverySteps ?? 600,
+            value => editor.Run("Capture cadence", owner => owner.SetCaptureCadence(Integer(value)), requiresCapture: false), 600, 0, 3600,
+            "Explicit periodic full-state capture cadence in completed steps; zero disables periodic copies. Saving a GPU session always captures its terminal state.", integer: true));
+        simulation.Children.Add(new UiLabel(() => editor.Publication.CaptureRecording is { } status
+            ? $"Capture: step {status.LatestStep?.ToString() ?? "none"}; {status.Count} retained, {status.StorageBytes / 1048576.0:F1} MiB. Full GPU reads {editor.Publication.FullStateReadbacks}. {status.Notice}" : "No captured state yet.", 68));
         simulation.Children.Add(new UiDropdown("Neighbour search", ["Direct reference", "Uniform grid"],
             () => editor.Configuration.Backend == ForceBackend.Direct ? 0 : 1,
             index => ConfigurationChange(backend: index == 0 ? ForceBackend.Direct : ForceBackend.UniformGrid, workers: 1),
@@ -446,7 +470,7 @@ internal sealed class LiveExperimentEditor
         simulation.Children.Add(new UiLabel(() => $"Requested {editor.Configuration.Backend}/{editor.Configuration.WorkerCount}; applied {editor.Publication.Configuration.Backend}/{editor.Publication.Configuration.WorkerCount}; actual {editor.Playback.LastExecution?.ActualBackend.ToString() ?? "UNSTEPPED"}/{editor.Playback.LastExecution?.ActualWorkerCount.ToString() ?? "-"}. Fallback {editor.Playback.LastExecution?.FallbackReason.ToString() ?? "NONE"}.", 78));
         simulation.Children.Add(new UiLabel(() => editor.HasPendingCommands
             ? $"Queued: {editor.PendingCommands} commands. Apply after the current completed boundary."
-            : editor.IsBusy ? "CPU step in progress; controls remain available." : "Completed boundary ready.", 42, UiCanvas.Accent));
+            : editor.IsBusy ? "Simulation work in progress; controls remain available." : "Completed boundary ready.", 42, UiCanvas.Accent));
         simulation.Children.Add(Button(() => "Print viewer timings", printTimings,
             "Print the latest approximately one-second FPS, controller update, editor input/update and render submission timings to the launch console. Present is excluded."));
     }

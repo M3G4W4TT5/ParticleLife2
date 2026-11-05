@@ -1,5 +1,6 @@
 using System.Globalization;
 using ParticleLife.MonoGame;
+using ParticleLife.MonoGame.Gpu;
 
 try
 {
@@ -7,6 +8,13 @@ try
     {
         ViewerOptions.PrintHelp();
         return 0;
+    }
+
+    if (args.Length == 2 && args[0] == "--gpu-checks")
+    {
+        using GpuCorrectnessGame checks = new(args[1]);
+        checks.Run();
+        return checks.ExitCode;
     }
 
     ViewerOptions options = ViewerOptions.Parse(args);

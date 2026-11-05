@@ -16,13 +16,19 @@ public sealed class SessionEvent
     /// <param name="label">Nonempty human-readable operation description, not executable instructions.</param>
     /// <param name="generator">Optional generation identity, version, seed and runtime for matrix generation,
     /// structural additions or resampling. Actual saved values remain authoritative; replay never invokes this generator.</param>
+    /// <param name="stateDelta">Optional compact actual identity edits, mutually exclusive with a full replacement.</param>
     /// <exception cref="ArgumentException">The boundary, structural clock/species or label is invalid.</exception>
     public SessionEvent(long boundaryStep, SimulationConfiguration configuration,
-        ParticleSnapshot? replacementState = null, string label = "Edit", GeneratorMetadata? generator = null)
+        ParticleSnapshot? replacementState = null, string label = "Edit", GeneratorMetadata? generator = null,
+        ParticleStateDelta? stateDelta = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(boundaryStep);
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        if (replacementState is not null && stateDelta is not null)
+        {
+            throw new ArgumentException("An event cannot contain both a full replacement and a compact delta.");
+        }
         if (generator is not null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(generator.Name);
@@ -40,10 +46,21 @@ public sealed class SessionEvent
 
             DirectForceEvaluator.ValidateState(replacementState.Observe(), configuration.Matrix.SpeciesCount);
         }
+        if (stateDelta is not null)
+        {
+            if (stateDelta.Step != boundaryStep || (boundaryStep == 0 && stateDelta.Time != 0)
+                || (boundaryStep > 0 && stateDelta.Time == 0))
+            {
+                throw new ArgumentException("A delta must have the event's completed boundary clock.", nameof(stateDelta));
+            }
+            DirectForceEvaluator.ValidateState(stateDelta.Updates.Observe(), configuration.Matrix.SpeciesCount);
+            DirectForceEvaluator.ValidateState(stateDelta.Additions.Observe(), configuration.Matrix.SpeciesCount);
+        }
 
         BoundaryStep = boundaryStep;
         Configuration = configuration;
         ReplacementState = replacementState;
+        StateDelta = stateDelta;
         Label = label;
         Generator = generator;
     }
@@ -54,8 +71,11 @@ public sealed class SessionEvent
     /// <summary>Gets the complete immutable settings that followed this edit.</summary>
     public SimulationConfiguration Configuration { get; }
 
-    /// <summary>Gets the exact structural payload, or null when all particle values are preserved.</summary>
+    /// <summary>Gets the exact full structural payload, or null for a compact delta or a settings-only edit.</summary>
     public ParticleSnapshot? ReplacementState { get; }
+
+    /// <summary>Gets compact actual identity edits, or null for a full replacement or settings-only edit.</summary>
+    public ParticleStateDelta? StateDelta { get; }
 
     /// <summary>Gets the descriptive operation label.</summary>
     public string Label { get; }

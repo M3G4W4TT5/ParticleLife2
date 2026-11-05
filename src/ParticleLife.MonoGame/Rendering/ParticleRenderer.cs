@@ -1,5 +1,6 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using ParticleLife.MonoGame.Gpu;
 using ParticleLife.Viewer;
 
 namespace ParticleLife.MonoGame.Rendering;
@@ -14,6 +15,7 @@ internal sealed class ParticleRenderer : IDisposable
     private readonly Texture2D particleTexture;
     private GlPointRenderer? points;
     private QuadParticleRenderer? quads;
+    private GlResidentRenderer? resident;
     private string? unavailableReason;
     private bool disposed;
 
@@ -33,6 +35,17 @@ internal sealed class ParticleRenderer : IDisposable
 
     internal string Description => points?.Description ?? "MonoGame bulk quads";
     internal ParticleRenderMetrics LastMetrics { get; private set; }
+
+    /// <summary>Validates resident rendering before the application commits a GPU execution switch.</summary>
+    internal void PrepareResident() => resident ??= new GlResidentRenderer(device);
+
+    /// <summary>Draws a borrowed completed GPU buffer without a CPU state fallback or implicit capture.</summary>
+    internal void DrawResident(GlGpuSimulation simulation, WorldTransform transform, Rectangle clip, AppearanceSettings appearance)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        PrepareResident();
+        LastMetrics = resident!.Draw(simulation, transform, clip, appearance);
+    }
 
     /// <summary>Renders the supplied completed state using its own world configuration and current appearance.</summary>
     /// <remarks>Native particle uploads occur only for a newer publication sequence. Camera/radius changes
@@ -84,6 +97,7 @@ internal sealed class ParticleRenderer : IDisposable
         {
             points?.Dispose();
             quads?.Dispose();
+            resident?.Dispose();
             disposed = true;
         }
     }

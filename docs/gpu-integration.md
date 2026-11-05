@@ -83,3 +83,49 @@ The prototype's full state save/restore is evidence for the transfer primitive, 
 - The prototype submits one small stage per display frame solely to bound its test duration. Production simulation time must remain independent of rendering cadence and use fixed numerical steps.
 - Captures block in this bounded proof; asynchronous capture, allocation failure recovery, device-loss recovery and app checkpoint semantics remain P5 work.
 - No GPU numerical performance, one-million-particle capacity, deterministic shader reductions or cross-device trajectory identity is claimed.
+
+## P5 production implementation and verification
+
+The production implementation is in `src/ParticleLife.MonoGame/Gpu/`, with graphics-free execution/capture contracts in Core and Viewer. It is separate from the P1 prototype. The Release build, focused capture/CLI/ownership tests and production hardware correctness harness pass. Performance measurements and native interaction acceptance remain separate work; the hardware check is not the consolidated visual review.
+
+`GlGpuSimulation` owns two 32-byte logical-slot state buffers. Each step clears/counts hashed cells, hierarchically scans bucket counts, scatters logical indices, then evaluates directed forces from the consistent completed input and integrates a separate candidate. Full signed cell-coordinate checks filter hash collisions; occupancy is never capped. The scan is linear work across 512-element blocks and recursively scanned sums. The ordinary path reads only small completion/occupancy records. Dense buckets reduce the receiver count per submission; they never discard neighbours or change the model. A completed candidate publishes only after its fence and numerical-status checks pass.
+
+All native work remains on the current MonoGame graphics thread. The owner polls fences with timeout zero and retains one candidate and one explicit staging capture. It submits a bounded amount of work per UI pump and caps retained playback demand without changing fixed numerical steps. Cancelled or failed candidates leave the last completed buffer and clock intact. Model/workspace replacements construct candidate resources before publication. Cleanup checks context ownership, so loss of the native context cannot replace the original failure with another cleanup exception.
+
+`GlResidentRenderer` consumes that same completed buffer as instanced disc attributes: position at byte 0, velocity at byte 8, identity words at byte 16 and species at byte 24. It uploads no particles. Camera/radius changes are uniforms; colours use a separate palette. Quads avoid point-size and centre-clipping limits. Native draw and compute scopes restore their touched state, including ranged SSBO offsets/sizes. CPU rendering remains independently available through the GL 3.3 point adapter or MonoGame bulk-quad fallback, without compute initialization.
+
+The supported GPU numerical domain is deliberately finite: model scalars must remain zero or normal finite float32 values, nonzero coefficients cannot round to zero, directed core/cutoff intervals cannot collapse, and cutoff squares must be normal finite float32. Nonperiodic cell coordinates are bounded by `2^20` per axis; periodic grids use at most `2^20` cells per axis. Unsupported configurations fail visibly while CPU support remains available. Stored particle components retain every finite float32 bit, including signed zero and subnormal values, through exact capture/restore. Device arithmetic may flush subnormal intermediates; action replay is not claimed bitwise repeatable. Host time remains the recorded binary64 accumulation of the configured timestep.
+
+`EditorSession.Run` declares capture requirements explicitly: unknown/structural operations default to capture-required, while known scalar/rule/presentation operations opt out. CPU-to-GPU transfer detaches the actual CPU editor at an ordered boundary, buffers later commands, and constructs the GPU owner before adoption. Failed construction reattaches the same editor/history. GPU-to-CPU transfer explicitly captures and widens actual float values; recovery after a device failure explicitly restores only the latest owned checkpoint and reports the discarded uncaptured continuation.
+
+The canonical `particle-life-captured-session` schema 1 embeds the independently versioned action-session codec. Captures carry actual state, clock, configuration, applied-event count and hardware/precision/implementation provenance. Validation checks membership/species against recorded full replacements and identity deltas, including terminal same-boundary edits. It does not claim trajectory equivalence. Periodic checkpoints default to every 600 completed GPU steps and may be disabled; terminal capture remains mandatory when saving a captured session. Checkpoints use the shared lossless compressed snapshot codec and a 64 MiB retained budget, evicting optional periodic checkpoints with a visible notice. Transfer checkpoints are retained or the requested transfer is rejected.
+
+The CLI separates `replay <capture> --restore-capture` from `--resimulate-on-cpu`; restoration widens actual values and retains the captured clock, while CPU re-simulation starts from the recorded initial conditions/actions and warns about GPU trajectory differences. No graphics library is required for either action.
+
+Run the production correctness harness only with no competing benchmark/build/test/viewer:
+
+```powershell
+dotnet build src/ParticleLife.MonoGame/ParticleLife.MonoGame.csproj -c Release --no-restore
+dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- --gpu-checks artifacts/implementation/p5-gpu-correctness-1
+```
+
+Use a fresh output directory. The harness closes automatically, has a 90-second watchdog, and emits `GPU_CORRECTNESS_PASS` only after all checks succeed. `gpu-correctness.json` records device provenance, per-case tolerances/errors, readback counters and exact state hashes. Small actual captures and `resident-framebuffer.png` provide reviewable evidence. The eighteen fixtures cover all boundary rules, directed ranges, dense buckets, negative coordinates/hash collisions, exact zero, tiny coefficients/cores, overlap/empty state, signed-zero/subnormal storage, and a 131,073-particle three-level scan with a stationary analytic oracle. An exact binary single-step fixture checks both negative periodic stencil axes with six cells per axis. Further checks cover exact upload/JSON restore, capture-free camera/radius rendering, cancellation after force submission, failed-model retention, structural IDs/clock transfer, and whole-candidate rejection for coordinate-range/non-finite failures. These are correctness checks, not GPU timings or a consolidated UI visual review.
+
+The first production hardware run passed six numerical fixtures and all 96 expected resident framebuffer centres, then rejected the six-cell periodic scene against its unchanged CPU tolerance. Review identified an invalid signed-remainder expression when a stencil coordinate was `-1`: [GLSL section 5.9](https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html) leaves integer remainder with negative operands undefined. Periodic stencil wrapping now uses one conditional addition/subtraction, since its range is only `[-1, cellCount]`. The original tolerances remain unchanged, and failed comparisons now retain both actual and CPU-reference capture files. The failed first run is retained under `artifacts/implementation/p5-gpu-correctness-1/`.
+
+### Production hardware result, 5 November 2026
+
+The corrected harness passed all eighteen numerical/storage fixtures and four rendering/cancellation/failure checks on the NVIDIA GeForce RTX 5080 Laptop GPU, OpenGL 4.6 / NVIDIA 621.01, Windows 11 build 26300 and .NET 10.0.10. Evidence is in the P5 worktree's ignored `artifacts/implementation/p5-gpu-correctness-2/`. The tested native assembly SHA-256 is `0FCD2292F4210F8D82B643E410957FC9BB54B00B24BC24D1B2D762BB33A2E2D2`.
+
+| Check | Observed result |
+| --- | --- |
+| Ordinary numerical loops | Zero full particle-state readbacks in every fixture. |
+| Explicit device capture/restore | Exact stored values in all eighteen fixtures, including signed zero and subnormals. |
+| Saved JSON capture round-trip | Exact in all seventeen small fixtures. The 131,073-particle scan fixture deliberately omits JSON serialization; its report's `SavedCaptureRoundTripExact: false` means unexecuted, not a comparison failure. |
+| Periodic regression | Original six-cell scene maximum position error `3.234744846425386e-7`; additional binary-exact seam fixture error zero. |
+| Dense 769-particle bucket, twelve steps | Maximum velocity error `1.3941524805133332e-5`, within the declared `2e-4` absolute plus `2e-3` relative tolerance. No occupancy limit or discarded neighbours. |
+| 131,073-particle hierarchical scan | One stationary analytic step, exact positions/velocities. This checks three scan levels without claiming dense large-population throughput. |
+| Shared-buffer rendering | All 96 expected particle centres and 2,276 coloured pixels observed; zero particle uploads, camera/radius uploads or full state readbacks during drawing. |
+| Cancellation and failure | Submitted candidate cancellation, failed model replacement, coordinate-range rejection and non-finite rejection retain the last valid completed state. |
+
+The saved framebuffer was inspected and contains the expected pink/teal grid and state-restoration markers. The report records 1.35 seconds of harness wall time and explicitly sets `PerformanceClaim: false`: this is correctness evidence, not a step, rendering or transfer benchmark. Production capacity measurements and the consolidated live CPU/GPU interaction review remain separate acceptance work.

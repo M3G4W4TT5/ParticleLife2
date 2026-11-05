@@ -20,7 +20,7 @@ namespace ParticleLife.Viewer;
 /// frames to join those workers. Experiment replacement disposes the previous simulation only after
 /// a replacement has constructed successfully. Read-only state remains observable after disposal.</para>
 /// </remarks>
-public sealed class PlaybackController : IDisposable
+public sealed partial class PlaybackController : IDisposable
 {
     private Simulation simulation;
     private readonly DiagnosticSampler diagnosticSampler = new();
@@ -49,7 +49,7 @@ public sealed class PlaybackController : IDisposable
     public ExperimentDefinition Experiment { get; private set; }
 
     /// <summary>Gets the currently active rules and execution settings, independent of the reset baseline.</summary>
-    public SimulationConfiguration Configuration => simulation.Configuration;
+    public SimulationConfiguration Configuration => resident?.Configuration ?? simulation.Configuration;
 
     /// <summary>Identifies completed particle or configuration changes without including appearance-only edits.</summary>
     internal long PublicationVersion { get; private set; }
@@ -58,17 +58,17 @@ public sealed class PlaybackController : IDisposable
     internal long MembershipVersion { get; private set; }
 
     /// <summary>Gets actual search and fallback metadata from the last successful step, or null after reset/replacement.</summary>
-    public ForceExecution? LastExecution => simulation.LastExecution;
+    public ForceExecution? LastExecution => resident is null ? simulation.LastExecution : null;
 
     /// <summary>Gets successful grid-requested steps using direct fallback since reset or replacement.</summary>
-    public long DirectFallbackSteps => simulation.DirectFallbackSteps;
+    public long DirectFallbackSteps => resident is null ? simulation.DirectFallbackSteps : 0;
 
     /// <summary>Gets successful direct fallbacks caused by non-finite grid-order accumulation since reset or replacement.</summary>
     /// <remarks>Subtract this count from <see cref="DirectFallbackSteps"/> to obtain coordinate-range fallbacks.</remarks>
-    public long AccumulationFallbackSteps => simulation.AccumulationFallbackSteps;
+    public long AccumulationFallbackSteps => resident is null ? simulation.AccumulationFallbackSteps : 0;
 
     /// <summary>Gets geometric counts from the last successful step's input, or zero after reset/replacement.</summary>
-    public ForceEvaluationStatistics LastStatistics => simulation.LastStatistics;
+    public ForceEvaluationStatistics LastStatistics => resident is null ? simulation.LastStatistics : default;
 
     /// <summary>Gets whether automatic playback is paused.</summary>
     public bool IsPaused { get; private set; }
@@ -130,7 +130,11 @@ public sealed class PlaybackController : IDisposable
 
     /// <summary>Obtains completed state for immediate reading without copying a snapshot.</summary>
     /// <returns>A view valid only until the next step, reset or replacement.</returns>
-    public ParticleStateView Observe() => simulation.Observe();
+    public ParticleStateView Observe()
+    {
+        if (resident is not null) { return resident.ObserveCaptured(); }
+        return simulation.Observe();
+    }
 
     /// <summary>Changes playback status, clearing fractional time when the status changes.</summary>
     /// <param name="paused">True to pause; false to resume without a backlog.</param>
@@ -185,7 +189,8 @@ public sealed class PlaybackController : IDisposable
         }
 
         double previousTimeStep = Configuration.TimeStep;
-        simulation.Reconfigure(configuration, replacementState);
+        if (resident is null) { simulation.Reconfigure(configuration, replacementState); }
+        else { resident.Reconfigure(configuration, PrepareReplacement(replacementState)); }
         PublicationVersion++;
         if (replacementState is not null) { MembershipVersion++; }
         if (previousTimeStep != Configuration.TimeStep)
@@ -205,7 +210,8 @@ public sealed class PlaybackController : IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         IsPaused = true;
         PendingPlaybackSeconds = 0;
-        CompleteStep();
+        if (resident is null) { CompleteStep(); }
+        else { resident.SubmitStep(); }
     }
 
     /// <summary>Restores the current experiment's exact initial state, matrix, time and step count.</summary>
@@ -227,14 +233,23 @@ public sealed class PlaybackController : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(experiment);
-        Simulation replacement = experiment.CreateSimulation();
-        Simulation previous = simulation;
-        simulation = replacement;
+        Simulation? previous = null;
+        if (resident is null)
+        {
+            Simulation replacement = experiment.CreateSimulation();
+            previous = simulation;
+            simulation = replacement;
+        }
+        else
+        {
+            resident.Replace(new(experiment.Parameters, experiment.Matrix, experiment.TimeStep,
+                experiment.Backend, experiment.WorkerCount), PrepareReplacement(experiment.InitialState)!);
+        }
         Experiment = experiment;
         PublicationVersion++;
         MembershipVersion++;
         ClearPlayback();
-        previous.Dispose();
+        previous?.Dispose();
     }
 
     /// <summary>Replays a validated session using the shared headless event engine and publishes it paused.</summary>
@@ -259,6 +274,8 @@ public sealed class PlaybackController : IDisposable
         }
 
         Simulation previous = simulation;
+        IResidentSimulation? previousResident = resident;
+        resident = null;
         simulation = replacement;
         Experiment = initialExperiment;
         PublicationVersion++;
@@ -266,6 +283,7 @@ public sealed class PlaybackController : IDisposable
         IsPaused = true;
         ClearPlayback();
         previous.Dispose();
+        previousResident?.Dispose();
     }
 
     /// <summary>Rejects editor mutations after the owner has released its simulation resources.</summary>
@@ -319,6 +337,7 @@ public sealed class PlaybackController : IDisposable
     /// <summary>Completes at most one pending step, allowing the owner to service commands at every boundary.</summary>
     internal bool AdvancePendingStep()
     {
+        if (resident is not null) { return AdvanceResidentStep(); }
         if (IsPaused || PendingPlaybackSeconds < Configuration.TimeStep)
         {
             return false;
@@ -357,6 +376,7 @@ public sealed class PlaybackController : IDisposable
         if (!disposed)
         {
             simulation.Dispose();
+            resident?.Dispose();
             disposed = true;
         }
     }

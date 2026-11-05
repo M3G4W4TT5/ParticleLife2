@@ -7,6 +7,7 @@ using ParticleLife.Core.Models;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 using ParticleLife.MonoGame.Editor;
+using ParticleLife.MonoGame.Gpu;
 using ParticleLife.MonoGame.Rendering;
 using ParticleLife.Viewer;
 
@@ -111,6 +112,11 @@ internal sealed class ParticleLifeGame : Game
         pixel.SetData(new[] { Color.White });
         particle = CreateParticleTexture();
         particleRenderer = new ParticleRenderer(GraphicsDevice, particle);
+        surface.ConfigureResidentFactory((configuration, state) =>
+        {
+            particleRenderer.PrepareResident();
+            return new GlGpuSimulation(configuration, state);
+        });
         using (Stream stream = typeof(ParticleLifeGame).Assembly.GetManifestResourceStream(
             "ParticleLife.MonoGame.Assets.Branding.splash.png")
             ?? throw new InvalidOperationException("The startup artwork is missing."))
@@ -688,8 +694,10 @@ internal sealed class ParticleLifeGame : Game
     private void DrawWorld()
     {
         using RenderFrameLease? state = editor.AcquireRenderFrame();
-        if (state is null) { return; }
-        WorldTransform transform = new(state.Configuration.Parameters.WorldWidth, state.Configuration.Parameters.WorldHeight,
+        GlGpuSimulation? resident = editor.Resident as GlGpuSimulation;
+        if (state is null && resident is null) { return; }
+        SimulationConfiguration configuration = resident?.Configuration ?? state!.Configuration;
+        WorldTransform transform = new(configuration.Parameters.WorldWidth, configuration.Parameters.WorldHeight,
             worldBounds.X, worldBounds.Y, Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height), displayedCamera);
         Rectangle world = MappedWorldBounds(transform);
         batch.Begin(samplerState: SamplerState.LinearClamp);
@@ -711,7 +719,15 @@ internal sealed class ParticleLifeGame : Game
         }
         batch.End();
         GraphicsDevice.ScissorRectangle = Rectangle.Intersect(worldBounds, GraphicsDevice.Viewport.Bounds);
-        particleRenderer!.Draw(state, transform, worldBounds, editor.Appearance);
+        if (resident is not null)
+        {
+            if (editor.CanRenderResident)
+            {
+                try { particleRenderer!.DrawResident(resident, transform, worldBounds, editor.Appearance); }
+                catch (Exception failure) when (ViewerErrors.IsExpected(failure)) { editor.ReportResidentFailure(failure.Message); }
+            }
+        }
+        else { particleRenderer!.Draw(state!, transform, worldBounds, editor.Appearance); }
         DrawBrushPreview(transform);
     }
 

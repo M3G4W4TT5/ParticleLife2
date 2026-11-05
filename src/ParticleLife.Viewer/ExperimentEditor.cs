@@ -78,6 +78,7 @@ public sealed partial class ExperimentEditor
     /// <returns>A newly owned array with one count per active matrix species.</returns>
     public int[] GetCurrentPopulations()
     {
+        if (Playback.Resident is { } resident) { return resident.SpeciesCounts.ToArray(); }
         int[] counts = new int[Configuration.Matrix.SpeciesCount];
         foreach (int species in Playback.Observe().Species)
         {
@@ -454,7 +455,7 @@ public sealed partial class ExperimentEditor
         ExperimentDefinition baseline = Playback.Experiment;
         ExperimentDefinition named = new(name, baseline.Parameters, baseline.Matrix, baseline.InitialState, baseline.TimeStep,
             baseline.Generator, baseline.Backend, baseline.WorkerCount, baseline.Provenance);
-        return new SessionDefinition(named, events, Playback.Observe().Step);
+        return new SessionDefinition(named, events, Playback.Boundary.Step);
     }
 
     /// <summary>Applies a reusable preset live or explicitly generates a new population and baseline.</summary>
@@ -494,6 +495,7 @@ public sealed partial class ExperimentEditor
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
         if (brushStroke is not null && !applyingBrushSample) { EndBrushStroke(); }
         EditorValues before = CaptureValues();
+        state = Playback.PrepareReplacement(state);
         bool physical = !before.Configuration.EquivalentTo(values.Configuration);
         bool structural = state is not null && !SameState(state, Playback.Observe());
         if (!physical && !structural && SameValues(before, values))
@@ -509,7 +511,7 @@ public sealed partial class ExperimentEditor
         if (physical || structural)
         {
             Playback.Reconfigure(values.Configuration, structural ? state : null);
-            events.Add(new SessionEvent(Playback.Observe().Step, values.Configuration, structural ? state : null, label, generator));
+            events.Add(new SessionEvent(Playback.Boundary.Step, values.Configuration, structural ? state : null, label, generator));
         }
 
         if ((structural || separateAction) && brushStroke is null)
@@ -550,11 +552,12 @@ public sealed partial class ExperimentEditor
         EditorValues target = forward ? entry.After : entry.Before;
         ParticleSnapshot? targetState = forward ? entry.AfterState : entry.BeforeState;
         ParticleSnapshot? replacement = targetState is null ? null : RestoreStructure(targetState, entry.RestoreMotion, entry.RestoreIdentities);
+        replacement = Playback.PrepareReplacement(replacement);
         bool physical = !Configuration.EquivalentTo(target.Configuration);
         if (physical || replacement is not null)
         {
             Playback.Reconfigure(target.Configuration, replacement);
-            events.Add(new SessionEvent(Playback.Observe().Step, target.Configuration, replacement,
+            events.Add(new SessionEvent(Playback.Boundary.Step, target.Configuration, replacement,
                 $"{(forward ? "Redo" : "Undo")}: {entry.Label}"));
         }
 
@@ -637,6 +640,7 @@ public sealed partial class ExperimentEditor
     private void ClearTimeline()
     {
         events.Clear();
+        ClearCapturedTimeline();
         history.Clear();
         historyPosition = 0;
         gestureBefore = null;
@@ -646,6 +650,7 @@ public sealed partial class ExperimentEditor
         nextIdentity = 0;
         identityExhausted = false;
         AdvanceIdentityHighWater(Playback.Observe().Ids);
+        RecordInitialPrecisionConversion();
         Revision++;
     }
 
