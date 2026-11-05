@@ -38,6 +38,9 @@ internal sealed class GpuProgram : IDisposable
 
     private int Location(string name) => api.Gl.GetUniformLocation(handle, name);
 
+    /// <summary>Resolves an adapter-specific uniform during optional program construction.</summary>
+    internal int Uniform(string name) => Location(name);
+
     public void Dispose()
     {
         if (handle != 0 && api.Gl.CanUseOwner)
