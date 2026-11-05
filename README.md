@@ -28,32 +28,7 @@ dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- examples
 
 Use `--help` for startup options, including `--preset`, `--particles`, `--species`, `--seed`, `--backend direct|grid`, `--workers`, `--sample-every` and `--save-dir`. Grid search defaults to one worker; `--workers 4` explicitly selects parallel evaluation (1–8 workers). Saved experiments retain their backend and workers; older files remain serial and schema-1 files use direct search. DesktopGL needs a working OpenGL display. Resizing preserves world geometry; off-world particles remain in the simulation.
 
-The scrollable editor groups interactions, forces, world/population, generation, simulation and appearance. Expand a group, drag a slider or click its value for exact entry. Matrix rows receive forces from columns; symmetry linking is optional. World and population drafts have explicit Apply buttons. **Files** opens named save/load workflows. See the [editor guide](docs/live-experiment-editor.md) for details.
-
-Try **Built-in recipes** for Chains, Snakes, Core and halo, Alternating bands, Ribbons, Cyclic pursuit, Chase cycles, Species islands and experimental Biased ribbons. **New from recipe** starts with the recipe's suggested rules and populations; **Apply matrix live** changes compatible interactions while particles continue moving. The [recipe guide](docs/recipes.md) explains the numbers and includes command-line examples.
-
-| Key | Action |
-| --- | --- |
-| Space | Pause or resume. Losing window focus also pauses. |
-| N / Right | Advance exactly one step, then remain paused. |
-| R | Reset the defined baseline to time/step zero and start a fresh timeline. |
-| I | Explicitly resample current positions/velocities using the generation recipe. |
-| M | Randomize the matrix live with a new recorded seed. |
-| 1 / 2 / 3 | Apply a random / chains / snakes matrix using the generation seed. |
-| Ctrl+Z / Ctrl+Y | Undo / redo an editor operation at the current simulation boundary. |
-| S / O | Open the file browser; default folder is `artifacts/viewer`. |
-| E | Show or hide the editor. |
-| F5 | Reload the startup experiment, or open Files if none was supplied. |
-| D | Toggle sampled diagnostics. |
-| H / F1 | Show or hide shortcut help. |
-| F9 | Print timing summaries; the Timings button provides the same action. |
-| Esc | Cancel field editing or close the file browser; with world focus, quit. |
-
-Click the world to give simulation shortcuts focus; typing and widget interaction capture keyboard input. Live rule edits preserve particles and the clock. Changing a generation seed alone does not regenerate anything. Undo changes settings at the current boundary without rewinding intervening motion. **Reset** restores the original baseline; **New experiment** establishes another one explicitly.
-
-Save a **preset** for reusable settings and a generation recipe, **from here** for the exact current pattern rebased to time zero, **initial** for the reset baseline, or a **session** for the complete applied edit timeline. Load all of them from Files without restarting. Existing filenames are protected, and a failed load retains the valid experiment.
-
-Numerical timestep and playback speed are separate controls. Playback defaults to at most eight steps per frame; excess backlog is dropped rather than increasing the timestep. Diagnostics default to every 144 completed steps and show their measurement time. Dense interactions and worst-case diagnostics remain quadratic, so a large population can be slow even for a single step. Grid search reports direct fallback at extreme coordinate or force-accumulation scales.
+Try **Built-in recipes** for Chains, Snakes, Core and halo, Alternating bands, Ribbons, Cyclic pursuit, Chase cycles, Species islands and experimental Biased ribbons. The [recipe guide](docs/recipes.md) explains the numbers and includes command-line examples.
 
 ## Run without graphics
 
