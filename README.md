@@ -1,5 +1,7 @@
 # Particle Life 2 
 
+![Particle Life 2 simulation preview](opt_preview.gif)
+
 _Exploring emergent behaviour from simple interactions._
 
 Particle Life 2 is a continuation of [Particle Life](https://github.com/M3G4W4TT5/ParticleLife). The goal is to create a lightweight, modifiable particle simulation for exploring how local interactions produce collective behaviour: particles forming patterns, clustering, separating and moving together.
