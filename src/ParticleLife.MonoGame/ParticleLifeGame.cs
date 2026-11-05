@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using ParticleLife.Core.Execution;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Models;
 using ParticleLife.Core.Numerics;
@@ -83,7 +84,8 @@ internal sealed partial class ParticleLifeGame : Game
                 EndCanvasGesture();
                 SetMessage($"Operation failed: {failure}. Last completed state retained.");
             };
-            surface = new LiveExperimentEditor(this.editor, options.SaveDirectory, SetMessage, PrintTimings);
+            surface = new LiveExperimentEditor(this.editor, options.SaveDirectory, SetMessage, PrintTimings,
+                resetTimings: ResetTimingWindow);
             legend = new HelpLegend(CloseLegend, SetMessage, () => this.message);
             graphics = new GraphicsDeviceManager(this)
             {
@@ -208,8 +210,7 @@ internal sealed partial class ParticleLifeGame : Game
         { nativeTimings.ObserveInput(inputUpdateStarted); }
         if (input.Any(entry => !entry.IsText && entry.Key == Keys.F10))
         {
-            nativeTimings.Reset();
-            SetMessage("Native timing window reset. Use the controls, then F9 to print frame, input and presentation measurements.");
+            ResetTimingWindow();
         }
         if (input.Any(entry => !entry.IsText && entry.Key == Keys.F9))
         {
@@ -1191,9 +1192,36 @@ internal sealed partial class ParticleLifeGame : Game
         previousKeyboard = current;
     }
 
+    /// <summary>Starts the same native measurement window from the visible control and F10.</summary>
+    private void ResetTimingWindow()
+    {
+        nativeTimings.Reset();
+        SetMessage("Native timing window reset. Use the controls, then Print viewer timings or F9 to inspect frame, input and presentation measurements.");
+    }
+
+    /// <summary>Prints measurement samples and current scalar context without capturing particle state.</summary>
+    /// <remarks>Context describes this invocation, not every frame in a window that spans setting changes.
+    /// Applied publication values and requested pause/display values are labelled separately.</remarks>
     private void PrintTimings()
     {
         Console.WriteLine(nativeTimings.Describe());
+        EditorPublication state = editor.Publication;
+        AppearanceSettings appearance = editor.Appearance;
+        VisualSettings visuals = appearance.Visuals;
+        PresentationParameters backbuffer = GraphicsDevice.PresentationParameters;
+        Viewport viewport = GraphicsDevice.Viewport;
+        bool observations = visuals.Heatmap != HeatmapKind.Off || visuals.ShowStatistics || tracker.Active;
+        string tracking = !tracker.Active ? "off" : surface.VisualTools.FollowTracking ? "following" : "suspended";
+        string readbacks = state.Execution.Hardware == ExecutionHardware.Gpu ? state.FullStateReadbacks.ToString() : "n/a";
+        Console.WriteLine($"Viewer context (current publication/display): UTC {DateTimeOffset.UtcNow:O}; "
+            + $"backbuffer {backbuffer.BackBufferWidth}x{backbuffer.BackBufferHeight}; viewport {viewport.Width}x{viewport.Height}; canvas {worldBounds.Width}x{worldBounds.Height}; "
+            + $"particles {state.Count}; species {state.Configuration.Matrix.SpeciesCount}; execution {state.Execution.Hardware}/{state.Execution.Precision}; "
+            + $"CPU workers configured/last executed {state.Configuration.WorkerCount}/{state.LastExecution?.ActualWorkerCount.ToString() ?? "n/a"}; "
+            + $"dt {state.Configuration.TimeStep:G17}; applied playback speed {state.Playback.Speed:G17}; paused requested/applied {controller.IsPaused}/{state.IsPaused}; "
+            + $"completed step {state.Step}, time {state.Time:G17}; display quality {VisualQuality.Match(visuals)?.ToString() ?? "Custom"}; "
+            + $"radius pixels/world {appearance.ParticleRadius:G17}/{appearance.WorldParticleRadius:G17}, mode {appearance.ParticleSizeMode}; UI scale requested/effective {appearance.UiScale:G9}/{uiScale:G9}; "
+            + $"observations {observations}, heatmap {visuals.Heatmap}, statistics {visuals.ShowStatistics}, interval {visuals.ObservationSeconds:G9}s; "
+            + $"tracking {tracking}; diagnostic cadence {state.Playback.DiagnosticEverySteps} steps; GPU full-state reads {readbacks}.");
         Console.WriteLine($"Viewer sample (~1 wall second): {framesPerSecond:F1} FPS; " +
         $"playback submission mean {meanController:F3} ms, max {peakController:F3} ms; " +
         $"{editor.Publication.Execution.Hardware} {editor.Publication.StepsPerSecond:F1} steps/s, achieved {editor.Publication.SimulationSpeed:F3} simulation seconds/wall second; " +

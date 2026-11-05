@@ -20,6 +20,7 @@ internal sealed class LiveExperimentEditor : IDisposable
     private readonly UiPanel panel;
     private readonly Action<string> report;
     private readonly Action printTimings;
+    private readonly Action? resetTimings;
     private Func<SimulationConfiguration, ParticleSnapshot, IResidentSimulation>? residentFactory;
     private readonly InteractionMatrixWidget matrix;
     private readonly ExperimentFileBrowser browser;
@@ -76,11 +77,12 @@ internal sealed class LiveExperimentEditor : IDisposable
     }
 
     internal LiveExperimentEditor(EditorSession editor, string saveDirectory, Action<string> report, Action printTimings,
-        Func<string, string?>? updateRecent = null)
+        Func<string, string?>? updateRecent = null, Action? resetTimings = null)
     {
         this.editor = editor;
         this.report = report;
         this.printTimings = printTimings;
+        this.resetTimings = resetTimings;
         panel = new UiPanel(Error);
         matrix = new InteractionMatrixWidget(editor);
         exploration = new ExplorationControls(editor, matrix, () => symmetry, report);
@@ -479,8 +481,12 @@ internal sealed class LiveExperimentEditor : IDisposable
         simulation.Children.Add(new UiLabel(() => editor.HasPendingCommands
             ? $"Queued: {editor.PendingCommands} commands. Apply after the current completed boundary."
             : editor.IsBusy ? "Simulation work in progress; controls remain available." : "Completed boundary ready.", 42, UiCanvas.Accent));
-        simulation.Children.Add(Button(() => "Print viewer timings", printTimings,
-            "Print the latest approximately one-second FPS, controller update, editor input/update and render submission timings to the launch console. Present is excluded."));
+        simulation.Children.Add(new UiRow(
+            Button(() => "Print viewer timings", printTimings,
+                "Print native frame, draw, Present and observed input-to-Present timing, current scene/display context and latest simulation/particle-renderer samples to the launch console. Input timing is an application proxy, not physical key-to-screen latency."),
+            new UiButton(() => "Reset timing window", () => resetTimings?.Invoke(),
+                "Clear native frame, drawing, Present and input timing samples. Interact, then Print viewer timings to inspect the new window. Available in the native viewer.",
+                () => resetTimings is not null)));
     }
 
     private void BuildAppearance()

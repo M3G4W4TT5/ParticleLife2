@@ -2,6 +2,8 @@ using System.Reflection;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using ParticleLife.Core.Experiments;
+using ParticleLife.Core.Numerics;
+using ParticleLife.Core.State;
 using ParticleLife.MonoGame.Editor;
 using ParticleLife.Viewer;
 
@@ -17,8 +19,10 @@ internal static class NestedSectionChecks
         {
             CheckEditor(bounds);
         }
+        CheckTimingControls(withReset: true);
+        CheckTimingControls(withReset: false);
         CheckDrawAndCollapse();
-        Console.WriteLine("Nested section managed checks: real appearance/tracking/capture controls, compact keyboard scrolling, pointer actions and recursive draw dispatch passed.");
+        Console.WriteLine("Nested section managed checks: real appearance/tracking/capture/timing controls, compact keyboard scrolling, pointer actions and recursive draw dispatch passed.");
     }
 
     private static void CheckEditor(Rectangle bounds)
@@ -96,6 +100,64 @@ internal static class NestedSectionChecks
             Key(Keys.A, control: true);
             foreach (char character in text) { Tick([UiInputEvent.Text(character, false, false)]); }
             Key(Keys.Enter);
+        }
+    }
+
+    private static void CheckTimingControls(bool withReset)
+    {
+        using PlaybackController playback = new(PresetGenerator.Create(PresetKind.Random, 4, 2, 73), diagnosticEverySteps: 0);
+        ExperimentEditor editor = new(playback);
+        playback.SingleStep();
+        ParticleStateView before = playback.Observe();
+        ParticleSnapshot saved = new(before.Ids, before.Positions, before.Velocities, before.Species, before.Time, before.Step);
+        long revision = editor.Revision;
+        SimulationConfiguration configuration = editor.Configuration;
+        AppearanceSettings appearance = editor.Appearance;
+        PlaybackSettings settings = PlaybackSettings.Capture(playback);
+        int prints = 0, resets = 0;
+        List<string> feedback = [];
+        using EditorSession session = new(editor);
+        using LiveExperimentEditor surface = new(session, Path.GetTempPath(), feedback.Add, () => prints++,
+            resetTimings: withReset ? () => resets++ : null);
+        UiPanel panel = Field<UiPanel>(surface, "panel");
+        UiSection simulation = Field<UiSection>(surface, "simulation");
+        UiSection advanced = simulation.Children.OfType<UiSection>().Single();
+        UiRow timingActions = advanced.Children.OfType<UiRow>().Last();
+        UiWidget print = timingActions.Children[0], reset = timingActions.Children[1];
+        Rectangle bounds = new(14, 165, 392, 121);
+        Tick();
+        Focus(((UiRow)panel.Toolbar[^1]).Children[0]);
+        Key(Keys.Enter);
+        Focus(advanced);
+        Key(Keys.Enter);
+        Focus(print);
+        Require(panel.Body.Contains(print.Bounds), "The visible Print timing control was unreachable in a compact inspector.");
+        Key(Keys.Enter);
+        Require(prints == 1 && resets == 0, "Print invoked the wrong timing callback or invoked it more than once.");
+        Focus(reset);
+        Require(panel.Body.Contains(reset.Bounds), "The visible Reset timing control was unreachable in a compact inspector.");
+        Point point = reset.Bounds.Center;
+        Tick(mouse: MouseAt(point));
+        Tick(mouse: MouseAt(point, pressed: true));
+        Tick(mouse: MouseAt(point, pressed: true));
+        Tick(mouse: MouseAt(point));
+        Require(prints == 1 && resets == (withReset ? 1 : 0),
+            "Reset did not respect its optional host callback or repeated during a held press.");
+        ParticleStateView after = playback.Observe();
+        Require(after.Step == saved.Step && after.Time == saved.Time && after.Ids.SequenceEqual(saved.Ids)
+            && after.Positions.SequenceEqual(saved.Positions) && after.Velocities.SequenceEqual(saved.Velocities)
+            && after.Species.SequenceEqual(saved.Species) && editor.Revision == revision && editor.SessionEventCount == 0
+            && ReferenceEquals(editor.Configuration, configuration) && editor.Appearance == appearance
+            && PlaybackSettings.Capture(playback) == settings && playback.IsPaused && feedback.Count == 0,
+            "Timing controls changed simulation state, settings, history or pause policy.");
+
+        void Tick(IReadOnlyList<UiInputEvent>? input = null, MouseState? mouse = null) =>
+            surface.Update(bounds, new Rectangle(0, 0, 600, 500), 1, mouse ?? Neutral, input ?? []);
+        void Key(Keys key) => Tick([UiInputEvent.KeyPress(key, false, false)]);
+        void Focus(UiWidget target)
+        {
+            for (int count = 0; !target.Focused && count < 256; count++) { Key(Keys.Tab); }
+            Require(target.Focused, "Keyboard traversal could not reach the actual timing controls.");
         }
     }
 
