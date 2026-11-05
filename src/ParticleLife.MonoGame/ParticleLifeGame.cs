@@ -1196,10 +1196,10 @@ internal sealed partial class ParticleLifeGame : Game
     private void ResetTimingWindow()
     {
         nativeTimings.Reset();
-        SetMessage("Native timing window reset. Use the controls, then Print viewer timings or F9 to inspect frame, input and presentation measurements.");
+        SetMessage("Timing window reset. Pan or use controls, then Print viewer timings.");
     }
 
-    /// <summary>Prints measurement samples and current scalar context without capturing particle state.</summary>
+    /// <summary>Prints measurements and scalar context, and shows a brief result without capturing particle state.</summary>
     /// <remarks>Context describes this invocation, not every frame in a window that spans setting changes.
     /// Applied publication values and requested pause/display values are labelled separately.</remarks>
     private void PrintTimings()
@@ -1249,6 +1249,8 @@ internal sealed partial class ParticleLifeGame : Game
                 $"workers {sample.RequestedWorkers}/{sample.ActualWorkers?.ToString() ?? "unstepped"}; editor visible {sample.EditorVisible}; " +
                 $"dropped playback {sample.DroppedPlayback:G17} s. Captured metadata belongs to this completed sample, not the current display.");
         }
+        SetMessage($"{nativeTimings.DescribeSummary()} Playback requested/applied: "
+            + $"{(controller.IsPaused ? "Paused" : "Running")}/{(state.IsPaused ? "Paused" : "Running")}. Full report in console.");
     }
 
     /// <summary>One retained completed timing window with actual edits, outside the numerical hot loop.</summary>

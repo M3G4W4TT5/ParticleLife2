@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Reflection;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
+using ParticleLife.MonoGame;
 using ParticleLife.MonoGame.Editor;
 using ParticleLife.Viewer;
 
@@ -21,6 +23,8 @@ internal static class NestedSectionChecks
         }
         CheckTimingControls(withReset: true);
         CheckTimingControls(withReset: false);
+        CheckNavigationDrafts();
+        CheckTimingSummary();
         CheckDrawAndCollapse();
         Console.WriteLine("Nested section managed checks: real appearance/tracking/capture/timing controls, compact keyboard scrolling, pointer actions and recursive draw dispatch passed.");
     }
@@ -143,6 +147,18 @@ internal static class NestedSectionChecks
         Tick(mouse: MouseAt(point));
         Require(prints == 1 && resets == (withReset ? 1 : 0),
             "Reset did not respect its optional host callback or repeated during a held press.");
+        foreach (bool middle in new[] { true, false })
+        {
+            Focus(reset);
+            Point outside = new(bounds.Right + 40, bounds.Center.Y);
+            Tick(mouse: MouseAt(outside, middle: middle, right: !middle));
+            Require(!surface.CapturesKeyboard && !reset.Focused,
+                "A focused timing button blocked the next middle/right canvas navigation press.");
+            Tick(mouse: MouseAt(outside, middle: middle, right: !middle));
+            Tick(mouse: MouseAt(outside));
+            Require(prints == 1 && resets == (withReset ? 1 : 0),
+                "A secondary navigation press activated the previously focused timing button.");
+        }
         ParticleStateView after = playback.Observe();
         Require(after.Step == saved.Step && after.Time == saved.Time && after.Ids.SequenceEqual(saved.Ids)
             && after.Positions.SequenceEqual(saved.Positions) && after.Velocities.SequenceEqual(saved.Velocities)
@@ -159,6 +175,80 @@ internal static class NestedSectionChecks
             for (int count = 0; !target.Focused && count < 256; count++) { Key(Keys.Tab); }
             Require(target.Focused, "Keyboard traversal could not reach the actual timing controls.");
         }
+    }
+
+    private static void CheckNavigationDrafts()
+    {
+        foreach (bool middle in new[] { true, false })
+        {
+            double value = 2.5;
+            int began = 0, ended = 0;
+            List<string> errors = [];
+            UiPanel panel = new(errors.Add);
+            UiNumber number = new("Radius", () => value, next => value = next, 2.5, 0.5, 12, "",
+                beginGesture: _ => began++, endGesture: () => ended++);
+            panel.Content.Add(number);
+            panel.Arrange(new Rectangle(0, 0, 460, 700));
+            Point outside = new(500, 200);
+            Draft("4.75");
+            Tick(MouseAt(outside));
+            Require(number.Focused && value == 2.5, "Pointer hover committed an outgoing numeric draft.");
+            PanPress();
+            Require(value == 4.75 && !panel.Capturing && !number.Focused,
+                "Middle/right navigation did not validate and commit the outgoing numeric draft.");
+            Tick(MouseAt(outside));
+            Draft("-");
+            PanPress();
+            Require(value == 4.75 && number.Focused && panel.Capturing && errors.Count == 1,
+                "Middle/right navigation abandoned an invalid numeric draft or escaped its focus gate.");
+            Tick(MouseAt(outside, middle: middle, right: !middle));
+            Require(errors.Count == 1, "Holding a navigation button repeatedly retried an invalid blur.");
+            Tick(MouseAt(outside), [UiInputEvent.KeyPress(Keys.Space, false, false)]);
+            Require(panel.ConsumedKeyboard && number.Focused, "An invalid navigation handoff leaked keyboard capture.");
+            Tick(MouseAt(outside), [UiInputEvent.KeyPress(Keys.Escape, false, false)]);
+            Require(value == 4.75 && !panel.Capturing, "Cancelling the retained invalid draft changed its applied value.");
+
+            Point slider = number.SliderBounds.Center;
+            Tick(MouseAt(slider));
+            Tick(MouseAt(slider, pressed: true));
+            Require(began == 1 && ended == 0, "The actual slider did not start one pending gesture.");
+            Tick(MouseAt(outside, pressed: true, middle: middle, right: !middle));
+            Tick(MouseAt(outside, pressed: true, middle: middle, right: !middle));
+            Tick(MouseAt(outside));
+            Require(ended == 1 && !panel.Capturing, "Secondary navigation did not end the captured slider gesture exactly once.");
+
+            void Tick(MouseState mouse, IReadOnlyList<UiInputEvent>? input = null) => panel.Update(mouse, 1, input ?? []);
+            void PanPress() => Tick(MouseAt(outside, middle: middle, right: !middle));
+            void Draft(string text)
+            {
+                Point point = number.ValueBounds.Center;
+                Tick(MouseAt(point)); Tick(MouseAt(point, pressed: true)); Tick(MouseAt(point));
+                Tick(MouseAt(point), [UiInputEvent.KeyPress(Keys.A, true, false)]);
+                foreach (char character in text) { Tick(MouseAt(point), [UiInputEvent.Text(character, false, false)]); }
+            }
+        }
+    }
+
+    private static void CheckTimingSummary()
+    {
+        PresentationTimings timings = new();
+        long completed = Stopwatch.Frequency;
+        timings.RecordPresent(completed, 0);
+        for (int milliseconds = 1; milliseconds <= 20; milliseconds++)
+        {
+            long interval = (long)Math.Round(Stopwatch.Frequency * (milliseconds / 1000d));
+            timings.ObserveInput(completed);
+            completed += interval;
+            timings.RecordPresent(completed, 0);
+        }
+        string summary = timings.DescribeSummary();
+        Require(summary.Split("19.000 ms").Length == 3 && summary.Split("n=20").Length == 3,
+            "Visible frame/input summaries did not retain their actual nearest-rank p95 and independent counts.");
+        _ = timings.Describe();
+        Require(timings.DescribeSummary() == summary, "Printing a full timing report changed the visible sample window.");
+        timings.Reset();
+        Require(!timings.DescribeSummary().Contains("p95=", StringComparison.Ordinal),
+            "Reset timing feedback retained a percentile from the preceding window.");
     }
 
     private static void CheckDrawAndCollapse()
@@ -203,9 +293,9 @@ internal static class NestedSectionChecks
     private static T Field<T>(object owner, string name) =>
         (T)(owner.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(owner)
             ?? throw new InvalidOperationException($"Missing retained widget field {name}."));
-    private static MouseState MouseAt(Point point, bool pressed = false) => new(point.X, point.Y, 0,
-        pressed ? ButtonState.Pressed : ButtonState.Released, ButtonState.Released,
-        ButtonState.Released, ButtonState.Released, ButtonState.Released);
+    private static MouseState MouseAt(Point point, bool pressed = false, bool middle = false, bool right = false) => new(point.X, point.Y, 0,
+        pressed ? ButtonState.Pressed : ButtonState.Released, middle ? ButtonState.Pressed : ButtonState.Released,
+        right ? ButtonState.Pressed : ButtonState.Released, ButtonState.Released, ButtonState.Released);
     private static void Require(bool condition, string message)
     {
         if (!condition) { throw new InvalidOperationException(message); }

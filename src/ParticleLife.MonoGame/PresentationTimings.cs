@@ -43,6 +43,9 @@ internal sealed class PresentationTimings
         + $"draw CPU {drawing.Describe()}; Present CPU wait {presentation.Describe()}; observed-input update to Present return {input.Describe()}. "
         + "Input is an application responsiveness proxy, excluding OS delivery/scanout and later queued simulation-command completion.";
 
+    /// <summary>Summarizes the same retained samples for a short visible result, without resetting the window.</summary>
+    internal string DescribeSummary() => $"Frame {frames.DescribePercentile()}; input proxy {input.DescribePercentile()}.";
+
     private sealed class Samples
     {
         private readonly double[] values = new double[1024];
@@ -54,6 +57,14 @@ internal sealed class PresentationTimings
             count = Math.Min(count + 1, values.Length);
         }
         internal void Reset() => count = next = 0;
+        internal string DescribePercentile()
+        {
+            if (count == 0) { return "has no samples"; }
+            double[] sorted = values.AsSpan(0, count).ToArray();
+            Array.Sort(sorted);
+            return string.Create(CultureInfo.InvariantCulture,
+                $"p95={sorted[(int)Math.Ceiling(count * 0.95) - 1]:F3} ms, n={count}");
+        }
         internal string Describe()
         {
             if (count == 0) { return "no samples"; }
