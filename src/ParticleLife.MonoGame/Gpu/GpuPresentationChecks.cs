@@ -165,8 +165,13 @@ internal static class GpuPresentationChecks
                 "CPU/wall measurement contains an invalid duration.");
             Require(measured.RetainedDeviceBufferBytes == simulation.RetainedDeviceBufferBytes
                 && measured.RetainedDeviceBufferBytes >= (long)initial.Count * 32 * 3, "Retained buffer accounting is incomplete.");
-            record(new { Case = "opt-in-step-measurement", AtNumericalCompletion = atNumericalCompletion,
-                Measurement = measured, simulation.TimestampUnavailableReason });
+            record(new
+            {
+                Case = "opt-in-step-measurement",
+                AtNumericalCompletion = atNumericalCompletion,
+                Measurement = measured,
+                simulation.TimestampUnavailableReason
+            });
             Require(!simulation.HasGpuTimestamps || measured.CompleteGpuTiming,
                 $"Collected step timestamps cover {measured.TimedCommandGroups}/{measured.CommandGroups} groups "
                 + $"({measured.TimestampGroupsIssued} issued): {measured.IncompleteGpuTimingReason}");

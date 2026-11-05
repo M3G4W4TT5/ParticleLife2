@@ -412,8 +412,10 @@ public sealed class BackgroundExperiment : IDisposable
             editor.Playback.LatestDiagnostic, editor.Playback.DroppedPlaybackSeconds, editor.IsReplaying,
             editor.ReplayCompletedStep, editor.ReplayTerminalStep, applied, error, stepsPerSecond, simulationSpeed)
         {
-            Recording = editor.Recording, BaselineVersion = editor.BaselineVersion,
-            Execution = editor.Playback.Execution, CaptureRecording = editor.CaptureRecording
+            Recording = editor.Recording,
+            BaselineVersion = editor.BaselineVersion,
+            Execution = editor.Playback.Execution,
+            CaptureRecording = editor.CaptureRecording
         };
     }
 

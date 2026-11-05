@@ -99,9 +99,14 @@ internal sealed class GpuCapacityGame : Game
     private void Progress(string phase)
     {
         WriteJson(Path.Combine(outputDirectory, "progress.json"), new
-        { phase, updatedAtUtc = DateTimeOffset.UtcNow, warmupSteps = run?.WarmupSteps ?? 0,
-            measuredSteps = run?.MeasuredSteps ?? 0, latestCompletedMeasurement = run?.LastCompletedMeasurement,
-            submissionProgress = run?.SubmissionProgress });
+        {
+            phase,
+            updatedAtUtc = DateTimeOffset.UtcNow,
+            warmupSteps = run?.WarmupSteps ?? 0,
+            measuredSteps = run?.MeasuredSteps ?? 0,
+            latestCompletedMeasurement = run?.LastCompletedMeasurement,
+            submissionProgress = run?.SubmissionProgress
+        });
         Console.WriteLine("GPU_CAPACITY_STAGE " + phase);
     }
 

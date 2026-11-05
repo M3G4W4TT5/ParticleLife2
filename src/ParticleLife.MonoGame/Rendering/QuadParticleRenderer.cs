@@ -165,8 +165,10 @@ internal sealed class QuadParticleRenderer : IDisposable
 
     private readonly BlendState PremultipliedAdditive = new()
     {
-        ColorSourceBlend = Blend.One, ColorDestinationBlend = Blend.One,
-        AlphaSourceBlend = Blend.One, AlphaDestinationBlend = Blend.InverseSourceAlpha
+        ColorSourceBlend = Blend.One,
+        ColorDestinationBlend = Blend.One,
+        AlphaSourceBlend = Blend.One,
+        AlphaDestinationBlend = Blend.InverseSourceAlpha
     };
 
     public void Dispose()

@@ -20,8 +20,10 @@ internal sealed class WorldVisuals(GraphicsDevice device, SpriteBatch batch) : I
     private readonly RasterizerState scissor = new() { CullMode = CullMode.None, ScissorTestEnable = true };
     private readonly BlendState additive = new()
     {
-        ColorSourceBlend = Blend.One, ColorDestinationBlend = Blend.One,
-        AlphaSourceBlend = Blend.Zero, AlphaDestinationBlend = Blend.One
+        ColorSourceBlend = Blend.One,
+        ColorDestinationBlend = Blend.One,
+        AlphaSourceBlend = Blend.Zero,
+        AlphaDestinationBlend = Blend.One
     };
 
     /// <summary>Invalidates images belonging to a different experiment/reset epoch.</summary>

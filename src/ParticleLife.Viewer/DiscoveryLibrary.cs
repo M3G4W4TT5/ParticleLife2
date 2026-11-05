@@ -189,8 +189,13 @@ public static class DiscoveryLibrary
                 Validate(metadata);
                 if (metadata.Kind == DiscoveryKind.Session && HasCapturedHeader(path))
                 {
-                    metadata = metadata with { Kind = DiscoveryKind.CapturedSession, Points = [], Population = 0,
-                        PreviewLabel = "No preview indexed for stored TERMINAL capture" };
+                    metadata = metadata with
+                    {
+                        Kind = DiscoveryKind.CapturedSession,
+                        Points = [],
+                        Population = 0,
+                        PreviewLabel = "No preview indexed for stored TERMINAL capture"
+                    };
                 }
                 if (metadata.FileBytes != file.Length || metadata.FileModifiedUtcTicks != file.LastWriteTimeUtc.Ticks)
                 {

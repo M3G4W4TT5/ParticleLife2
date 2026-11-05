@@ -29,21 +29,36 @@ public static class VisualQuality
         {
             VisualQualityPreset.Economy => current with
             {
-                Opacity = 1, Blend = ParticleBlend.Normal, TrailHalfLifeSeconds = 0,
-                GlowStrength = 0, GlowRadiusPixels = 6, Heatmap = HeatmapKind.Off,
-                ShowStatistics = false, ObservationSeconds = 2
+                Opacity = 1,
+                Blend = ParticleBlend.Normal,
+                TrailHalfLifeSeconds = 0,
+                GlowStrength = 0,
+                GlowRadiusPixels = 6,
+                Heatmap = HeatmapKind.Off,
+                ShowStatistics = false,
+                ObservationSeconds = 2
             },
             VisualQualityPreset.Balanced => current with
             {
-                Opacity = 1, Blend = ParticleBlend.Normal, TrailHalfLifeSeconds = 0,
-                GlowStrength = 0.35, GlowRadiusPixels = 6, Heatmap = HeatmapKind.Off,
-                ShowStatistics = false, ObservationSeconds = 0.5
+                Opacity = 1,
+                Blend = ParticleBlend.Normal,
+                TrailHalfLifeSeconds = 0,
+                GlowStrength = 0.35,
+                GlowRadiusPixels = 6,
+                Heatmap = HeatmapKind.Off,
+                ShowStatistics = false,
+                ObservationSeconds = 0.5
             },
             VisualQualityPreset.Luminous => current with
             {
-                Opacity = 0.8, Blend = ParticleBlend.Additive, TrailHalfLifeSeconds = 0.35,
-                GlowStrength = 1.25, GlowRadiusPixels = 10, Heatmap = HeatmapKind.Off,
-                ShowStatistics = false, ObservationSeconds = 0.5
+                Opacity = 0.8,
+                Blend = ParticleBlend.Additive,
+                TrailHalfLifeSeconds = 0.35,
+                GlowStrength = 1.25,
+                GlowRadiusPixels = 10,
+                Heatmap = HeatmapKind.Off,
+                ShowStatistics = false,
+                ObservationSeconds = 0.5
             },
             _ => throw new ArgumentOutOfRangeException(nameof(preset))
         };
