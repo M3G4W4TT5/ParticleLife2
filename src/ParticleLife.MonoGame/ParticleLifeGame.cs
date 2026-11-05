@@ -201,8 +201,10 @@ internal sealed partial class ParticleLifeGame : Game
         UpdateDisplayedCamera(elapsed);
         PollKeyboard();
         if (input.Count != 0 || mouse.LeftButton != previousCanvasMouse.LeftButton
+            || mouse.MiddleButton != previousCanvasMouse.MiddleButton || mouse.RightButton != previousCanvasMouse.RightButton
             || mouse.ScrollWheelValue != previousCanvasMouse.ScrollWheelValue
-            || mouse.LeftButton == ButtonState.Pressed && mouse.Position != previousCanvasMouse.Position)
+            || mouse.Position != previousCanvasMouse.Position && (mouse.LeftButton == ButtonState.Pressed
+                || mouse.MiddleButton == ButtonState.Pressed || mouse.RightButton == ButtonState.Pressed))
         { nativeTimings.ObserveInput(inputUpdateStarted); }
         if (input.Any(entry => !entry.IsText && entry.Key == Keys.F10))
         {
