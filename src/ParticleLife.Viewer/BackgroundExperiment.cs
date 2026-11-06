@@ -18,6 +18,8 @@ namespace ParticleLife.Viewer;
 public sealed class BackgroundExperiment : IDisposable
 {
     private const int MaximumCommands = 128;
+    /// <summary>Allocates CPU publication identities across owners, including owners recreated after a GPU handoff.</summary>
+    private static long nextFrameSequence;
     private readonly ExperimentEditor editor;
     private readonly object gate = new();
     private readonly LinkedList<Command> commands = new();
@@ -27,7 +29,7 @@ public sealed class BackgroundExperiment : IDisposable
     private readonly RenderFrameStorage[] frames = [new(), new(), new()];
     private EditorPublication publication;
     private RenderFrameStorage? publishedFrame;
-    private long submitted, applied, frameSequence;
+    private long submitted, applied;
     private double elapsed;
     private int renderRequested = 1;
     private int pauseRequested;
@@ -373,7 +375,8 @@ public sealed class BackgroundExperiment : IDisposable
             }
         }
         if (destination is null) { return; }
-        destination.Copy(state, editor.Configuration, editor.Playback.PublicationVersion, ++frameSequence, editor.BaselineVersion);
+        destination.Copy(state, editor.Configuration, editor.Playback.PublicationVersion,
+            Interlocked.Increment(ref nextFrameSequence), editor.BaselineVersion);
         lock (gate) { publishedFrame = destination; }
         Interlocked.Exchange(ref renderRequested, 0);
     }
@@ -473,7 +476,8 @@ public sealed record EditorPublication(
 
 /// <summary>One explicitly owned read lease over a reusable completed CPU render buffer.</summary>
 /// <remarks>Spans may only be read until disposal. Holding a lease never prevents numerical advancement.
-/// A sequence changes only when a newer complete particle copy is published.</remarks>
+/// A sequence changes only when a newer complete particle copy is published. CPU publication identities
+/// are unique across owners within the process, so replacing an owner cannot reuse cached render geometry.</remarks>
 public sealed class RenderFrameLease : IDisposable
 {
     private readonly RenderFrameStorage storage;
@@ -497,7 +501,9 @@ public sealed class RenderFrameLease : IDisposable
     public long Step => storage.Step;
     /// <summary>Gets the completed simulation time.</summary>
     public double Time => storage.Time;
-    /// <summary>Gets the monotonically increasing CPU publication sequence.</summary>
+    /// <summary>Gets a process-wide CPU publication identity that increases for each newer copy from this owner.</summary>
+    /// <remarks>Unchanged leases retain the same identity. Other CPU owners consume distinct identities,
+    /// including after execution transfers; this transient rendering value is not saved simulation provenance.</remarks>
     public long Sequence => storage.Sequence;
     /// <summary>Gets the baseline epoch belonging to this exact particle copy.</summary>
     public long BaselineVersion => storage.BaselineVersion;

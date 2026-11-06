@@ -11,6 +11,58 @@ namespace ParticleLife.Viewer.Tests;
 public sealed class ResidentExecutionTests
 {
     [Fact]
+    public async Task PausedResidentReplacementAndCpuTransfersPublishDistinctRenderFrames()
+    {
+        using EditorSession session = new(CreateEditor(), runInBackground: true);
+        using RenderFrameLease original = session.AcquireRenderFrame()!;
+        ParticleSnapshot replacement = new(original.Ids, [new(0.125, 0.875), new(0.375, 0.625)],
+            [new(0.25, -0.125), new(-0.125, 0.25)], original.Species);
+        SimulationConfiguration configuration = original.Configuration;
+        ExperimentDefinition experiment = new("same-clock replacement", configuration.Parameters, configuration.Matrix,
+            replacement, configuration.TimeStep, new("actual", "1", null, "test"), configuration.Backend, configuration.WorkerCount);
+        string path = Path.Combine(Path.GetTempPath(), "particle-life-render-transfer-" + Guid.NewGuid() + ".json");
+        ExperimentFile.Save(path, experiment);
+        try
+        {
+            Task toGpu = session.SwitchToGpu((settings, state) => new FakeResident(settings, state), true);
+            await PumpUntil(session, () => toGpu.IsCompleted);
+            await toGpu;
+            Task load = session.Run("Load paused same-count replacement", owner => owner.LoadExperiment(path));
+            await PumpUntil(session, () => load.IsCompleted);
+            await load;
+            Assert.NotNull(session.Resident);
+            Assert.True(session.Publication.IsPaused);
+
+            long previousSequence = original.Sequence;
+            for (int transfer = 0; transfer < 2; transfer++)
+            {
+                Task toCpu = session.SwitchToCpu();
+                await PumpUntil(session, () => toCpu.IsCompleted);
+                await toCpu;
+                using RenderFrameLease current = session.AcquireRenderFrame()!;
+                Assert.Equal(original.Count, current.Count);
+                Assert.Equal(original.Step, current.Step);
+                Assert.Equal(original.Time, current.Time);
+                Assert.Equal(replacement.Ids.ToArray(), current.Ids.ToArray());
+                Assert.Equal(replacement.Positions.ToArray(), current.Positions.ToArray());
+                Assert.Equal(replacement.Velocities.ToArray(), current.Velocities.ToArray());
+                Assert.Equal(replacement.Species.ToArray(), current.Species.ToArray());
+                Assert.True(current.Sequence > previousSequence, "A new CPU owner reused a renderer's cached publication identity.");
+                using RenderFrameLease unchanged = session.AcquireRenderFrame()!;
+                Assert.Equal(current.Sequence, unchanged.Sequence);
+                previousSequence = current.Sequence;
+                if (transfer == 0)
+                {
+                    toGpu = session.SwitchToGpu((settings, state) => new FakeResident(settings, state), true);
+                    await PumpUntil(session, () => toGpu.IsCompleted);
+                    await toGpu;
+                }
+            }
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public async Task FailedHandoffKeepsActualEditorHistoryBaselineAndLaterCommandOrder()
     {
         ExperimentEditor original = CreateEditor();
