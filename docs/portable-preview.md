@@ -34,7 +34,7 @@ The manifest records the commit, dirty-tree status, exact source/document/exampl
 
 ## Use the extracted folder
 
-Extract to a writable location, open `Start-Viewer.cmd`, then press **H / F1** for the guide. Its default save folder is `discoveries/` beside the launcher. The viewer executable can also be launched directly with its normal arguments. Keep scientific files and matching `.viewer.json` companions together.
+Extract to a writable location, open `Start-Viewer.cmd`, then press **H / F1** for the guide. Its default save folder is `discoveries/` beside the launcher. The viewer executable can also be launched directly with its normal arguments. Without `--save-dir`, a direct executable launch uses `artifacts/viewer` relative to the caller's working directory; use the launcher for the package-local default. Keep scientific files and matching `.viewer.json` companions together.
 
 From a terminal in the extracted folder:
 
@@ -47,4 +47,12 @@ Use a new output filename for every run. The CPU-only CLI does not need a displa
 
 This preview targets Windows desktop first. Linux CI checks headless builds, numerical contracts, CLI operation and display-free native compatibility; those checks do not establish a native Linux window. Signing, an installer, automatic updates and release publication are outside this package.
 
-Native launch, minimum-window input, branding/splash, CPU/GPU selection, saves and media must be checked from the extracted package during the [consolidated visual review](visual-review-checklist.md). Practical sparse/dense/evolved capacities require the separate matched workload reports. **Packaging verification and native acceptance are pending until those commands and review cases are actually run.**
+Native launch, minimum-window input, branding/splash, CPU/GPU selection, saves and media must be checked from the extracted package during the [consolidated visual review](visual-review-checklist.md). Practical sparse/dense/evolved capacities require the separate matched workload reports. **Packaging verification is complete for the current Preview 07 payload; native acceptance remains in progress.**
+
+## Reviewed package evidence
+
+Preview 07 was built from clean `6536e981` with SDK **10.0.302** and the self-contained Windows x64 runtime **10.0.10**. Its `-SmokeTest` checks passed. Independent verification matched size and SHA-256 for all **448 manifest-listed files** (449 files including the manifest). The ZIP is **78,605,437 bytes**, SHA-256 `D46BB91B306E792063D50D8D009B38AFB0949221808EB3A5BE9DA5753CFD09F7`. Local package output is under ignored `artifacts/packages/p7-review-07/`.
+
+Preview 07 includes the focus and visible timing-feedback fix; its focused native recheck passes. Held physical pan and V14 acceptance remain pending. Package smokes do not open a native window. Earlier package observations remain attributable to their tested source.
+
+The actual `Start-Viewer.cmd --paused` launch succeeded from `artifacts/implementation/visual-review/Private Preview 02/ParticleLife2`, a writable path containing spaces. The default discovery folder was beside the launcher. Default CPU particles, one paused step and Reset were visibly correct. These observations cover the launcher and focused renderer recheck; remaining startup, controls and practical performance coverage is recorded in the checklist. Those launcher observations concern Preview 02. Preview 03 native CPU appearance and CPU/GPU capture rechecks passed as detailed in the checklist. Preview 06 also includes visible timing controls and capture error routing (`b70089e`). Its actual normal-desktop launcher starts paused with all 500 default CPU particles visible. Its packaged CLI help and four-step periodic run pass (count 4, time 0.008); repeating the output destination rejects with exit 1 and leaves the original file hash unchanged. Physical editing and capture lifecycle bundles also pass, supported by exact CPU-session replay and independently decoded media. Remaining native cases, including GPU/dense V14 windows and the unresolved CPU physical-input assessment, are in progress.

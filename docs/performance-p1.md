@@ -84,7 +84,7 @@ For P2/P7, record measured FPS and frame distribution, controller/input latency 
 | Dense geometries | All ladder inputs saved; 10k fixed-area/band/cluster probes completed |
 | 1M stretch | Saved fixed-density input and four-worker run completed; no interactive-capacity claim |
 | Native rendering, 60 FPS and input latency | Pending consolidated P1–P7 visual review |
-| GPU buffer interoperability, memory and transfers | Separate prototype evidence pending integration |
+| GPU buffer interoperability, memory and transfers | Completed prototype and production follow-up; see [GPU evidence](gpu-integration.md). This report retains the original P1 CPU screen. |
 
 Publish measured values here only with the generated report paths/hashes, commit and assembly hashes, dirty-tree status, SDK/runtime/OS/CPU/logical processors, workers, power/runtime overrides, model/timestep and exact mode/budgets. Reuse retained inputs rather than rerunning historical long preparation commands. Extend measurements only when the next implementation decision requires them.
 
