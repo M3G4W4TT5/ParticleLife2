@@ -11,7 +11,7 @@ The 2D model supports four explicit world choices. These are artistic particle r
 
 Periodic cutoffs must be at most half the shortest world extent. Exactly half-extent displacement ties keep their directed sign; interactions at the cutoff are excluded. Positions at the upper periodic edge wrap to zero. Reflecting positions lie in the closed rectangle; velocity at an exact edge points inward. Reflections preserve speed apart from the model's ordinary force and damping step.
 
-Choosing a periodic or reflecting world live, or resizing such a world, maps actual positions and velocities as one explicit structural edit. The saved event contains the mapped values and retains identities and the simulation clock. Undo restores the saved pre-mapping state at the current clock; it does not rewind elapsed time. Switching to soft walls or open space retains absolute coordinates. The core's initial-state loader preserves stored values; it does not silently rewrite a capture while parsing it.
+Choosing a periodic or reflecting world live, or resizing such a world, maps actual positions and velocities as one explicit structural edit. The saved event contains the mapped values and retains identities and the simulation clock. Undo restores saved pre-mapping motion only for remapped identities; other surviving identities retain their current motion. Redo restores the saved mapped motion for those same identities. Both retain the current clock. Complete live presets use the same mapping and undo policy. Switching to soft walls or open space retains absolute coordinates. The core's initial-state loader preserves stored values; it does not silently rewrite a capture while parsing it.
 
 ## Global and directed ranges
 

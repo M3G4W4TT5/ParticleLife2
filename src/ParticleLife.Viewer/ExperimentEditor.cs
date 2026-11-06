@@ -124,9 +124,11 @@ public sealed partial class ExperimentEditor
         }
     }
 
-    /// <summary>Applies a complete rule candidate atomically without changing state, clock or baseline.</summary>
+    /// <summary>Applies a complete rule candidate atomically, retaining the clock and baseline.</summary>
     /// <param name="configuration">Validated model, matrix, timestep and solver configuration.</param>
     /// <param name="label">Undo and replay description.</param>
+    /// <remarks>Entering or resizing a periodic/reflecting world explicitly maps particle motion.
+    /// Undo/redo restores saved motion only for remapped identities; other particles retain current motion.</remarks>
     public void ApplyConfiguration(SimulationConfiguration configuration, string label = "Edit settings")
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -135,8 +137,8 @@ public sealed partial class ExperimentEditor
             throw new ArgumentException("Use Apply population to change species and matrix dimensions together.", nameof(configuration));
         }
 
-        (ParticleSnapshot? before, ParticleSnapshot? mapped) = MapLiveWorld(configuration);
-        Apply(CaptureValues() with { Configuration = configuration }, mapped, mapped is not null, label, before);
+        (ParticleSnapshot? before, ParticleSnapshot? mapped, HashSet<long>? remapped) = MapLiveWorld(configuration);
+        Apply(CaptureValues() with { Configuration = configuration }, mapped, false, label, before, restoreIdentities: remapped);
     }
 
     /// <summary>Changes one directed coefficient, optionally linking its reverse as an explicit edit choice.</summary>
@@ -466,26 +468,32 @@ public sealed partial class ExperimentEditor
             throw new ArgumentException("Live preset application requires the same species count. Use New population from preset explicitly.");
         }
 
-        (ParticleSnapshot? before, ParticleSnapshot? mapped) = MapLiveWorld(preset.Configuration);
+        (ParticleSnapshot? before, ParticleSnapshot? mapped, HashSet<long>? remapped) = MapLiveWorld(preset.Configuration);
         Apply(new EditorValues(preset.Configuration, preset.Generation, preset.Appearance, preset.Playback,
-            preset.Populations.ToArray()), mapped, mapped is not null, "Apply preset live", before, separateAction: true);
+            preset.Populations.ToArray()), mapped, false, "Apply preset live", before, separateAction: true, restoreIdentities: remapped);
     }
 
     /// <summary>Prepares the same explicit world remapping for scalar controls and complete live presets.</summary>
     /// <remarks>Only entering/resizing a bounded world needs particle state. The returned owned
-    /// before/after payloads let one atomic action record the actual mapping and its motion undo.</remarks>
-    private (ParticleSnapshot? Before, ParticleSnapshot? Mapped) MapLiveWorld(SimulationConfiguration configuration)
+    /// before/after payloads and remapped identities record the mapping as one atomic action.
+    /// Undo/redo restores those saved mapped values while unrelated survivors retain current motion.</remarks>
+    private (ParticleSnapshot? Before, ParticleSnapshot? Mapped, HashSet<long>? Remapped) MapLiveWorld(SimulationConfiguration configuration)
     {
         ModelParameters previous = Configuration.Parameters;
         ModelParameters next = configuration.Parameters;
         if (next.Boundary is not (BoundaryKind.Periodic or BoundaryKind.Reflecting)
             || previous.Boundary == next.Boundary && previous.WorldWidth == next.WorldWidth && previous.WorldHeight == next.WorldHeight)
-        { return (null, null); }
+        { return (null, null, null); }
         ParticleSnapshot before = Snapshot();
         Vector2d[] positions = before.Positions.ToArray();
         Vector2d[] velocities = before.Velocities.ToArray();
-        for (int index = 0; index < before.Count; index++) { WorldBoundary.Map(ref positions[index], ref velocities[index], next); }
-        return (before, new(before.Ids, positions, velocities, before.Species, before.Time, before.Step));
+        HashSet<long> remapped = [];
+        for (int index = 0; index < before.Count; index++)
+        {
+            WorldBoundary.Map(ref positions[index], ref velocities[index], next);
+            if (positions[index] != before.Positions[index] || velocities[index] != before.Velocities[index]) { remapped.Add(before.Ids[index]); }
+        }
+        return (before, new(before.Ids, positions, velocities, before.Species, before.Time, before.Step), remapped);
     }
 
     private void Apply(EditorValues values, ParticleSnapshot? state, bool restoreMotion, string label,
