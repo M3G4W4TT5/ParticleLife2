@@ -54,7 +54,7 @@ internal sealed partial class ParticleLifeGame : Game
     private EditedTimingSample? lastEditedSample;
     private ButtonState previousMouseButton;
     private float uiScale = 1;
-    private Rectangle worldBounds, gridBounds, editorBounds, modalBounds, legendBounds;
+    private Rectangle worldBounds, editorBounds, modalBounds, legendBounds;
     private float inspectorWidth = 350;
     private float inspectorProgress;
     private bool statsExpanded = true;
@@ -289,7 +289,7 @@ internal sealed partial class ParticleLifeGame : Game
         try
         {
             UpdateCanvasControls(mouse, elapsed, !headerClick && !surface.IsModal && !editor.Appearance.ShowHelp
-                && !surface.CapturesKeyboard && !resizingInspector);
+                && !surface.CapturesKeyboard && !resizingInspector && !TransportBounds.Contains(mouse.Position));
         }
         catch (Exception exception) when (ViewerErrors.IsExpected(exception))
         {
@@ -467,8 +467,8 @@ internal sealed partial class ParticleLifeGame : Game
     private Rectangle HeaderButton(int index)
     {
         int width = GraphicsDevice.Viewport.Width;
-        int start = Math.Clamp(gridBounds.X + 10, worldBounds.X + 6, Math.Max(worldBounds.X + 6, worldBounds.Right - 120));
-        int top = Math.Clamp(gridBounds.Y + 10, worldBounds.Y + 6, Math.Max(worldBounds.Y + 6, worldBounds.Bottom - 38));
+        int start = worldBounds.Center.X - 55;
+        int top = worldBounds.Bottom - 38;
         int inspectorTop = width >= 960 ? 60 : 70 + Math.Max(66, (int)((GraphicsDevice.Viewport.Height - 76) * 0.36));
         return index switch
         {
@@ -560,8 +560,6 @@ internal sealed partial class ParticleLifeGame : Game
         int legendHeight = Math.Min(height - 76, (int)(720 * uiScale));
         legendBounds = Logical(new Rectangle((width - legendWidth) / 2, 60, legendWidth, Math.Max(120, legendHeight)));
         legend.Arrange(legendBounds);
-        WorldTransform transform = CreateWorldTransform();
-        gridBounds = MappedWorldBounds(transform);
     }
 
     private Rectangle Logical(Rectangle screen) => new((int)(screen.X / uiScale), (int)(screen.Y / uiScale),
@@ -737,12 +735,13 @@ internal sealed partial class ParticleLifeGame : Game
         {
             canvas.Fill(new Rectangle(worldBounds.X, y, GraphicsDevice.Viewport.Width - worldBounds.X - 14, 1), new Color(16, 25, 29));
         }
-        canvas.Fill(world, new Color(12, 20, 24));
-        for (int index = 0; index <= 10; index++)
+        if (configuration.Parameters.Boundary != BoundaryKind.Open && !world.IsEmpty)
         {
-            Color line = index is 0 or 10 ? new Color(36, 53, 59) : new Color(19, 31, 36);
-            canvas.Fill(new Rectangle(world.X + world.Width * index / 10, world.Y, 1, world.Height), line);
-            canvas.Fill(new Rectangle(world.X, world.Y + world.Height * index / 10, world.Width, 1), line);
+            Color line = new(36, 53, 59);
+            canvas.Fill(Rectangle.Intersect(new Rectangle(world.X, world.Y, world.Width, 1), worldBounds), line);
+            canvas.Fill(Rectangle.Intersect(new Rectangle(world.X, world.Bottom - 1, world.Width, 1), worldBounds), line);
+            canvas.Fill(Rectangle.Intersect(new Rectangle(world.X, world.Y, 1, world.Height), worldBounds), line);
+            canvas.Fill(Rectangle.Intersect(new Rectangle(world.Right - 1, world.Y, 1, world.Height), worldBounds), line);
         }
         batch.End();
         GraphicsDevice.ScissorRectangle = Rectangle.Intersect(worldBounds, GraphicsDevice.Viewport.Bounds);
@@ -888,7 +887,8 @@ internal sealed partial class ParticleLifeGame : Game
     private void DrawBrushPreview(WorldTransform transform)
     {
         MouseState mouse = Mouse.GetState();
-        if (!surface.BrushEnabled || surface.IsModal || editor.Appearance.ShowHelp || !worldBounds.Contains(mouse.Position)) { return; }
+        if (!surface.BrushEnabled || surface.IsModal || editor.Appearance.ShowHelp || !worldBounds.Contains(mouse.Position)
+            || TransportBounds.Contains(mouse.Position)) { return; }
         double extent = transform.WorldLengthToPixels(surface.Brush.Radius);
         if (!double.IsFinite(extent) || extent <= 0 || extent > 1e5) { return; }
         ModelParameters parameters = editor.Publication.Configuration.Parameters;
@@ -923,7 +923,7 @@ internal sealed partial class ParticleLifeGame : Game
         batch.End();
     }
 
-    /// <summary>Groups playback controls inside the grid, with more transparent material while idle.</summary>
+    /// <summary>Groups playback controls at the bottom of the viewport, with more transparent material while idle.</summary>
     private Rectangle TransportBounds => new(HeaderButton(0).X - 2, HeaderButton(0).Y - 1, 114, 32);
 
     private float TransportOpacity => TransportBounds.Contains(Mouse.GetState().Position) ? 1 : 0.4f;
