@@ -9,6 +9,73 @@ namespace ParticleLife.Viewer.Tests;
 public sealed class BoundaryToolIntegrationTests
 {
     [Theory]
+    [InlineData(BoundaryKind.Periodic, false, false)]
+    [InlineData(BoundaryKind.Reflecting, false, false)]
+    [InlineData(BoundaryKind.Periodic, true, false)]
+    [InlineData(BoundaryKind.Reflecting, true, false)]
+    [InlineData(BoundaryKind.Periodic, false, true)]
+    [InlineData(BoundaryKind.Reflecting, false, true)]
+    public void WorldMappingUndoRedoPreservesUnmappedMotionAfterSteps(BoundaryKind boundary, bool resizeWorld, bool applyPreset)
+    {
+        ModelParameters parameters = new()
+        {
+            Boundary = resizeWorld ? boundary : BoundaryKind.Open,
+            WorldWidth = resizeWorld ? 2 : 1,
+            WorldHeight = resizeWorld ? 2 : 1,
+            ForceScale = 0
+        };
+        ExperimentDefinition initial = new("moving world mapping", parameters, new InteractionMatrix(1, [0]),
+            new ParticleSnapshot([71, 72], [new(resizeWorld ? 1.1 : -0.1, 1.1), new(0.25, 0.25)],
+                [new(0.2, 0.3), new(0.025, 0.01)], [0, 0]), 0.002, new GeneratorMetadata("test", "1", null, "test"));
+        using PlaybackController playback = new(initial, diagnosticEverySteps: 0);
+        ExperimentEditor editor = new(playback);
+        SimulationConfiguration original = editor.Configuration;
+        SimulationConfiguration bounded = new(parameters with { Boundary = boundary, WorldWidth = 1, WorldHeight = 1 },
+            initial.Matrix, initial.TimeStep);
+        if (applyPreset)
+        {
+            editor.ApplyPreset(new PresetDefinition("bounded preset", bounded, [2], editor.Generation, editor.Appearance,
+                PlaybackSettings.Capture(playback)), generatePopulation: false);
+        }
+        else
+        {
+            editor.ApplyConfiguration(bounded, resizeWorld ? "Resize world" : "Change boundary");
+        }
+        ParticleSnapshot mapped = Copy(playback.Observe());
+        Assert.NotEqual(initial.InitialState.Positions[0], mapped.Positions[0]);
+        Assert.Equal(initial.InitialState.Positions[1], mapped.Positions[1]);
+        Assert.Equal(initial.InitialState.Velocities[1], mapped.Velocities[1]);
+
+        playback.SingleStep();
+        ParticleSnapshot beforeUndo = Copy(playback.Observe());
+        Assert.NotEqual(initial.InitialState.Positions[1], beforeUndo.Positions[1]);
+        Assert.NotEqual(initial.InitialState.Velocities[1], beforeUndo.Velocities[1]);
+        editor.Undo();
+        Assert.True(original.EquivalentTo(editor.Configuration));
+        Assert.Equal(initial.InitialState.Positions[0], playback.Observe().Positions[0]);
+        Assert.Equal(initial.InitialState.Velocities[0], playback.Observe().Velocities[0]);
+        Assert.Equal(beforeUndo.Positions[1], playback.Observe().Positions[1]);
+        Assert.Equal(beforeUndo.Velocities[1], playback.Observe().Velocities[1]);
+        Assert.Equal(beforeUndo.Time, playback.Observe().Time);
+        Assert.Equal(1, playback.Observe().Step);
+        ReplayMatches(editor);
+
+        playback.SingleStep();
+        ParticleSnapshot beforeRedo = Copy(playback.Observe());
+        editor.Redo();
+        Assert.True(bounded.EquivalentTo(editor.Configuration));
+        Assert.Equal(mapped.Positions[0], playback.Observe().Positions[0]);
+        Assert.Equal(mapped.Velocities[0], playback.Observe().Velocities[0]);
+        Assert.Equal(beforeRedo.Positions[1], playback.Observe().Positions[1]);
+        Assert.Equal(beforeRedo.Velocities[1], playback.Observe().Velocities[1]);
+        Assert.Equal(beforeRedo.Time, playback.Observe().Time);
+        Assert.Equal(2, playback.Observe().Step);
+        Assert.Equal(initial.InitialState.Ids.ToArray(), playback.Observe().Ids.ToArray());
+        Assert.Equal(initial.InitialState.Species.ToArray(), playback.Observe().Species.ToArray());
+        ReplayMatches(editor);
+    }
+
+    [Theory]
     [InlineData(BoundaryKind.Periodic)]
     [InlineData(BoundaryKind.Reflecting)]
     public void DensityResizeRecordsMappingAndRestoresOnlyRemappedSurvivorMotion(BoundaryKind boundary)
