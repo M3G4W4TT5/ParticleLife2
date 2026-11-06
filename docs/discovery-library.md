@@ -26,9 +26,9 @@ Select a preset to review its components. **Coefficients**, **Core / cutoff radi
 
 **Export .plshare** creates a compressed local artifact. Share that file explicitly; nothing is uploaded or published. **Import share** validates it into a new explicit local filename, then Load / Replay / Preset remains a separate action. The ZIP wrapper has fixed entries `share.json` (wrapper version 1), `document.json`, and an optional `document.json.viewer.json`; it preserves the scientific and viewer-companion UTF-8 bytes exactly. Captured sessions use the canonical captured-session codec inside the share, preserving its captures, action history and provenance. Unknown/duplicate entries, archive-provided extraction paths, unsupported schemas, malformed state, mismatched companion hashes and destination collisions are rejected. Import limits are 256 MiB compressed, 256 MiB per scientific document, 4 MiB per viewer companion and 512 MiB expanded in total. Larger recordings remain explicit uncompressed files; limits never truncate a file while claiming it is complete.
 
-## Pending consolidated native cases
+## Consolidated native cases
 
-These cases remain **Pending** until the integrated native review; graphics-free tests do not establish their visual/input result.
+The [visual checklist](visual-review-checklist.md#observed-progress-and-remaining-coverage) records partial native observations, tested sources and remaining actions. Four CPU save kinds, thumbnails, search beyond 300 items, favourites/rename, selective components, share validation and small GPU capture policy have observed coverage. The detailed cases below retain their full acceptance requirements: large/minimum layouts, query races, focused drafts, worker/shutdown behavior and metadata warnings remain unresolved wherever not explicitly observed. Graphics-free tests do not establish those visual/input results.
 
 | Case | Setup and actions | Expected result |
 | --- | --- | --- |
