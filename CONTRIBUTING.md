@@ -29,7 +29,7 @@ pwsh -NoProfile -File scripts/check-xml-docs.ps1
 pwsh -NoProfile -File scripts/check-cli.ps1
 ```
 
-The integrated `1078549` source passes the full gate on [Ubuntu CI](https://github.com/M3G4W4TT5/ParticleLife2/actions/runs/42250286894/job/128003247545), including 638 tests with no failures and all 66 CLI checks. Locked restore, formatting, Release build, help, compatibility and XML documentation checks passed; native window acceptance remains separate.
+The integrated `b175957` source passes the full gate on [Ubuntu CI](https://github.com/M3G4W4TT5/ParticleLife2/actions/runs/42269240373/job/128069172156), including 638 tests with no failures and all 66 CLI checks. Locked restore, formatting, Release build, help, compatibility and XML documentation checks passed; native window acceptance remains separate.
 
 The test runner uses Microsoft Testing Platform selected in `global.json`; the explicit `--solution` option is required by that mode. Use `dotnet format ParticleLife.slnx --no-restore` to apply formatting. After intentionally changing dependencies, restore without `--locked-mode` and review the lock-file diff. PowerShell 7 is needed for the two portable verification scripts. CI runs these checks on Linux; local baseline measurements are on Windows.
 
