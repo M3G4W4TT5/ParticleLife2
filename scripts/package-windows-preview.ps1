@@ -120,6 +120,8 @@ $documentationInputs = @($documentationPaths | Sort-Object | ForEach-Object { De
 $licenseRoot = Join-Path $payload 'licenses'
 New-Item -ItemType Directory -Path $licenseRoot | Out-Null
 Copy-Item -LiteralPath (Join-Path $source 'src/ParticleLife.MonoGame/Assets/Fonts/OFL.txt') -Destination (Join-Path $licenseRoot 'IBM-Plex-Sans-OFL.txt')
+Copy-Item -LiteralPath (Join-Path $source 'src/ParticleLife.MonoGame/Assets/Lucide/LICENSE') -Destination (Join-Path $licenseRoot 'Lucide-ISC.txt')
+Copy-Item -LiteralPath (Join-Path $source 'src/ParticleLife.MonoGame/Assets/Lucide/FEATHER-LICENSE') -Destination (Join-Path $licenseRoot 'Feather-MIT.txt')
 Push-Location $source
 try {
     $cacheLine = @(& dotnet nuget locals global-packages --list)
