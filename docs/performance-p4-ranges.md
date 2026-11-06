@@ -17,7 +17,7 @@ Four exact 4,000-particle/six-species inputs use uniform or clustered positions,
 
 All 16 probes matched accepted/overlap counts and the direct force tolerance; maximum absolute force difference was `2.132e-13`. Warmed evaluations allocated zero managed bytes. These results justified production comparison, but candidate timings alone did not establish a shipping optimization.
 
-Evidence: `artifacts/implementation/p4-range-profile/`. The retained pre-trial binary is under `artifacts/benchmarks/p4/production-baseline`; Core SHA-256 is `8CA6A36F85A306CC528DBD326FF20C8BCE0672A91141C0CFBEA032E082D063E1`.
+Evidence: `artifacts/worktree-evidence/p4/artifacts/implementation/p4-range-profile/`. The retained pre-trial binary is under `artifacts/worktree-evidence/p4/artifacts/benchmarks/p4/production-baseline`; Core SHA-256 is `8CA6A36F85A306CC528DBD326FF20C8BCE0672A91141C0CFBEA032E082D063E1`.
 
 ## Rejected quarter-cell production trial
 
@@ -32,7 +32,7 @@ The first production trial used quarter-width power-of-two cells for nonperiodic
 
 All 48 matched children preserved accepted counts and allocated zero warmed bytes; dense worker-4 cases also improved. The 71–75% sparse-uniform regression rejects this candidate as the default. No population/density threshold is added to hide that tradeoff. The finer cell path is removed from production source.
 
-Evidence: `artifacts/implementation/p4-production-matched-20261105-174108/`. Force-only and complete-step tables have different measurement boundaries and must not be compared as interchangeable timings.
+Evidence: `artifacts/worktree-evidence/p4/artifacts/implementation/p4-production-matched-20261105-174108/`. Force-only and complete-step tables have different measurement boundaries and must not be compared as interchangeable timings.
 
 ## Retained coarse-row traversal
 
@@ -59,7 +59,7 @@ All 52 children completed. All 26 old/new accepted-count pairs matched, and ever
 
 Controls expose the screen's limits: global p50 moved about 1% faster; equal-pair p50 ranged from 3.4% faster to 1.4% slower; unchanged periodic selection measured 1.1–2.9% slower. Periodic p95 moved 0.3–2.9% higher. Five samples make p95 the largest observed sample, not a reliable tail guarantee; small control changes can reflect run/JIT/power variation or shared implementation overhead. The consistent dense/sparse improvements support retaining the coarse-row path on this machine, not a universal speed or unchanged-control timing promise.
 
-Final evidence: `artifacts/implementation/p4-coarse-matched-20261105-180710/` contains `supervisor.json`, `summary.csv`, `pair-summary.csv` and all child reports. The quiet window ran on 5 November 2026, 18:07:10–18:08:42 UTC, with the environment above, workstation GC and Normal process priority. Measured source was the P4 working tree based on `d7ababb7aaee606c1278ddbae08066320a2b4bc2`; binary hashes distinguish its uncommitted implementation from the baseline. Later evidence-document edits do not change those measured binaries.
+Final evidence: `artifacts/worktree-evidence/p4/artifacts/implementation/p4-coarse-matched-20261105-180710/` contains `supervisor.json`, `summary.csv`, `pair-summary.csv` and all child reports. The quiet window ran on 5 November 2026, 18:07:10–18:08:42 UTC, with the environment above, workstation GC and Normal process priority. Measured source was the P4 working tree based on `d7ababb7aaee606c1278ddbae08066320a2b4bc2`; binary hashes distinguish its uncommitted implementation from the baseline. Later evidence-document edits do not change those measured binaries.
 
 | Measured binary | SHA-256 |
 | --- | --- |
@@ -68,7 +68,7 @@ Final evidence: `artifacts/implementation/p4-coarse-matched-20261105-180710/` co
 | Baseline benchmark | `314CC5113C1288BD2C5EDAAB98C13AFBD2D340E09780F79B40CC8F92A9B8698A` |
 | Retained benchmark | `9D4FAF52EAE17AF0FBD3F8472DAC81A29AFF90AB595289197FBE7D429FC58407` |
 
-Input manifest: `artifacts/implementation/p4-coarse-inputs/inputs.json`, SHA-256 `19E7EAB523E7523E589F9FE21029F9A7DBD3B733239D29850F0C36FB1891AE80`. Individual input hashes appear in that manifest, the supervisor and each matched report.
+Input manifest: `artifacts/worktree-evidence/p4/artifacts/implementation/p4-coarse-inputs/inputs.json`, SHA-256 `19E7EAB523E7523E589F9FE21029F9A7DBD3B733239D29850F0C36FB1891AE80`. Individual input hashes appear in that manifest, the supervisor and each matched report.
 
 ## Reproduction
 
