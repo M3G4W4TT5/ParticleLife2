@@ -1,10 +1,10 @@
-using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Input;
 using ParticleLife.Viewer;
 
 namespace ParticleLife.MonoGame.Editor;
 
-/// <summary>Searchable local discovery library and explicit validated file/clipboard sharing.</summary>
+/// <summary>Retains the integrated Discoveries library and explicit validated file/clipboard sharing.</summary>
+/// <remarks>Widgets share the inspector's focus owner. Scans and file/replay completions are pumped
+/// independently of the selected page or visibility; Draw never performs file I/O.</remarks>
 internal sealed class ExperimentFileBrowser : IDisposable
 {
     private readonly EditorSession editor;
@@ -14,6 +14,10 @@ internal sealed class ExperimentFileBrowser : IDisposable
     private readonly UiPanel panel;
     private readonly DiscoveryLibraryScanner scanner = new();
     private readonly List<UiWidget> libraryWidgets = [];
+    private readonly UiSection navigation = new("Folders and search", true);
+    private readonly UiSection library = new("Library items", true);
+    private readonly UiSection save = new("Save / share a discovery");
+    private readonly UiSection detail = new("Selected item / load and details");
     private DiscoveryLibraryScan scan = new("", "", [], [], []);
     private Task<Action>? fileTask;
     private Task? fileOwnerTask;
@@ -29,32 +33,40 @@ internal sealed class ExperimentFileBrowser : IDisposable
     private bool favouritesOnly, recentFirst = true;
     private PresetComponents components = PresetComponents.Coefficients;
     private string result = "Save a discovery or choose an item. Load and replay remain explicit actions.";
-    internal bool IsOpen { get; private set; }
-    internal Rectangle Bounds => panel.Bounds;
-    internal Rectangle Body => panel.Body;
-    internal void Arrange(Rectangle bounds) => panel.Arrange(bounds);
+    private string displayName = "", displayDescription = "", displayTags = "";
+    private bool initialized;
+    internal UiSection Root { get; } = new("Discovery library", true);
     internal void SetStatus(string text) => result = text;
 
-    internal ExperimentFileBrowser(EditorSession editor, string directory, Action<string> report, Action suppressPlayback, Action baselineChanged,
+    internal ExperimentFileBrowser(EditorSession editor, UiPanel panel, string directory, Action<string> report, Action suppressPlayback, Action baselineChanged,
         Func<string, string?>? updateRecent = null)
     {
         this.editor = editor; this.directory = Path.GetFullPath(directory); this.report = report;
         this.suppressPlayback = suppressPlayback; this.baselineChanged = baselineChanged;
         this.updateRecent = updateRecent ?? TouchRecent;
         editor.Failed += Error;
-        panel = new UiPanel(Error, dismissOnEscape: true);
-        panel.Toolbar.Add(new UiRow(new UiButton(() => "Close", Close), new UiButton(() => "Parent", Parent),
+        this.panel = panel;
+        navigation.Children.Add(new UiRow(new UiButton(() => "Parent folder", Parent),
             new UiButton(() => "Refresh", Refresh, "Read local metadata and bounded headers. No files are read while drawing.")));
-        panel.Toolbar.Add(new UiTextField("Folder", () => this.directory, Navigate, "Local folder. Existing scientific files and companions are never overwritten."));
+        navigation.Children.Add(new UiTextField("Folder", () => this.directory, Navigate, "Local folder. Existing scientific files and companions are never overwritten."));
+        navigation.Children.Add(new UiTextField("Search", () => query, value => { query = value; Refresh(); }, "Search names, descriptions, tags and filenames; Enter applies."));
+        navigation.Children.Add(new UiRow(new UiToggle("Favourites", () => favouritesOnly, value => { favouritesOnly = value; Refresh(); }),
+            new UiToggle("Recent first", () => recentFirst, value => { recentFirst = value; Refresh(); })));
+        Root.Children.Add(new UiLabel(() => (editor.IsReplaying ? $"Replaying {editor.ReplayCompletedStep} / {editor.ReplayTerminalStep}. Esc cancels. " : "")
+            + result + (scanner.IsScanning ? " Scanning locally..." : "")
+            + (fileOperationActive ? " File operation in progress; further file actions wait." : ""), 70, UiCanvas.Accent));
+        Root.Children.AddRange([navigation, save, detail, library]);
+        Rebuild();
     }
 
-    internal void Open(bool pointerHeld = false)
+    /// <summary>Starts the initial scan once; returning to the page retains every committed form draft.</summary>
+    internal void Open()
     {
-        panel.PrepareForOpen(pointerHeld); IsOpen = true;
+        if (initialized) { return; }
+        initialized = true;
         name = $"experiment-{DateTime.Now:yyyyMMdd-HHmmss}"; Refresh();
     }
-    internal void Close() { panel.ClearFocus(); IsOpen = false; scanner.Cancel(); }
-    /// <summary>Delivers file completion even while the modal is closed; called on the UI thread.</summary>
+    /// <summary>Delivers file completion even while Discoveries or the inspector is hidden.</summary>
     internal void Pump()
     {
         if (disposed) { return; }
@@ -126,11 +138,6 @@ internal sealed class ExperimentFileBrowser : IDisposable
     }
 
     private static string ReplayText(ReplayNotice notice) => notice.Message + Warning(notice.MetadataWarning);
-    internal void Update(Rectangle bounds, float scale, MouseState mouse, IReadOnlyList<UiInputEvent> input)
-    {
-        panel.Bounds = bounds; panel.Update(mouse, scale, input);
-        if (panel.DismissRequested) { Close(); }
-    }
     private void Navigate(string path)
     {
         if (fileOperationActive) { throw new InvalidOperationException("Finish the current file operation before changing folders."); }
@@ -159,22 +166,15 @@ internal sealed class ExperimentFileBrowser : IDisposable
             bool current = scan.Directory == directory && scan.Query == query;
             IReadOnlyList<DiscoveryEntry> entries = current ? scan.Entries : [];
             if (selected is not null && selectedEntry is not null) { selectedEntry = entries.FirstOrDefault(entry => entry.Path == selected) ?? selectedEntry; }
-            panel.Content.Clear();
-            libraryWidgets.Clear();
-            panel.Content.Add(new UiTextField("Search", () => query, value => { query = value; Refresh(); }, "Search names, descriptions, tags and filenames; Enter applies."));
-            panel.Content.Add(new UiRow(new UiToggle("Favourites", () => favouritesOnly, value => { favouritesOnly = value; Refresh(); }),
-                new UiToggle("Recent first", () => recentFirst, value => { recentFirst = value; Refresh(); })));
-            panel.Content.Add(new UiLabel(() => result + (scanner.IsScanning ? " Scanning locally..." : "")
-                + (fileOperationActive ? " File operation in progress; further file actions wait." : ""), 70, UiCanvas.Accent));
             BuildSave(); BuildSelected();
-            AppendLibraryWidgets(current, entries);
+            ReplaceLibraryWidgets();
         }
         catch (Exception error) when (ViewerErrors.IsExpected(error)) { Error(error.Message); }
     }
 
     private void ReplaceLibraryWidgets()
     {
-        foreach (UiWidget widget in libraryWidgets) { panel.Content.Remove(widget); }
+        foreach (UiWidget widget in libraryWidgets) { library.Children.Remove(widget); }
         libraryWidgets.Clear();
         bool current = scan.Directory == directory && scan.Query == query;
         AppendLibraryWidgets(current, current ? scan.Entries : []);
@@ -204,12 +204,12 @@ internal sealed class ExperimentFileBrowser : IDisposable
             }, "Portable compressed artifact; never extracted to an archive-provided path."));
         }
         Add(new UiLabel(() => $"Up to {DiscoveryLibrary.MaximumEntries} matching items shown; refine search for a larger folder. Previews sample at most 256 particles.", 50));
-        void Add(UiWidget widget) { libraryWidgets.Add(widget); panel.Content.Add(widget); }
+        void Add(UiWidget widget) { libraryWidgets.Add(widget); library.Children.Add(widget); }
     }
 
     private void BuildSave()
     {
-        UiSection save = new("Save / share a discovery");
+        save.Children.Clear();
         save.Children.Add(new UiTextField("New file name", () => name, value => { ValidateName(value); name = value; }));
         save.Children.Add(new UiTextField("Description", () => description, value => description = value));
         save.Children.Add(new UiTextField("Tags (comma separated)", () => tags, value => tags = value));
@@ -230,16 +230,16 @@ internal sealed class ExperimentFileBrowser : IDisposable
             BeginFile("Validate clipboard preset", () => DiscoveryShare.ParseClipboard(text), preset =>
             {
                 selectedPreset = preset; selected = null; selectedEntry = null; PrepareMapping();
+                detail.Expanded = true;
                 FinishFile("Clipboard preset validated. Choose components and alignment before applying.", refresh: false); panel.ScrollToTop();
             });
         }, "Validate strict preset JSON first; pasting never applies rules or creates particles.", () => !fileOperationActive));
         save.Children.Add(new UiLabel(() => "Preset = recipe; Pattern = completed state; Initial = reset baseline. After GPU execution, Save session includes an actual TERMINAL capture plus actions.", 70));
-        panel.Content.Add(save);
     }
 
     private void BuildSelected()
     {
-        UiSection detail = new(selectedPreset is not null && selected is null ? "Clipboard preset / explicit components" : "Selected item / load and details", selected is not null || selectedPreset is not null);
+        detail.Children.Clear();
         detail.Children.Add(new UiLabel(() => selected is null ? selectedPreset?.Name ?? "Select a discovery below." : Path.GetFileName(selected), 28));
         detail.Children.Add(new UiRow(LoadButton("Load state", DiscoveryLoadAction.LoadState, kind => kind is DiscoveryKind.Pattern or DiscoveryKind.Initial),
             LoadButton("Replay actions", DiscoveryLoadAction.ReplayActions, kind => kind == DiscoveryKind.Session, replay: true)));
@@ -253,7 +253,6 @@ internal sealed class ExperimentFileBrowser : IDisposable
         }
         if (selectedEntry is DiscoveryEntry entry)
         {
-            string displayName = entry.Metadata.Name, displayDescription = entry.Metadata.Description, displayTags = string.Join(", ", entry.Metadata.Tags);
             detail.Children.Add(new UiTextField("Display name", () => displayName, value => displayName = value));
             detail.Children.Add(new UiTextField("Description", () => displayDescription, value => displayDescription = value));
             detail.Children.Add(new UiTextField("Tags", () => displayTags, value => displayTags = value));
@@ -296,12 +295,13 @@ internal sealed class ExperimentFileBrowser : IDisposable
                 suppressPlayback();
             }, "Validate before one undoable application. No particles are generated. Radii retain unmapped pair values.", () => !fileOperationActive && !rebuildPending && selectedPreset is not null));
         }
-        panel.Content.Add(detail);
     }
 
     private void Select(DiscoveryEntry entry)
     {
         selected = entry.Path; selectedEntry = entry; selectedPreset = null;
+        InitializeDetails(entry);
+        detail.Expanded = true;
         if (entry.Metadata.Kind == DiscoveryKind.Preset)
         {
             BeginFile("Review preset", () =>
@@ -315,6 +315,12 @@ internal sealed class ExperimentFileBrowser : IDisposable
         }
         Rebuild(); panel.ScrollToTop();
     }
+    private void InitializeDetails(DiscoveryEntry entry)
+    {
+        displayName = entry.Metadata.Name;
+        displayDescription = entry.Metadata.Description;
+        displayTags = string.Join(", ", entry.Metadata.Tags);
+    }
     private void PrepareMapping() => mapping = string.Join(',', Enumerable.Range(0, editor.Configuration.Matrix.SpeciesCount)
         .Select(index => index < selectedPreset!.Configuration.Matrix.SpeciesCount ? index : -1));
 
@@ -326,6 +332,8 @@ internal sealed class ExperimentFileBrowser : IDisposable
             StartWorker(() => prepared.Write(path), outcome =>
             {
                 selected = outcome.Path; selectedEntry = outcome.Entry; selectedPreset = null;
+                if (outcome.Entry is DiscoveryEntry entry) { InitializeDetails(entry); }
+                detail.Expanded = true;
                 FinishFile($"Saved {Path.GetFileName(outcome.Path)}; active state and clock unchanged." + Warning(outcome.MetadataWarning));
             }, finishDuringShutdown: true), requiresCapture: PreparedDiscoverySave.RequiresCurrentCapture(kind));
         suppressPlayback(); panel.ClearFocus();
@@ -341,7 +349,7 @@ internal sealed class ExperimentFileBrowser : IDisposable
             {
                 if (!live && !replay) { baselineChanged(); }
                 string message = prepared.Notice ?? (replay ? "Replay started from recorded initial state; Esc cancels. Thumbnail shows INITIAL geometry."
-                    : live ? "Preset applied live; particles and clock retained." : "Loaded paused. Close the library to explore.");
+                    : live ? "Preset applied live; particles and clock retained." : "Loaded paused. Continue exploring on the canvas.");
                 if (replay)
                 {
                     ReplayNotice notice = new(startingBaseline, message);
@@ -374,6 +382,8 @@ internal sealed class ExperimentFileBrowser : IDisposable
         BeginFile("Import compressed share", () => DiscoveryShare.ImportDetailed(source, output), outcome =>
         {
             selected = outcome.Path; selectedEntry = outcome.Entry; selectedPreset = null;
+            if (outcome.Entry is DiscoveryEntry entry) { InitializeDetails(entry); }
+            detail.Expanded = true;
             FinishFile($"Imported {Path.GetFileName(outcome.Path)}. Choose its explicit Load / Replay / Preset action." + Warning(outcome.MetadataWarning));
         }, finishDuringShutdown: true);
         suppressPlayback();
@@ -433,7 +443,7 @@ internal sealed class ExperimentFileBrowser : IDisposable
     private void FinishFile(string message, bool refresh = true)
     {
         fileOperationActive = false; result = message; report(message);
-        if (!disposed && IsOpen) { if (refresh) { Refresh(); } else { Rebuild(); } }
+        if (!disposed) { if (refresh) { Refresh(); } else { Rebuild(); } }
     }
     private void FileFailed(Exception error)
     {
@@ -464,8 +474,6 @@ internal sealed class ExperimentFileBrowser : IDisposable
         else if (fileOperationActive) { report("Queued file continuation cancelled during shutdown; completed owner actions remain applied."); }
         fileOperationActive = false;
     }
-    internal void DrawChrome(UiCanvas canvas) => panel.DrawChrome(canvas, "Discovery library");
-    internal void DrawBody(UiCanvas canvas) => panel.DrawBody(canvas);
 
     /// <summary>Keeps replay outcome and optional metadata feedback together until both have completed.</summary>
     private sealed class ReplayNotice(long startingBaseline, string message)

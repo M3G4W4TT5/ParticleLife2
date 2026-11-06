@@ -113,7 +113,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
             [--paused] [--sample-every 144] [--save-dir artifacts/viewer] [--backend direct|grid] [--workers 1]
 
         The inspector groups Particles, Interactions, World, Playback, Appearance and Discoveries.
-        Guide / H / F1 opens a quickstart, file choices and keyboard help without changing the scene.
+        ? / H / F1 opens a quickstart, file choices and keyboard help without changing the scene.
         Click a numeric value, type, then Enter to apply; Esc cancels a draft. Tab navigates.
         Drag labels/sliders for live edits; one drag is one Undo operation. The reset arrow resets
         that value. Invalid/partial text never changes the simulation. Hover for explanations.
@@ -121,11 +121,12 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         Space     Pause/resume                 N / Right   One step, then pause
         R         Reset defined baseline       I           Explicit live particle resampling
         M         Randomize matrix, new seed   1 / 2 / 3   Random / chains / snakes matrix live
-        S / O     Open save/load file library  E           Hide/show editor
+        S / O     Reveal Discoveries library   E           Hide/show editor
         Ctrl+Z/Y  Undo/redo editor changes      F5          Reload startup file or open library
         D         Toggle sampled diagnostics   H / F1      Open/close Help
         Esc       Cancel field/modal or quit   F9 / F10    Print / reset viewer timing window
         V         Fit world to canvas          Ctrl+0      Restore 1x UI scale (canvas focus)
+        B / middle click Toggle Brush tools    Right drag  Pan camera (menu closed)
         Ctrl+plus/minus Adjust UI scale         PageUp/Down Scroll a focused panel or Help
 
         Shortcuts do not fire while a control has keyboard focus. Click the world to return
@@ -142,7 +143,7 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         Appearance offers manual Economy, Balanced and Luminous display presets. Individual controls
         remain editable; quality presets never change solver, precision, population, rules or timestep.
 
-        FILES opens the local searchable discovery library. Enter a folder/name, then Save preset,
+        Discoveries embeds the local searchable discovery library. Enter a folder/name, then Save preset,
         Save pattern, Save initial or Save session. Existing names are protected by exclusive creation.
         Select an item, then Load state, Preset live, Preset new or Replay actions as appropriate.
         Preset live retains compatible populations; Preset new explicitly generates a baseline.

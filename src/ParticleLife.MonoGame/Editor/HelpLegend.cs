@@ -22,7 +22,7 @@ internal sealed class HelpLegend
             ("R", "Reset exact initial state and rules"), ("I", "Resample positions and velocities"),
             ("M", "Randomize the live matrix"), ("1 / 2 / 3", "Random / Chains / Snakes matrix")]);
         Add("Workspace", [
-            ("E", "Show or hide the inspector"), ("S / O", "Open the file library"),
+            ("E", "Show or hide the inspector"), ("S / O", "Reveal Discoveries in the inspector"),
             ("F5", "Reload startup file or open library"), ("D", "Toggle diagnostic sampling"),
             ("H / F1", "Open or close Help"), ("F9", "Print viewer timing measurements"),
             ("F10", "Reset the native timing window"),
@@ -37,10 +37,21 @@ internal sealed class HelpLegend
             ("Scroll", "Scroll the inspector or open dropdown"),
             ("Drag panel edge", "Resize inspector width in wide windows")]);
         Add("Camera and canvas", [
-            ("Wheel on canvas", "Zoom around the pointer"), ("Middle / right drag", "Pan the view"),
+            ("Wheel on canvas", "Zoom around the pointer"), ("Right drag", "Pan the view"),
             ("V", "Fit the nominal world"), ("World > Camera", "Exact zoom/centre, smoothing and size units"),
-            ("Particles > Brushes", "Choose move/add/paint/erase/force tools"),
+            ("B / middle click", "Toggle Brush tools at the canvas"),
+            ("Brush tools button", "Open tools with any mouse"),
             ("Left drag canvas", "Apply the selected live brush"), ("Escape in gesture", "Stop; Ctrl+Z undoes applied edits")]);
+        Add("Brush tools", [
+            ("Hover / click tool", "Preview / activate; menu stays open"),
+            ("Wheel / inner arc", "Adjust world radius; square half-width"),
+            ("Wheel on a slider", "Adjust that highlighted value"),
+            ("Drag outer segment", "Outward increases strength or count"),
+            ("Click value", "Type an exact number; Enter confirms"),
+            ("Tab / arrows", "Focus tools, settings and history"),
+            ("Enter on tool", "Select the tool and close"),
+            ("Escape", "Cancel unfinished edit, then close"),
+            ("F8 in menu", "Toggle reduced-motion fades")]);
         Add("Directed matrix", [
             ("Drag cells", "Select a rectangle"), ("Ctrl+click", "Toggle cells or add a header selection"),
             ("Shift+click/arrows", "Extend selection from its anchor"), ("Click row/column", "Select a whole directed row/column"),

@@ -8,9 +8,9 @@ internal static class QuickstartHelp
         UiSection start = new("Start here", true);
         Add(start, "1. Space pauses or resumes. N advances one step. Discoveries > Starting recipe > New from recipe starts a fresh experiment.");
         Add(start, "2. Interactions edits receiver <- source. Positive outer coefficients attract; negative repel. Ctrl+Z undoes an edit at the current clock.");
-        Add(start, "3. Wheel zooms around the pointer; middle/right drag pans. V fits the world. E hides the inspector for more canvas.");
-        Add(start, "4. Particles > Brushes selects a tool. Drag on the canvas to apply it. Escape stops the stroke; Ctrl+Z undoes its applied edits.");
-        Add(start, "5. Discoveries opens the file library. Save pattern stores a state to continue; Save session retains the applied history and actual GPU captures.");
+        Add(start, "3. Wheel zooms around the pointer; right drag pans. V fits the world. E hides the inspector for more canvas.");
+        Add(start, "4. B, middle click or Brush tools opens the radial menu. Click a tool, configure it and close the menu before painting. Undo/Redo sit in its hub.");
+        Add(start, "5. S / O reveals Discoveries with folders, search, saving and explicit load/replay actions. Save pattern stores a state; Save session retains applied history and actual GPU captures.");
         Add(start, "6. Playback offers CPU double and GPU float. GPU selection explicitly rounds particle values; switching back captures actual state. Future trajectories can differ.");
         panel.Content.Add(start);
 

@@ -79,6 +79,7 @@ internal static class ReplayCompletionChecks
 
             // Select the actual file and press the production browser's actual Replay actions button.
             // Reflection only reaches retained private UI objects; no production state flag is written.
+            surface.OpenDiscoveries();
             DiscoveryEntry entry = DiscoveryLibrary.Inspect(path) ?? throw new InvalidOperationException("Session was not discoverable.");
             Method(browser, "Select").Invoke(browser, [entry]);
             UiPanel panel = Field<UiPanel>(browser, "panel");
@@ -86,6 +87,9 @@ internal static class ReplayCompletionChecks
             Await(Field<Task>(browser, "fileTask"));
             browser.Pump(); // Queue parsed replay behind the held owner, without pumping owner callbacks.
             Task replayCommand = Field<Task>(browser, "fileOwnerTask");
+            // The library no longer owns a modal. Its replay/final metadata publication must be
+            // delivered after the user has switched to another actual inspector page.
+            ((UiRow)panel.Toolbar[0]).Children[0].Press(default);
             if (outcome == Outcome.Cancelled)
             {
                 heldReplay = session.Run("Hold applied replay before advancement", owner =>
@@ -165,7 +169,7 @@ internal static class ReplayCompletionChecks
     }
 
     private static void Tick(LiveExperimentEditor surface, IReadOnlyList<UiInputEvent>? input = null) =>
-        surface.Update(new Rectangle(0, 0, 460, 700), new Rectangle(0, 0, 900, 700), 1, default, input ?? []);
+        surface.Update(new Rectangle(0, 0, 460, 700), 1, default, input ?? []);
     private static T Field<T>(object owner, string name) => (T)(owner.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(owner)
         ?? throw new InvalidOperationException("Missing retained UI field: " + name));
     private static MethodInfo Method(object owner, string name) => owner.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)

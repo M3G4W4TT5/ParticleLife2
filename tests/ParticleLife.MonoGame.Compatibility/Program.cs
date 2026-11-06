@@ -31,6 +31,19 @@ if (args.Length > 0 && args[0] == "--nested-section-checks")
     return;
 }
 
+if (args.Length > 0 && args[0] == "--discoveries-checks")
+{
+    DiscoveryIntegrationChecks.Run();
+    return;
+}
+
+if (args.Length > 0 && args[0] == "--radial-brush-checks")
+{
+    RadialBrushChecks.Run();
+    RadialBrushMenuChecks.Run();
+    return;
+}
+
 // Compile and managed-assembly smoke check only: no window or native graphics device.
 Vector2d position = new(0.25, 0.75);
 Vector2 displayPosition = new((float)position.X, (float)position.Y);
@@ -39,6 +52,8 @@ RenderingChecks.Run();
 GuidanceChecks.Run();
 GpuMeasurementChecks.Run();
 NestedSectionChecks.Run();
+RadialBrushChecks.Run();
+RadialBrushMenuChecks.Run();
 
 // Exercise the real native numeric widget against the actual editor without creating a Game,
 // SDL window, texture or graphics device. These checks complement native interaction checks.
@@ -342,55 +357,8 @@ presentedPanel.PrepareForOpen(pointerHeld: false);
 presentedPanel.Update(MouseAt(presentedPoint, pressed: true, wheel: -960), 1, []);
 Require(presentedActions == 2, "Keyboard opening discarded the first fresh pointer click.");
 
-// A held Files press must not activate the newly opened compact library. Then exercise
-// its current keyboard Save pattern workflow, including scrolling a short modal.
-string modalDirectory = Path.GetFullPath(Path.Combine("artifacts", "modal-pointer-check", Guid.NewGuid().ToString("N")));
-Directory.CreateDirectory(modalDirectory);
-using (PlaybackController modalPlayback = new(PresetGenerator.Create(PresetKind.Random, 4, 2, 31)))
-{
-    ExperimentEditor modalEditor = new(modalPlayback);
-    using LiveExperimentEditor modalSurface = new(modalEditor, modalDirectory, _ => { }, () => { });
-    Rectangle smallInspector = new(14, 165, 392, 121);
-    Rectangle smallBrowser = new(14, 60, 392, 264);
-    // Files is the third control in the four-button Undo / Redo / Files / Guide row.
-    Point filesAndSave = new(250, 218);
-    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
-    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave, pressed: true), []);
-    Require(modalSurface.IsModal, "The compact Files action did not open its browser.");
-    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave, pressed: true), []);
-    Require(Directory.GetFiles(modalDirectory, "*.json").Length == 0,
-        "Holding the compact Files opening click accidentally saved an experiment.");
-    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
-    for (int index = 0; index < 8; index++)
-    {
-        modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
-            [UiInputEvent.KeyPress(Keys.Tab, false, false)]);
-    }
-    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
-        [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
-    for (int index = 0; index < 5; index++)
-    {
-        modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
-            [UiInputEvent.KeyPress(Keys.Tab, false, false)]);
-    }
-    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
-        [UiInputEvent.KeyPress(Keys.Enter, false, false)]);
-    // File encoding/publication is asynchronous. Closing the modal must not strand completion.
-    modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave),
-        [UiInputEvent.KeyPress(Keys.Escape, false, false)]);
-    Require(!modalSurface.IsModal, "The library did not close while its save completed in the background.");
-    long saveStarted = Stopwatch.GetTimestamp();
-    while (Directory.GetFiles(modalDirectory, "*.discovery.json").Length == 0
-        && Stopwatch.GetElapsedTime(saveStarted).TotalSeconds < 10)
-    {
-        modalSurface.Update(smallInspector, smallBrowser, 1, MouseAt(filesAndSave), []);
-        Thread.Sleep(1);
-    }
-    Require(Directory.GetFiles(modalDirectory, "*.experiment.json").Length == 1
-        && Directory.GetFiles(modalDirectory, "*.viewer.json").Length == 1
-        && Directory.GetFiles(modalDirectory, "*.discovery.json").Length == 1,
-        "The compact library's keyboard Save pattern workflow did not save the experiment, companion and preview.");
-}
+// Exercise the actual embedded library, including compact keyboard access and hidden completion.
+DiscoveryIntegrationChecks.Run();
 
 // At high UI scale a small native pane can be only 80 logical pixels high.
 UiPanel shortPanel = new(_ => { });
@@ -458,7 +426,7 @@ recipePanel.SelectRecipe(PresetKind.BiasedRibbons);
 recipePanel.StartSelectedRecipe();
 recipePanel.SelectRecipe(PresetKind.CoreHalo);
 recipePanel.StartSelectedRecipe();
-recipePanel.Update(new Rectangle(0, 0, 460, 700), new Rectangle(0, 0, 800, 700), 1, default, []);
+recipePanel.Update(new Rectangle(0, 0, 460, 700), 1, default, []);
 Require(editor.Configuration.Matrix.SpeciesCount == 2 && recipePanel.Graph is not null,
     "Native recipe switch failed to refresh the smaller matrix.");
 Console.WriteLine("Native widget integration: compact exact input, dropdown routing, validation, live slider/replay/undo, matrix navigation and built-in recipes passed without graphics.");

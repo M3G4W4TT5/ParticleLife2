@@ -24,6 +24,8 @@ internal sealed partial class ParticleLifeGame : Game
     private readonly EditorSession editor;
     private readonly LiveExperimentEditor surface;
     private readonly HelpLegend legend;
+    private readonly RadialBrushMenu brushMenu;
+    private LucideIcons icons = null!;
     private readonly ViewerOptions options;
     private readonly List<UiInputEvent> input = [];
     private readonly HashSet<Keys> heldKeys = [];
@@ -54,7 +56,7 @@ internal sealed partial class ParticleLifeGame : Game
     private EditedTimingSample? lastEditedSample;
     private ButtonState previousMouseButton;
     private float uiScale = 1;
-    private Rectangle worldBounds, editorBounds, modalBounds, legendBounds;
+    private Rectangle worldBounds, editorBounds, legendBounds;
     private float inspectorWidth = 350;
     private float inspectorProgress;
     private bool statsExpanded = true;
@@ -87,6 +89,7 @@ internal sealed partial class ParticleLifeGame : Game
             surface = new LiveExperimentEditor(this.editor, options.SaveDirectory, SetMessage, PrintTimings,
                 resetTimings: ResetTimingWindow);
             legend = new HelpLegend(CloseLegend, SetMessage, () => this.message);
+            brushMenu = new RadialBrushMenu(surface.BrushState, this.editor);
             graphics = new GraphicsDeviceManager(this)
             {
                 PreferredBackBufferWidth = 1360,
@@ -130,6 +133,7 @@ internal sealed partial class ParticleLifeGame : Game
         }
         font = new BitmapFont(GraphicsDevice);
         canvas = new UiCanvas(batch, pixel, font);
+        icons = new LucideIcons(GraphicsDevice);
         clipped = new RasterizerState { CullMode = CullMode.None, ScissorTestEnable = true };
         Console.WriteLine($"Viewer: {GraphicsDevice.Adapter.Description}; {Environment.Version}; {Environment.OSVersion}");
         Console.WriteLine($"Particle renderer: {particleRenderer.Description}; CPU drawing is independent of compute availability.");
@@ -137,7 +141,7 @@ internal sealed partial class ParticleLifeGame : Game
             $"seed={editor.Generation.Seed}; diagnostics every {controller.DiagnosticEverySteps} steps.");
         Console.WriteLine($"Search requested: {editor.Configuration.Backend}; workers: {editor.Configuration.WorkerCount}; " +
             $"startup override: {options.BackendOverride?.ToString() ?? "none"}; integrator: {ExperimentFile.IntegratorVersion}; model: {ExperimentFile.ModelVersion}.");
-        Console.WriteLine($"FILES / S opens named save/load workflows under {options.SaveDirectory}. E toggles editor; F9 prints timings.");
+        Console.WriteLine($"Discoveries / S / O opens named save/load workflows under {options.SaveDirectory}. B opens Brush tools. E toggles editor; F9 prints timings.");
         previousTimestamp = Stopwatch.GetTimestamp();
         previousCanvasMouse = Mouse.GetState();
         wasActive = IsActive;
@@ -179,6 +183,7 @@ internal sealed partial class ParticleLifeGame : Game
                 legend.LoseFocus();
                 resizingInspector = false;
                 EndCanvasGesture();
+                brushMenu.LoseFocus();
                 controller.SetPaused(true);
                 heldKeys.Clear();
                 SetMessage("Focus lost - paused. Resume explicitly when ready.");
@@ -225,28 +230,32 @@ internal sealed partial class ParticleLifeGame : Game
         long editorStarted = Stopwatch.GetTimestamp();
         try
         {
-            if (editor.Appearance.ShowHelp && !surface.IsModal)
+            bool radialConsumed = RouteBrushMenu(mouse, elapsed);
+            headerClick = radialConsumed;
+            if (editor.Appearance.ShowHelp)
             {
+                surface.Update(editorBounds, uiScale, mouse, [], allowInput: false);
+                skipPlayback |= surface.SuppressPlayback;
                 legend.Update(legendBounds, uiScale, mouse, input, CloseLegend);
                 headerClick = true;
             }
             else
             {
                 // Let the editor validate an outgoing draft before header actions may mutate state.
-                surface.Update(editorBounds, modalBounds, uiScale, mouse, input,
+                surface.Update(editorBounds, uiScale, mouse, input,
                     heldKeys.Contains(Keys.LeftControl) || heldKeys.Contains(Keys.RightControl),
-                    heldKeys.Contains(Keys.LeftShift) || heldKeys.Contains(Keys.RightShift));
+                    heldKeys.Contains(Keys.LeftShift) || heldKeys.Contains(Keys.RightShift), allowInput: !radialConsumed);
                 skipPlayback |= surface.SuppressPlayback;
                 if (editor.Appearance.ShowHelp)
                 {
                     legend.PrepareForOpen(mouse.LeftButton == ButtonState.Pressed);
                 }
-                if (clicked && !surface.IsModal && ToastVisible && ToastCloseBounds.Contains(mouse.Position))
+                if (clicked && !headerClick && ToastVisible && ToastCloseBounds.Contains(mouse.Position))
                 {
                     messageUntil = 0;
                     headerClick = true;
                 }
-                if (clicked && !headerClick && !surface.IsModal && !surface.CapturesKeyboard)
+                if (clicked && !headerClick && !surface.CapturesKeyboard)
                 {
                     headerClick = HandleHeaderClick(mouse.Position, ref skipPlayback);
                     Rectangle panel = Physical(editorBounds);
@@ -288,8 +297,8 @@ internal sealed partial class ParticleLifeGame : Game
         }
         try
         {
-            UpdateCanvasControls(mouse, elapsed, !headerClick && !surface.IsModal && !editor.Appearance.ShowHelp
-                && !surface.CapturesKeyboard && !resizingInspector && !TransportBounds.Contains(mouse.Position));
+            UpdateCanvasControls(mouse, elapsed, !headerClick && !editor.Appearance.ShowHelp
+                && !surface.CapturesKeyboard && !editor.IsReplaying && !resizingInspector && !TransportBounds.Contains(mouse.Position));
         }
         catch (Exception exception) when (ViewerErrors.IsExpected(exception))
         {
@@ -430,12 +439,12 @@ internal sealed partial class ParticleLifeGame : Game
             case Keys.D2: surface.Template(PresetKind.Chains); return false;
             case Keys.D3: surface.Template(PresetKind.Snakes); return false;
             case Keys.S:
-            case Keys.O: surface.OpenFiles(); return true;
+            case Keys.O: surface.OpenDiscoveries(); return true;
             case Keys.E: surface.ToggleVisibility(); return false;
             case Keys.F5:
                 if (options.InputPath is null)
                 {
-                    surface.OpenFiles();
+                    surface.OpenDiscoveries();
                 }
                 else
                 {
@@ -554,8 +563,6 @@ internal sealed partial class ParticleLifeGame : Game
             editorBounds = Logical(new Rectangle(14 + (int)(width * (1 - reveal)), 70 + worldHeight, paneWidth,
                 Math.Max(80, height - worldHeight - 124)));
         }
-        int modalWidth = Math.Min(width - 28, (int)(800 * uiScale));
-        modalBounds = Logical(new Rectangle((width - modalWidth) / 2, 60, modalWidth, Math.Max(120, height - 76)));
         int legendWidth = Math.Min(width - 28, (int)(560 * uiScale));
         int legendHeight = Math.Min(height - 76, (int)(720 * uiScale));
         legendBounds = Logical(new Rectangle((width - legendWidth) / 2, 60, legendWidth, Math.Max(120, legendHeight)));
@@ -656,22 +663,29 @@ internal sealed partial class ParticleLifeGame : Game
         }
         batch.Begin(samplerState: SamplerState.LinearClamp);
         DrawHeaderControl(2);
+        DrawBrushButton();
         DrawNotification();
         batch.End();
-        if (surface.IsModal || editor.Appearance.ShowHelp)
+        if (brushMenu.IsVisible)
+        {
+            batch.Begin(samplerState: SamplerState.LinearClamp, transformMatrix: Matrix.CreateScale(BrushMenuScale));
+            brushMenu.Draw(canvas, batch, icons);
+            batch.End();
+            if (brushMenu.IsOpen && surface.BrushState.EditingParameter.HasValue)
+            {
+                // Keep the real world-space footprint visible even when its anchor is under the hub.
+                // The menu's edge-adjusted centre never substitutes for this independent canvas anchor.
+                GraphicsDevice.ScissorRectangle = Rectangle.Intersect(worldBounds, GraphicsDevice.Viewport.Bounds);
+                DrawBrushPreview(CreateWorldTransform());
+            }
+        }
+        if (editor.Appearance.ShowHelp)
         {
             batch.Begin(samplerState: SamplerState.LinearClamp);
             batch.Draw(softenedScene!, GraphicsDevice.Viewport.Bounds, Color.White);
             canvas.Fill(GraphicsDevice.Viewport.Bounds, Color.Black * 0.35f);
             batch.End();
-            if (surface.IsModal)
-            {
-                DrawPanel(surface.BrowserBounds, surface.BrowserBody, surface.DrawBrowserChrome, surface.DrawBrowserBody);
-            }
-            else
-            {
-                DrawPanel(legend.Bounds, legend.Body, legend.DrawChrome, legend.DrawBody);
-            }
+            DrawPanel(legend.Bounds, legend.Body, legend.DrawChrome, legend.DrawBody);
         }
         summaryFrames++;
         double drawMilliseconds = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
@@ -796,9 +810,8 @@ internal sealed partial class ParticleLifeGame : Game
     private void UpdateCanvasControls(MouseState mouse, double elapsed, bool available)
     {
         bool inside = worldBounds.Contains(mouse.Position);
-        bool panHeld = mouse.MiddleButton == ButtonState.Pressed || mouse.RightButton == ButtonState.Pressed;
-        bool panPressed = mouse.MiddleButton == ButtonState.Pressed && previousCanvasMouse.MiddleButton == ButtonState.Released
-            || mouse.RightButton == ButtonState.Pressed && previousCanvasMouse.RightButton == ButtonState.Released;
+        bool panHeld = mouse.RightButton == ButtonState.Pressed;
+        bool panPressed = mouse.RightButton == ButtonState.Pressed && previousCanvasMouse.RightButton == ButtonState.Released;
         if (available && inside && panPressed)
         {
             SuspendTrackingFollow();
@@ -887,13 +900,15 @@ internal sealed partial class ParticleLifeGame : Game
     private void DrawBrushPreview(WorldTransform transform)
     {
         MouseState mouse = Mouse.GetState();
-        if (!surface.BrushEnabled || surface.IsModal || editor.Appearance.ShowHelp || !worldBounds.Contains(mouse.Position)
-            || TransportBounds.Contains(mouse.Position)) { return; }
-        double extent = transform.WorldLengthToPixels(surface.Brush.Radius);
+        bool menuPreview = brushMenu.IsOpen;
+        BrushSettings preview = menuPreview ? surface.BrushState.FocusedBrush : surface.Brush;
+        if ((menuPreview ? surface.BrushState.FocusedTool == 0 : !surface.BrushEnabled) || editor.Appearance.ShowHelp
+            || !menuPreview && (!worldBounds.Contains(mouse.Position) || TransportBounds.Contains(mouse.Position) || BrushButtonBounds.Contains(mouse.Position))) { return; }
+        double extent = transform.WorldLengthToPixels(preview.Radius);
         if (!double.IsFinite(extent) || extent <= 0 || extent > 1e5) { return; }
         ModelParameters parameters = editor.Publication.Configuration.Parameters;
         bool periodic = parameters.Boundary == BoundaryKind.Periodic;
-        Vector2d pointer = transform.ToWorld(new Vector2d(mouse.X, mouse.Y));
+        Vector2d pointer = menuPreview ? brushMenu.WorldAnchor : transform.ToWorld(new Vector2d(mouse.X, mouse.Y));
         if (periodic) { pointer = new(WorldBoundary.Wrap(pointer.X, parameters.WorldWidth), WorldBoundary.Wrap(pointer.Y, parameters.WorldHeight)); }
         Color tint = brushing ? UiCanvas.Accent : UiCanvas.Ink * 0.6f;
         batch.Begin(samplerState: SamplerState.LinearClamp, rasterizerState: clipped);
@@ -904,7 +919,7 @@ internal sealed partial class ParticleLifeGame : Game
                 Vector2d mapped = transform.ToScreen(new Vector2d(pointer.X + x * parameters.WorldWidth, pointer.Y + y * parameters.WorldHeight));
                 if (!mapped.IsFinite || Math.Abs(mapped.X) > 1e7 || Math.Abs(mapped.Y) > 1e7) { continue; }
                 Vector2 centre = new((float)mapped.X, (float)mapped.Y);
-                if (surface.Brush.Shape == BrushShape.Square)
+                if (preview.Shape == BrushShape.Square)
                 {
                     canvas.RoundedBorder(new Rectangle((int)(mapped.X - extent), (int)(mapped.Y - extent), Math.Max(1, (int)(extent * 2)), Math.Max(1, (int)(extent * 2))), tint, 0);
                 }
@@ -967,11 +982,7 @@ internal sealed partial class ParticleLifeGame : Game
         }
         else if (index == 2)
         {
-            canvas.RoundedBorder(new Rectangle(bounds.Center.X - 8, bounds.Center.Y - 6, 16, 13), tint, 2);
-            canvas.Line(center + new Vector2(3, -6), center + new Vector2(3, 6), tint);
-            float direction = editor.Appearance.ShowEditor ? 1 : -1;
-            canvas.Line(center + new Vector2(-2 - direction * 2, -2), center + new Vector2(-2 + direction * 2, 0), tint);
-            canvas.Line(center + new Vector2(-2 + direction * 2, 0), center + new Vector2(-2 - direction * 2, 2), tint);
+            icons.Draw(batch, "square-chevron-left", new Rectangle(bounds.Center.X - 10, bounds.Center.Y - 10, 20, 20), tint);
         }
         else if (index == 3)
         {
@@ -992,11 +1003,7 @@ internal sealed partial class ParticleLifeGame : Game
         }
         else
         {
-            canvas.RoundedBorder(new Rectangle(bounds.Center.X - 8, bounds.Center.Y - 6, 16, 13), tint, 2);
-            canvas.Line(center + new Vector2(-3, -6), center + new Vector2(-3, 6), tint);
-            float direction = statsExpanded ? -1 : 1;
-            canvas.Line(center + new Vector2(2 - direction * 2, -2), center + new Vector2(2 + direction * 2, 0), tint);
-            canvas.Line(center + new Vector2(2 + direction * 2, 0), center + new Vector2(2 - direction * 2, 2), tint);
+            icons.Draw(batch, "square-chevron-right", new Rectangle(bounds.Center.X - 10, bounds.Center.Y - 10, 20, 20), tint);
         }
         if (hovered && index != 3)
         {
@@ -1274,6 +1281,7 @@ internal sealed partial class ParticleLifeGame : Game
             scene?.Dispose();
             softenedScene?.Dispose();
             font?.Dispose();
+            icons?.Dispose();
             splash?.Dispose();
             particleRenderer?.Dispose();
             worldVisuals?.Dispose();

@@ -56,15 +56,13 @@ internal sealed class LiveExperimentEditor : IDisposable
     private readonly UiSection discoveries;
     internal ForceGraph Graph { get; }
     internal bool SuppressPlayback { get; private set; }
-    internal bool IsModal => browser.IsOpen;
-    internal bool CapturesKeyboard => browser.IsOpen || panel.Capturing;
+    internal bool CapturesKeyboard => panel.Capturing;
     internal bool ConsumedKeyboard { get; private set; }
     internal Rectangle PanelBounds => panel.Bounds;
     internal Rectangle PanelBody => panel.Body;
-    internal Rectangle BrowserBounds => browser.Bounds;
-    internal Rectangle BrowserBody => browser.Body;
     internal bool BrushEnabled => exploration.BrushEnabled;
     internal BrushSettings Brush => exploration.Brush;
+    internal RadialBrushState BrushState => exploration.State;
     internal VisualToolsControls VisualTools { get; }
     internal void FitCamera() => exploration.Fit();
 
@@ -88,13 +86,7 @@ internal sealed class LiveExperimentEditor : IDisposable
         exploration = new ExplorationControls(editor, matrix, () => symmetry, report);
         matrix.ColourRequested = SelectColour;
         Graph = new ForceGraph(editor, matrix);
-        browser = new ExperimentFileBrowser(editor, saveDirectory, report, () => SuppressPlayback = true, ClearDrafts, updateRecent);
-        panel.Toolbar.Add(new UiRow(
-            new UiButton(() => "Undo", () => editor.Undo(), "Undo at the current clock. Membership undo preserves surviving motion and restores removed particles from saved state; resampling undo restores captured positions/velocities.", () => editor.CanUndo),
-            new UiButton(() => "Redo", () => editor.Redo(), "Reapply an undone editor operation at the current boundary. A new edit clears redo.", () => editor.CanRedo),
-            Button(() => "Files", OpenFiles, "Save named presets, exact states, initial experiments and sessions; browse local files and replay in-app."),
-            Button(() => "Guide", () => editor.SetAppearance(editor.Appearance with { ShowHelp = true }),
-                "Start here: Reset, Resample, New, camera, brushes, files and keyboard controls. H or F1 opens the same guide.")));
+        browser = new ExperimentFileBrowser(editor, panel, saveDirectory, report, () => SuppressPlayback = true, ClearDrafts, updateRecent);
 
         recipes = Section("Starting recipe", true);
         interactions = Section("Interactions");
@@ -136,10 +128,10 @@ internal sealed class LiveExperimentEditor : IDisposable
         simulation.Children.RemoveRange(7, simulation.Children.Count - 7);
         simulation.Children.Add(advanced);
         discoveries.Children.Add(new UiLabel(() => "Preset: future recipe. From here: exact state. Initial: reset baseline. Session: every applied edit.", 50));
-        discoveries.Children.Add(Button(() => "Browse saved discoveries", OpenFiles, "Open named save/load workflows. Existing destinations are never overwritten."));
+        discoveries.Children.Add(browser.Root);
         RecordingControls.AddTo(discoveries, editor, report);
         panel.Toolbar.Add(new UiRow(
-            new UiButton(() => "Particles", () => SelectTab(0), "Live populations, independent generators and direct brushes.", selected: () => selectedTab == 0),
+            new UiButton(() => "Particles", () => SelectTab(0), "Live populations and independent generators. Brush tools open from the canvas.", selected: () => selectedTab == 0),
             new UiButton(() => "Interactions", () => SelectTab(1), "Forces and directed matrix editing.", selected: () => selectedTab == 1),
             new UiButton(() => "World", () => SelectTab(2), "World geometry, camera and display size.", selected: () => selectedTab == 2)));
         panel.Toolbar.Add(new UiRow(
@@ -157,13 +149,14 @@ internal sealed class LiveExperimentEditor : IDisposable
         panel.Content.Clear();
         panel.Content.AddRange(index switch
         {
-            0 => [population, generation, exploration.Tools],
+            0 => [population, generation],
             1 => [forces, interactions],
             2 => [world, exploration.Camera],
             3 => [simulation],
             4 => [appearance],
             _ => [recipes, discoveries]
         });
+        if (index == 5) { browser.Open(); }
         panel.ScrollToTop();
     }
 
@@ -664,8 +657,8 @@ internal sealed class LiveExperimentEditor : IDisposable
         }
     }
 
-    internal void Update(Rectangle bounds, Rectangle modalBounds, float scale, MouseState mouse,
-        IReadOnlyList<UiInputEvent> input, bool pointerControl = false, bool pointerShift = false)
+    internal void Update(Rectangle bounds, float scale, MouseState mouse,
+        IReadOnlyList<UiInputEvent> input, bool pointerControl = false, bool pointerShift = false, bool allowInput = true)
     {
         editor.Pump();
         browser.Pump();
@@ -673,13 +666,13 @@ internal sealed class LiveExperimentEditor : IDisposable
         SuppressPlayback = false;
         ConsumedKeyboard = false;
         panel.Arrange(bounds);
-        browser.Arrange(modalBounds);
         Synchronize();
+        if (!allowInput || editor.IsReplaying) { panel.SuppressInput(mouse); }
         if (editor.IsReplaying)
         {
             ConsumedKeyboard = true;
             SuppressPlayback = true;
-            if (input.Any(entry => !entry.IsText && entry.Key == Keys.Escape))
+            if (allowInput && input.Any(entry => !entry.IsText && entry.Key == Keys.Escape))
             {
                 browser.CancelReplay();
             }
@@ -702,20 +695,16 @@ internal sealed class LiveExperimentEditor : IDisposable
                 }
             }
         }
-        else if (browser.IsOpen)
-        {
-            ConsumedKeyboard = true;
-            browser.Update(modalBounds, scale, mouse, input);
-        }
-        else if (editor.Appearance.ShowEditor)
+        else if (allowInput && editor.Appearance.ShowEditor)
         {
             panel.Bounds = bounds;
             panel.Update(mouse, scale, input, pointerControl, pointerShift);
             ConsumedKeyboard = panel.ConsumedKeyboard;
         }
-        else
+        else if (allowInput)
         {
             panel.ClearFocus();
+            panel.SuppressInput(mouse);
         }
         Synchronize();
     }
@@ -726,13 +715,19 @@ internal sealed class LiveExperimentEditor : IDisposable
         editor.EndGesture();
     }
 
+    /// <summary>Validates focused inspector drafts before handing input to the canvas menu.</summary>
+    internal bool TryReleaseFocus() => panel.TryReleaseFocus();
+
     /// <summary>Finishes dispatched file writes and cancels library scanning before graphics/owner shutdown.</summary>
     public void Dispose() => browser.Dispose();
 
-    internal void OpenFiles()
+    /// <summary>Reveals the integrated library after validating the outgoing inspector draft.</summary>
+    internal void OpenDiscoveries()
     {
-        panel.ClearFocus();
-        browser.Open(pointerHeld: currentMouseButton == ButtonState.Pressed);
+        if (!panel.TryReleaseFocus()) { return; }
+        editor.SetAppearance(editor.Appearance with { ShowEditor = true });
+        SelectTab(5);
+        panel.PrepareForOpen(pointerHeld: currentMouseButton == ButtonState.Pressed);
     }
 
     internal void ToggleVisibility()
@@ -818,22 +813,4 @@ internal sealed class LiveExperimentEditor : IDisposable
     internal void DrawChrome(UiCanvas canvas) => panel.DrawChrome(canvas, "Inspector");
     internal void DrawBody(UiCanvas canvas) => panel.DrawBody(canvas);
     internal void DrawOverlay(UiCanvas canvas) => panel.DrawOverlay(canvas);
-    internal void DrawBrowserChrome(UiCanvas canvas)
-    {
-        browser.DrawChrome(canvas);
-        if (editor.IsReplaying)
-        {
-            Rectangle box = new(browser.Bounds.X + 20, browser.Bounds.Y + 140, browser.Bounds.Width - 40, 80);
-            canvas.Fill(box, UiCanvas.Raised);
-            canvas.Text($"REPLAYING {editor.ReplayCompletedStep} / {editor.ReplayTerminalStep}", box.X + 14, box.Y + 17, UiCanvas.Accent);
-            canvas.Text("Esc cancels. replay uses simulation steps.", box.X + 14, box.Y + 43, UiCanvas.Muted, (box.Width - 28) / 9);
-        }
-    }
-    internal void DrawBrowserBody(UiCanvas canvas)
-    {
-        if (!editor.IsReplaying)
-        {
-            browser.DrawBody(canvas);
-        }
-    }
 }

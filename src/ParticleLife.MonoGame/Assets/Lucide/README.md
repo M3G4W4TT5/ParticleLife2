@@ -1,6 +1,6 @@
-# Brush and history icons
+# Native canvas icons
 
-The thirteen SVGs in this directory are unmodified assets from **Lucide 0.468.0**,
+The sixteen SVGs in this directory are unmodified assets from **Lucide 0.468.0**,
 commit [`f12b0de177fbc2a6795e99be065887e72b237123`](https://github.com/lucide-icons/lucide/tree/f12b0de177fbc2a6795e99be065887e72b237123/icons).
 Each file comes from that commit's `icons/<name>.svg`. The official tag was resolved
 through GitHub's Git reference API. No icon font or runtime network request is used.
@@ -24,6 +24,9 @@ unchanged. Icons occupy 96 × 96 cells, in this order:
 11. `circle-dashed` — Circle shape
 12. `square-dashed` — Square shape
 13. `circle-check` — Species selection
+14. `circle-ellipsis` — Radial brush menu launcher
+15. `square-chevron-right` — Details toggle
+16. `square-chevron-left` — Inspector toggle
 
 `lucide-atlas.png` is a curated, embedded runtime asset. Regenerate it offline
 from these sources with `pwsh -NoProfile -File scripts/build-lucide-atlas.ps1`.
@@ -33,7 +36,7 @@ ordinary .NET build does not require ImageMagick. The atlas is premultiplied and
 given area-filtered mip levels once at native resource creation, so Draw does
 not perform file I/O or rasterization.
 
-Atlas SHA-256: `36df84ff10a48bf06844c5f3e6aa7e29e0004c286334c742b0b6b8c284e8310b`.
+Atlas SHA-256: `e6a1057c910a759ee49b6e19b225e101ce8bc8794515d594244d767f973ba467`.
 
 Lucide's ISC notice is retained verbatim in `LICENSE`. The original Feather MIT
 notice is also included in `FEATHER-LICENSE` for inherited portions, from

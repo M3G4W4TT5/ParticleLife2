@@ -52,6 +52,35 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         draggingScroll = false;
     }
 
+    /// <summary>Validates an outgoing draft and ends pointer capture before a host-owned action.</summary>
+    /// <remarks>Unlike explicit cancellation, an invalid draft retains focus and blocks the action.</remarks>
+    internal bool TryReleaseFocus()
+    {
+        bool accepted = false;
+        Try(() =>
+        {
+            if (focused?.Focus(false) == false) { return; }
+            captured?.Release();
+            focused = captured = null;
+            draggingScroll = false;
+            accepted = true;
+        });
+        return accepted;
+    }
+
+    /// <summary>Consumes pointer edges while a higher-priority overlay owns input.</summary>
+    /// <remarks>Synchronizing all buttons and the wheel prevents a dismissing press or held button
+    /// from becoming a fresh inspector action after the overlay relinquishes ownership.</remarks>
+    internal void SuppressInput(MouseState mouse)
+    {
+        previousButton = mouse.LeftButton;
+        previousMiddleButton = mouse.MiddleButton;
+        previousRightButton = mouse.RightButton;
+        previousWheel = mouse.ScrollWheelValue;
+        synchronizeWheel = false;
+        ConsumedKeyboard = false;
+    }
+
     internal void ScrollToTop() => scroll = 0;
 
     /// <summary>Seeds edge detection from the pointer state that opened a previously inactive panel.</summary>

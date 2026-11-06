@@ -12,23 +12,21 @@ internal sealed class ExplorationControls
     private readonly Action<string> report;
     private readonly InteractionMatrixWidget matrix;
     private readonly Func<bool> linkReverse;
-    private BrushSettings brush = new();
-    private int tool;
     private double bulkValue, bulkScale = 1;
     private int generationSpecies = -1;
     private SpeciesAssignmentKind assignment;
     private double assignmentFraction = 1;
     private int assignmentSpecies;
     private PaletteKind palette;
-    internal bool BrushEnabled => tool > 0;
-    internal BrushSettings Brush => brush;
-    internal UiSection Tools { get; } = new("Canvas brushes", true);
+    internal RadialBrushState State { get; } = new();
+    internal bool BrushEnabled => State.BrushEnabled;
+    internal BrushSettings Brush => State.ActiveBrush;
     internal UiSection Camera { get; } = new("Camera", true);
 
     internal ExplorationControls(EditorSession editor, InteractionMatrixWidget matrix, Func<bool> linkReverse, Action<string> report)
     {
         this.editor = editor; this.matrix = matrix; this.linkReverse = linkReverse; this.report = report;
-        BuildTools(); BuildCamera();
+        BuildCamera();
     }
 
     private UiNumber Number(string label, Func<double> get, Action<double> set, double initial, double min, double max,
@@ -154,7 +152,7 @@ internal sealed class ExplorationControls
 
     private void BuildCamera()
     {
-        Camera.Children.Add(new UiLabel(() => "Wheel zooms at pointer. Middle/right drag pans. V fits. Camera never edits particles.", 44));
+        Camera.Children.Add(new UiLabel(() => "Wheel zooms at pointer. Right drag pans. Middle-click or B opens brush tools. V fits.", 44));
         Camera.Children.Add(Number("Camera zoom", () => editor.Appearance.Camera.Zoom,
             value => SetCamera(editor.Appearance.Camera with { Zoom = value }), 1, 0.02, 500, "Zoom relative to fitted world. Exact supported range 0.02..500.", log: true));
         Camera.Children.Add(Number("Camera centre X", () => editor.Appearance.Camera.CenterX,
@@ -173,34 +171,6 @@ internal sealed class ExplorationControls
     }
     internal void Fit() => SetCamera(editor.Appearance.Camera with { Zoom = 1, CenterX = 0.5, CenterY = 0.5 });
     private void SetCamera(CameraSettings camera) => editor.SetAppearance(editor.Appearance with { Camera = camera });
-
-    private void BuildTools()
-    {
-        string[] labels = ["Navigate only", "Move", "Add particles", "Paint species", "Erase", "Attract", "Repel", "Directional force"];
-        Tools.Children.Add(new UiDropdown("Left-drag tool", labels, () => tool, value =>
-        {
-            tool = value; if (value > 0) { brush = brush with { Kind = (BrushKind)(value - 1) }; }
-        }, "Choose a live tool, then drag the canvas. Navigate only leaves the left button free. Middle/right drag always pans."));
-        Tools.Children.Add(new UiDropdown("Brush shape", ["Circle", "Square"], () => (int)brush.Shape,
-            value => brush = brush with { Shape = (BrushShape)value }, "World-space footprint, independent of particle display size."));
-        Tools.Children.Add(Number("Brush radius [L]", () => brush.Radius, value =>
-        {
-            if (!double.IsFinite(value) || value <= 0) { throw new ArgumentOutOfRangeException(nameof(value)); }
-            brush = brush with { Radius = value };
-        }, 0.06, 0.001, 0.5, "Positive world-space radius; square tools use this as half-width.", log: true));
-        Tools.Children.Add(Number("Force intensity [L/T²]", () => brush.Intensity,
-            value => brush = brush with { Intensity = value }, 2, 0.01, 100,
-            "Per actual applied sample, velocity changes by intensity * fixed numerical dt. Paused samples are explicit impulses; replay uses actual boundary payloads.", log: true));
-        Tools.Children.Add(Number("Direction [rad]", () => brush.DirectionRadians, value => brush = brush with { DirectionRadians = value },
-            0, -Math.PI, Math.PI, "Directional force angle: zero rightwards, pi/2 downwards."));
-        Tools.Children.Add(Number("Added per sample", () => brush.AddCount, value => brush = brush with { AddCount = Integer(value) },
-            8, 1, 128, "1..4096 particles per actual add sample. Unapplied previews coalesce while the CPU is busy.", integer: true));
-        Tools.Children.Add(Number("Paint/add species", () => brush.Species, value => brush = brush with { Species = Integer(value) },
-            0, 0, 31, "Active species assigned by add and paint tools.", integer: true));
-        Tools.Children.Add(Number("Affected species", () => brush.SpeciesFilter, value => brush = brush with { SpeciesFilter = Integer(value) },
-            -1, -1, 31, "-1 affects every species. Another active index filters move, paint, erase and force tools.", integer: true));
-        Tools.Children.Add(new UiLabel(() => "One stroke is one undo; each applied sample remains in replay. Local edits use compact identity deltas. Check recording status for history and session storage limits.", 66));
-    }
 }
 
 internal sealed class PopulationBarsWidget(EditorSession editor, Action<int> selected, Action<int> colour, Action<int, int> adjust) : UiWidget(

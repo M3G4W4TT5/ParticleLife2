@@ -91,7 +91,7 @@ internal static class NestedSectionChecks
             "A nested control reported an unexpected validation failure: " + string.Join(" | ", feedback));
 
         void Tick(IReadOnlyList<UiInputEvent>? input = null, MouseState? mouse = null) =>
-            surface.Update(bounds, new Rectangle(0, 0, 600, 500), 1, mouse ?? Neutral, input ?? []);
+            surface.Update(bounds, 1, mouse ?? Neutral, input ?? []);
         void Key(Keys key, bool control = false, bool shift = false) => Tick([UiInputEvent.KeyPress(key, control, shift)]);
         void Focus(UiWidget target)
         {
@@ -168,7 +168,7 @@ internal static class NestedSectionChecks
             "Timing controls changed simulation state, settings, history or pause policy.");
 
         void Tick(IReadOnlyList<UiInputEvent>? input = null, MouseState? mouse = null) =>
-            surface.Update(bounds, new Rectangle(0, 0, 600, 500), 1, mouse ?? Neutral, input ?? []);
+            surface.Update(bounds, 1, mouse ?? Neutral, input ?? []);
         void Key(Keys key) => Tick([UiInputEvent.KeyPress(key, false, false)]);
         void Focus(UiWidget target)
         {
