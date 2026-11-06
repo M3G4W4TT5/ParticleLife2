@@ -3,6 +3,117 @@ using ParticleLife.Benchmarks;
 
 try
 {
+    if (args.Length > 0 && args[0] == "prepare-p7")
+    {
+        if (args.Length is < 3 or > 5)
+        {
+            throw new ArgumentException("Use prepare-p7 p1-input-directory fresh-output-directory [screen|ladder|stretch|all|case-list] [global|heterogeneous|both].");
+        }
+        P7Inputs.Prepare(args[1], args[2], args.Length > 3 ? args[3] : "screen", args.Length > 4 ? args[4] : "both");
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "measure-p7-cpu")
+    {
+        if (args.Length is < 6 or > 8)
+        {
+            throw new ArgumentException("Use measure-p7-cpu input.json fresh-report.json workers evolution-steps samples [deadline-seconds=60] [fresh-premeasurement-snapshot.json].");
+        }
+        return P7Runner.Run(args[1], args[2], int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture),
+            int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture), int.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture),
+            args.Length > 6 ? int.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture) : 60, args.Length > 7 ? args[7] : null);
+    }
+
+    if (args.Length > 0 && args[0] == "_measure-p7-cpu")
+    {
+        if (args.Length != 9) { throw new ArgumentException("Internal P7 CPU child requires eight arguments."); }
+        P7Runner.MeasureCase(args[1], args[2], args[3], int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture),
+            int.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture), int.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture),
+            args[7], args[8].Length == 0 ? null : args[8]);
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "prepare-p4-production")
+    {
+        if (args.Length != 3) { throw new ArgumentException("Use prepare-p4-production source-profile-input-directory fresh-output-directory."); }
+        P4RangeProfile.PrepareProductionComparison(args[1], args[2]);
+        return 0;
+    }
+    if (args.Length > 0 && args[0] == "profile-p4-ranges")
+    {
+        if (args.Length is < 2 or > 3) { throw new ArgumentException("Use profile-p4-ranges fresh-output-directory [5..30 samples]."); }
+        P4RangeProfile.Run(args[1], args.Length == 3 ? int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 5);
+        return 0;
+    }
+    if (args.Length > 0 && args[0] == "prepare-p2")
+    {
+        if (args.Length != 3)
+        {
+            throw new ArgumentException("Use prepare-p2 fresh-output-directory saved-input.json.");
+        }
+        P2Candidates.Prepare(args[1], args[2]);
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "measure-p2")
+    {
+        if (args.Length != 6)
+        {
+            throw new ArgumentException("Use measure-p2 output.json input.json workers static|evolving samples.");
+        }
+        P2Runner.Run(args[1], args[2], int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture),
+            args[4], int.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture));
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "profile-p2")
+    {
+        if (args.Length != 4)
+        {
+            throw new ArgumentException("Use profile-p2 output.json input.json samples.");
+        }
+        P2Candidates.Run(args[1], args[2], int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture));
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "prepare-p1")
+    {
+        if (args.Length is < 2 or > 3)
+        {
+            throw new ArgumentException("Use prepare-p1 input-directory [screen|density|ladder|stress|stretch|all|case].");
+        }
+
+        P1Inputs.Prepare(args[1], args.Length > 2 ? args[2] : "screen");
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "measure-p1")
+    {
+        if (args.Length is < 3 or > 8)
+        {
+            throw new ArgumentException("Use measure-p1 output-directory input-directory [selection] [samples] [timeout-seconds] [workers] [evolving|static].");
+        }
+
+        P1Runner.Run(args[1], args[2], args.Length > 3 ? args[3] : "screen",
+            args.Length > 4 ? int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture) : 5,
+            args.Length > 5 ? int.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture) : 30,
+            args.Length > 6 ? int.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture) : 1,
+            args.Length > 7 ? args[7] : "evolving");
+        return 0;
+    }
+
+    if (args.Length > 0 && args[0] == "_measure-p1-case")
+    {
+        if (args.Length != 7)
+        {
+            throw new ArgumentException("Internal P1 child invocation requires six arguments.");
+        }
+
+        P1Runner.MeasureCase(args[1], args[2], int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture),
+            int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture), args[5], args[6]);
+        return 0;
+    }
+
     if (args.Length > 0 && args[0] == "editor")
     {
         if (args.Length is < 3 or > 4)
@@ -97,6 +208,13 @@ try
     }
 
     Console.WriteLine("Particle Life CPU benchmarks (run Release without a debugger)");
+    Console.WriteLine("  prepare-p7 p1-input-directory fresh-output-directory [screen|ladder|stretch|all|case-list] [global|heterogeneous|both]");
+    Console.WriteLine("  measure-p7-cpu input.json fresh-report.json workers evolution-steps samples [deadline-seconds=60] [fresh-premeasurement-snapshot.json]");
+    Console.WriteLine("  prepare-p2 fresh-output-directory saved-input.json");
+    Console.WriteLine("  measure-p2 output.json input.json workers static|evolving samples");
+    Console.WriteLine("  profile-p2 output.json input.json samples");
+    Console.WriteLine("  prepare-p1 input-directory [screen|density|ladder|stress|stretch|all|case]");
+    Console.WriteLine("  measure-p1 output-directory input-directory [screen|density|ladder|stress|stretch|all|case] [samples >= 5] [timeout-seconds] [workers] [evolving|static]");
     Console.WriteLine("  editor output-directory input-experiment.json [samples >= 20]");
     Console.WriteLine("  prepare-m41 [input-directory] [retained-M4-directory]");
     Console.WriteLine("  profile-m41 input-experiment.json output-profile.json");

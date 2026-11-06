@@ -6,12 +6,20 @@ using ParticleLife.Viewer;
 namespace ParticleLife.MonoGame.Editor;
 
 /// <summary>Draws a paged directed matrix without copying its immutable values during a frame.</summary>
-internal sealed class InteractionMatrixWidget(ExperimentEditor editor) : UiWidget(
+internal sealed class InteractionMatrixWidget(EditorSession editor) : UiWidget(
     "Rows receive; columns are sources. Select a cell, then edit its coefficient below. Arrow keys move selection. Page buttons expose larger matrices.")
 {
+    internal InteractionMatrixWidget(ExperimentEditor editor) : this(new EditorSession(editor)) { }
     private int firstReceiver;
     private int firstSource;
     private const int Cell = 28;
+    internal MatrixSelection Selection { get; } = new(editor.Configuration.Matrix.SpeciesCount);
+    internal Action<int>? ColourRequested { get; set; }
+    internal Action? CopyRequested { get; set; }
+    internal Action? PasteRequested { get; set; }
+    private bool draggingCells;
+    private bool additiveDrag;
+    private Point previousDragPoint;
     internal int Receiver { get; private set; }
     internal int Source { get; private set; }
     private int Count => editor.Configuration.Matrix.SpeciesCount;
@@ -26,12 +34,14 @@ internal sealed class InteractionMatrixWidget(ExperimentEditor editor) : UiWidge
         }
         Receiver = receiver;
         Source = source;
+        Selection.Select(receiver, source);
         EnsureVisible();
     }
 
     internal void Synchronize()
     {
         Receiver = Math.Min(Receiver, Count - 1);
+        Selection.Resize(Count);
         Source = Math.Min(Source, Count - 1);
         firstReceiver = Math.Min(firstReceiver, Math.Max(0, Count - Visible));
         firstSource = Math.Min(firstSource, Math.Max(0, Count - Visible));
@@ -49,8 +59,11 @@ internal sealed class InteractionMatrixWidget(ExperimentEditor editor) : UiWidge
         }
     }
 
-    internal override void Press(Point point)
+    internal override void Press(Point point) => Press(point, false, false);
+
+    internal override void Press(Point point, bool control, bool shift)
     {
+        draggingCells = false;
         if (Count > Visible && point.Y >= Bounds.Bottom - 26)
         {
             int part = Math.Clamp((point.X - Bounds.X) * 4 / Bounds.Width, 0, 3);
@@ -67,26 +80,73 @@ internal sealed class InteractionMatrixWidget(ExperimentEditor editor) : UiWidge
         }
         int row = (point.Y - Bounds.Y - 32) / Cell;
         int column = (point.X - Bounds.X - 38) / Cell;
+        if (point.Y >= Bounds.Y + 15 && point.Y < Bounds.Y + 32 && point.X >= Bounds.X + 38
+            && column < Visible && firstSource + column < Count)
+        {
+            Source = firstSource + column;
+            if (shift) { ColourRequested?.Invoke(Source); }
+            else { Selection.SelectColumn(Source, control); }
+            return;
+        }
+        if (point.X >= Bounds.X && point.X < Bounds.X + 32 && point.Y >= Bounds.Y + 32
+            && row < Visible && firstReceiver + row < Count)
+        {
+            Receiver = firstReceiver + row;
+            if (shift) { ColourRequested?.Invoke(Receiver); }
+            else { Selection.SelectRow(Receiver, control); }
+            return;
+        }
         if (point.Y >= Bounds.Y + 32 && point.X >= Bounds.X + 38 && row < Visible && column < Visible
             && firstReceiver + row < Count && firstSource + column < Count)
         {
-            Select(firstReceiver + row, firstSource + column);
+            Receiver = firstReceiver + row;
+            Source = firstSource + column;
+            Selection.Select(Receiver, Source, shift, control);
+            draggingCells = true;
+            additiveDrag = control;
+            previousDragPoint = point;
+            EnsureVisible();
         }
     }
 
+    internal override void Drag(Point point)
+    {
+        if (!draggingCells || point == previousDragPoint) { return; }
+        previousDragPoint = point;
+        int row = Math.Clamp((point.Y - Bounds.Y - 32) / Cell, 0, Math.Min(Visible, Count - firstReceiver) - 1);
+        int column = Math.Clamp((point.X - Bounds.X - 38) / Cell, 0, Math.Min(Visible, Count - firstSource) - 1);
+        Receiver = firstReceiver + row; Source = firstSource + column;
+        Selection.Select(Receiver, Source, extend: true, additive: additiveDrag);
+    }
+
+    internal override void Release() => draggingCells = false;
+
     internal override void Key(Keys key, bool control, bool shift)
     {
+        if (control && key == Keys.A) { Selection.SelectAll(); return; }
+        if (control && key == Keys.C) { CopyRequested?.Invoke(); return; }
+        if (control && key == Keys.V) { PasteRequested?.Invoke(); return; }
+        if (control && key == Keys.Z) { editor.Undo(); return; }
+        if (control && key == Keys.Y) { editor.Redo(); return; }
+        if (key is not (Keys.Up or Keys.Down or Keys.Left or Keys.Right)) { return; }
         int row = Receiver + (key == Keys.Down ? 1 : key == Keys.Up ? -1 : 0);
         int column = Source + (key == Keys.Right ? 1 : key == Keys.Left ? -1 : 0);
-        Select(Math.Clamp(row, 0, Count - 1), Math.Clamp(column, 0, Count - 1));
+        Receiver = Math.Clamp(row, 0, Count - 1); Source = Math.Clamp(column, 0, Count - 1);
+        Selection.Select(Receiver, Source, shift, control); EnsureVisible();
     }
 
     internal override void Draw(UiCanvas canvas)
     {
-        Synchronize();
+        InteractionMatrix current = editor.Configuration.Matrix;
+        int count = current.SpeciesCount;
+        Receiver = Math.Min(Receiver, count - 1); Source = Math.Min(Source, count - 1);
+        Selection.Resize(count);
+        int visible = Math.Min(9, Math.Max(2, (Bounds.Width - 42) / Cell));
+        firstReceiver = Math.Min(firstReceiver, Math.Max(0, count - visible));
+        firstSource = Math.Min(firstSource, Math.Max(0, count - visible));
         canvas.Text("Receiver rows / source columns", Bounds.X + 2, Bounds.Y, UiCanvas.Muted, size: 1.25f);
-        int rows = Math.Min(Visible, Count - firstReceiver);
-        int columns = Math.Min(Visible, Count - firstSource);
+        int rows = Math.Min(visible, count - firstReceiver);
+        int columns = Math.Min(visible, count - firstSource);
         for (int column = 0; column < columns; column++)
         {
             int species = firstSource + column;
@@ -101,19 +161,19 @@ internal sealed class InteractionMatrixWidget(ExperimentEditor editor) : UiWidge
             for (int column = 0; column < columns; column++)
             {
                 int source = firstSource + column;
-                double coefficient = editor.Configuration.Matrix[receiver, source];
+                double coefficient = current[receiver, source];
                 Rectangle cell = new(Bounds.X + 38 + column * Cell, Bounds.Y + 32 + row * Cell, Cell - 2, Cell - 2);
                 Color tint = coefficient >= 0 ? UiCanvas.Accent : UiCanvas.Error;
                 canvas.Rounded(cell, Color.Lerp(UiCanvas.Surface, tint, (float)(0.08 + 0.48 * Math.Abs(coefficient))), 3);
                 string value = Math.Abs(coefficient) < 0.005 ? "0" : coefficient.ToString("+.0;-.0");
                 canvas.TextCentered(value, cell, UiCanvas.Ink, size: 1.2f);
-                if (receiver == Receiver && source == Source)
+                if (Selection.Cells.Contains(new MatrixCell(receiver, source)))
                 {
                     canvas.RoundedBorder(cell, UiCanvas.Ink, 3);
                 }
             }
         }
-        if (Count > Visible)
+        if (count > visible)
         {
             int width = Bounds.Width / 4;
             string[] labels = ["Rows <", "Rows >", "Cols <", "Cols >"];
@@ -137,7 +197,7 @@ internal sealed class InteractionMatrixWidget(ExperimentEditor editor) : UiWidge
 /// <summary>Plots the production radial coefficient, optionally scaled to reduced force units.</summary>
 /// <remarks>The exact overlap point is zero; the open-point limit is shown separately instead of
 /// connecting it to the repulsive branch. The plot is a phenomenological pair law, never potential energy.</remarks>
-internal sealed class ForceGraph(ExperimentEditor editor, InteractionMatrixWidget selection)
+internal sealed class ForceGraph(EditorSession editor, InteractionMatrixWidget selection)
 {
     internal bool ShowCoefficient { get; set; }
     internal bool ShowReverse { get; set; } = true;
@@ -145,76 +205,70 @@ internal sealed class ForceGraph(ExperimentEditor editor, InteractionMatrixWidge
     internal void Draw(UiCanvas canvas, Rectangle bounds)
     {
         canvas.Glass(bounds);
-        ModelParameters parameters = editor.Configuration.Parameters;
-        int receiver = Math.Min(selection.Receiver, editor.Configuration.Matrix.SpeciesCount - 1);
-        int source = Math.Min(selection.Source, editor.Configuration.Matrix.SpeciesCount - 1);
-        double attraction = editor.Configuration.Matrix[receiver, source];
-        double reverse = editor.Configuration.Matrix[source, receiver];
+        var configuration = editor.Configuration;
+        int receiver = Math.Min(selection.Receiver, configuration.Matrix.SpeciesCount - 1);
+        int source = Math.Min(selection.Source, configuration.Matrix.SpeciesCount - 1);
+        DirectedForceCurve forward = new(configuration, receiver, source);
+        DirectedForceCurve reverse = new(configuration, source, receiver);
+        bool showReverse = ShowReverse && source != receiver;
+        double maximum = Math.Max(forward.Cutoff, showReverse ? reverse.Cutoff : 0);
+        double axis = maximum * 1.15;
         string unit = ShowCoefficient ? "g [dimensionless]" : "F0 g [reduced force]";
-        canvas.TextFit($"Pair {receiver} <- {source}   {unit}", new Rectangle(bounds.X + 12, bounds.Y + 9, bounds.Width - 24, 18), UiCanvas.Ink, size: 1.35f);
-        Rectangle plot = new(bounds.X + 51, bounds.Y + 34, Math.Max(40, bounds.Width - 70), Math.Max(30, bounds.Height - 84));
+        canvas.TextFit($"{receiver} <- {source}   {unit}", new Rectangle(bounds.X + 12, bounds.Y + 9, bounds.Width - 24, 18), UiCanvas.Ink, 1.35f);
+        Rectangle plot = new(bounds.X + 47, bounds.Y + 34, Math.Max(40, bounds.Width - 63), Math.Max(32, bounds.Height - 125));
         int zero = plot.Y + plot.Height / 2;
-        int cutoff = plot.X + (int)(plot.Width / 1.15);
-        int core = plot.X + (int)(plot.Width * parameters.RepulsionFraction / 1.15);
-        canvas.Fill(new Rectangle(plot.X, plot.Y, Math.Max(1, core - plot.X), plot.Height), UiCanvas.Error * 0.07f);
+        int coreEnd = plot.X + (int)(plot.Width * (forward.Core / axis));
+        canvas.Fill(new Rectangle(plot.X, plot.Y, Math.Max(0, coreEnd - plot.X), plot.Height), UiCanvas.Error * 0.08f);
         canvas.Line(new Vector2(plot.X, zero), new Vector2(plot.Right, zero), UiCanvas.Muted * 0.6f);
         canvas.Line(new Vector2(plot.X, plot.Y), new Vector2(plot.X, plot.Bottom), UiCanvas.Muted * 0.6f);
-        canvas.Line(new Vector2(cutoff, plot.Y), new Vector2(cutoff, plot.Bottom), UiCanvas.Muted * 0.5f);
-        double scale = ShowCoefficient ? 1 : parameters.ForceScale;
-        canvas.TextFit($"+{scale:G3}", new Rectangle(bounds.X + 5, plot.Y - 5, 40, 14), UiCanvas.Muted, size: 1.15f);
-        canvas.TextRight("0", plot.X - 8, zero - 7, UiCanvas.Muted, size: 1.15f);
-        canvas.TextFit($"-{scale:G3}", new Rectangle(bounds.X + 5, plot.Bottom - 9, 40, 14), UiCanvas.Muted, size: 1.15f);
-        DrawCurve(attraction, UiCanvas.Accent, false);
-        if (ShowReverse && source != receiver)
-        {
-            DrawCurve(reverse, new Color(245, 203, 100), true);
-        }
+        double scale = ShowCoefficient ? 1 : configuration.Parameters.ForceScale;
+        canvas.TextFit($"+{scale:G3}", new Rectangle(bounds.X + 3, plot.Y - 5, 40, 14), UiCanvas.Muted, 1.1f);
+        canvas.TextFit($"-{scale:G3}", new Rectangle(bounds.X + 3, plot.Bottom - 10, 40, 14), UiCanvas.Muted, 1.1f);
+        DrawCurve(forward, UiCanvas.Accent, false);
+        if (showReverse) { DrawCurve(reverse, new Color(245, 203, 100), true); }
         canvas.Rounded(new Rectangle(plot.X - 2, zero - 2, 5, 5), UiCanvas.Accent, 2);
-        if (ShowCoefficient || parameters.ForceScale > 0)
-        {
-            Rectangle limit = new(plot.X - 3, plot.Bottom - 6, 7, 7);
-            canvas.Rounded(limit, UiCanvas.Background, 3);
-            canvas.RoundedBorder(limit, UiCanvas.Accent, 3);
-        }
-        canvas.Text("0", plot.X - 3, plot.Bottom + 5, UiCanvas.Muted, size: 1.15f);
-        canvas.TextRight($"R = {parameters.Cutoff:G4}", plot.Right, plot.Bottom + 5, UiCanvas.Muted, size: 1.15f);
-        canvas.TextCentered("Distance [reduced length]", new Rectangle(plot.X + 10, plot.Bottom + 5, Math.Max(1, plot.Width - 100), 15), UiCanvas.Muted, size: 1.1f);
-        canvas.TextFit("Attraction + / repulsion -   |   Overlap = 0", new Rectangle(bounds.X + 12, bounds.Bottom - 21, bounds.Width - 24, 15),
-            UiCanvas.Muted, size: 1.2f);
+        canvas.Text("0", plot.X - 3, plot.Bottom + 4, UiCanvas.Muted, size: 1.1f);
+        canvas.TextRight($"{axis:G5} L", plot.Right, plot.Bottom + 4, UiCanvas.Muted, size: 1.1f);
+        DrawRadii(forward, UiCanvas.Accent, plot.Bottom + 26, $"{receiver} <- {source}");
+        if (showReverse) { DrawRadii(reverse, new Color(245, 203, 100), plot.Bottom + 48, $"{source} <- {receiver}"); }
+        canvas.TextFit("Overlap = 0; zero core removes core repulsion", new Rectangle(bounds.X + 9, bounds.Bottom - 21, bounds.Width - 18, 16), UiCanvas.Muted, 1.15f);
 
-        void DrawCurve(double coefficient, Color color, bool dashed)
+        void DrawRadii(DirectedForceCurve curve, Color colour, int y, string label)
         {
-            // The production curve is piecewise linear. Sampling its exact knots preserves
-            // arbitrarily narrow valid cores and outer triangles; uniform samples do not.
-            Span<double> ratios = stackalloc double[5] { 0, parameters.RepulsionFraction,
-                (1 + parameters.RepulsionFraction) / 2, 1, 1.15 };
+            int c = (int)(plot.Width * (curve.Core / axis));
+            int r = Math.Max(1, (int)(plot.Width * (curve.Cutoff / axis)));
+            canvas.Fill(new Rectangle(plot.X, y + 12, r, 4), colour * 0.3f);
+            canvas.Fill(new Rectangle(plot.X, y + 12, c, 4), UiCanvas.Error * 0.65f);
+            canvas.TextFit($"{label}: c {curve.Core:G5}, R {curve.Cutoff:G5}", new Rectangle(bounds.X + 9, y - 3, bounds.Width - 18, 15), colour, 1.1f);
+        }
+        void DrawCurve(DirectedForceCurve curve, Color colour, bool dashed)
+        {
+            // Physical knots retain each direction's own core/cutoff on one common distance axis.
+            Span<double> knots = stackalloc double[5] { 0, curve.Core, curve.Peak, curve.Cutoff, axis };
             Vector2 previous = default;
-            for (int index = 0; index < ratios.Length; index++)
+            for (int index = 0; index < knots.Length; index++)
             {
-                double ratio = ratios[index];
-                // At q=0 the separate filled point is zero. This open branch begins at
-                // its analytical right-hand limit, including subnormal beta values.
-                double radial = index == 0 ? -1 : ParticleLifeForce.RadialCoefficient(ratio, coefficient, parameters.RepulsionFraction);
-                double normalized = !ShowCoefficient && parameters.ForceScale == 0 ? 0 : radial;
-                Vector2 current = new(plot.X + (float)(plot.Width * ratio / 1.15),
-                    zero - (float)normalized * (plot.Height / 2f - 3));
+                double radial = index == 0 && curve.Core > 0 ? -1 : curve.Evaluate(knots[index]);
+                if (!ShowCoefficient && scale == 0) { radial = 0; }
+                Vector2 point = new(plot.X + (float)(plot.Width * (knots[index] / axis)), zero - (float)radial * (plot.Height / 2f - 3));
+                if (index == 0 && curve.Core > 0 && (ShowCoefficient || scale > 0))
+                {
+                    Rectangle open = new((int)point.X - 3, (int)point.Y - 3, 6, 6);
+                    canvas.Rounded(open, UiCanvas.Background, 3); canvas.RoundedBorder(open, colour, 3);
+                }
                 if (index > 0)
                 {
-                    if (dashed)
-                    {
-                        float length = Vector2.Distance(previous, current);
-                        for (float distance = 0; distance < length; distance += 10)
-                        {
-                            canvas.Line(Vector2.Lerp(previous, current, distance / length),
-                                Vector2.Lerp(previous, current, Math.Min(distance + 5, length) / length), color, 1.5f);
-                        }
-                    }
+                    float length = Vector2.Distance(previous, point);
+                    if (!dashed) { canvas.Line(previous, point, colour, 1.5f); }
                     else
                     {
-                        canvas.Line(previous, current, color, 1.5f);
+                        for (float distance = 0; distance < length; distance += 10)
+                        {
+                            canvas.Line(Vector2.Lerp(previous, point, distance / length), Vector2.Lerp(previous, point, Math.Min(distance + 5, length) / length), colour, 1.5f);
+                        }
                     }
                 }
-                previous = current;
+                previous = point;
             }
         }
     }
@@ -224,6 +278,6 @@ internal sealed class ForceGraph(ExperimentEditor editor, InteractionMatrixWidge
 internal sealed class ForceGraphWidget(ForceGraph graph) : UiWidget
 {
     internal override bool Focusable => false;
-    internal override int Height => 184;
+    internal override int Height => 250;
     internal override void Draw(UiCanvas canvas) => graph.Draw(canvas, Bounds);
 }

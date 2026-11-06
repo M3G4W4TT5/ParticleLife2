@@ -1,14 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ParticleLife.Core.Models;
-using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 
 namespace ParticleLife.Core.Experiments;
 
 /// <summary>Serializes the strictly versioned, graphics-independent scientific session format.</summary>
-/// <remarks>All event types have one explicit shape: complete settings and an optional actual structural
-/// state. No runtime type names, arbitrary command objects or generator replay are accepted. Unknown,
+/// <remarks>Events contain complete settings and either a full actual state or compact identity edits.
+/// No runtime type names, arbitrary command objects or generator replay are accepted. Unknown,
 /// duplicate, missing required and unsupported-version fields fail. File I/O is outside numerical loops.
 /// A complete replay additionally verifies structural times against actual accumulated timestep sums.</remarks>
 public static class SessionFile
@@ -16,8 +14,8 @@ public static class SessionFile
     /// <summary>Gets the supported session format identifier, distinct from experiments and run reports.</summary>
     public const string Format = "particle-life-session";
 
-    /// <summary>Gets the supported session schema version.</summary>
-    public const int SchemaVersion = 1;
+    /// <summary>Gets the written session schema version; legacy schemas 1 and 2 remain readable.</summary>
+    public const int SchemaVersion = 3;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -58,12 +56,14 @@ public static class SessionFile
     {
         ArgumentNullException.ThrowIfNull(session);
         using JsonDocument initial = JsonDocument.Parse(ExperimentFile.Serialize(session.InitialExperiment));
-        EventData[] events = new EventData[session.Events.Count];
+        JsonElement[] events = new JsonElement[session.Events.Count];
         for (int i = 0; i < events.Length; i++)
         {
             SessionEvent change = session.Events[i];
-            events[i] = new(change.BoundaryStep, ConfigurationData.From(change.Configuration), change.Label,
-                change.ReplacementState is null ? null : SnapshotData.From(change.ReplacementState), change.Generator);
+            events[i] = JsonSerializer.SerializeToElement(new EventData(change.BoundaryStep,
+                ConfigurationFile.Encode(change.Configuration), change.Label,
+                change.ReplacementState is null ? null : SnapshotData.From(change.ReplacementState),
+                change.StateDelta is null ? null : DeltaData.From(change.StateDelta), change.Generator), Options);
         }
 
         return JsonSerializer.Serialize(new FileData(Format, SchemaVersion, initial.RootElement,
@@ -80,7 +80,7 @@ public static class SessionFile
     {
         FileData data = JsonSerializer.Deserialize<FileData>(json, Options)
             ?? throw new JsonException("A session must be an object.");
-        if (data.Format != Format || data.SchemaVersion != SchemaVersion)
+        if (data.Format != Format || data.SchemaVersion is not (1 or 2 or SchemaVersion))
         {
             throw new NotSupportedException("Unsupported session format or schema version.");
         }
@@ -89,42 +89,42 @@ public static class SessionFile
         SessionEvent[] events = new SessionEvent[data.Events.Length];
         for (int i = 0; i < events.Length; i++)
         {
-            EventData change = data.Events[i] ?? throw new JsonException("Session events cannot contain null entries.");
-            events[i] = new(change.BoundaryStep, change.Configuration.ToConfiguration(),
-                change.ReplacementState?.ToSnapshot(), change.Label, change.Generator);
+            if (data.SchemaVersion == SchemaVersion)
+            {
+                EventData change = data.Events[i].Deserialize<EventData>(Options)
+                    ?? throw new JsonException("Session events cannot contain null entries.");
+                events[i] = new(change.BoundaryStep, ConfigurationFile.Decode(change.Configuration),
+                    change.ReplacementState?.ToSnapshot(), change.Label, change.Generator, change.StateDelta?.ToDelta());
+            }
+            else
+            {
+                LegacyEventData change = data.Events[i].Deserialize<LegacyEventData>(Options)
+                    ?? throw new JsonException("Session events cannot contain null entries.");
+                events[i] = new(change.BoundaryStep, ConfigurationFile.Decode(change.Configuration, legacy: data.SchemaVersion == 1),
+                    change.ReplacementState?.ToSnapshot(), change.Label, change.Generator);
+            }
         }
 
         return new(initial, events, data.TerminalStep);
     }
 
     private sealed record FileData(string Format, int SchemaVersion, JsonElement InitialExperiment,
-        EventData[] Events, long TerminalStep);
+        JsonElement[] Events, long TerminalStep);
 
-    private sealed record EventData(long BoundaryStep, ConfigurationData Configuration, string Label,
+    private sealed record EventData(long BoundaryStep, JsonElement Configuration, string Label,
+        SnapshotData? ReplacementState, DeltaData? StateDelta,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GeneratorMetadata? Generator = null);
+
+    private sealed record LegacyEventData(long BoundaryStep, JsonElement Configuration, string Label,
         SnapshotData? ReplacementState = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GeneratorMetadata? Generator = null);
 
-    private sealed record ConfigurationData(ParameterData Parameters, MatrixData Matrix, double TimeStep,
-        string NeighbourSearchVersion, int WorkerCount)
+    private sealed record DeltaData(long[] RemovedIds, SnapshotData Updates, SnapshotData Additions)
     {
-        internal static ConfigurationData From(SimulationConfiguration configuration) => new(
-            ParameterData.From(configuration.Parameters), new(configuration.Matrix.SpeciesCount, configuration.Matrix.Values.ToArray()),
-            configuration.TimeStep, ExperimentFile.GetNeighbourSearchVersion(configuration.Backend), configuration.WorkerCount);
-
-        internal SimulationConfiguration ToConfiguration()
-        {
-            ForceBackend backend = NeighbourSearchVersion switch
-            {
-                "direct/1" => ForceBackend.Direct,
-                "uniform-grid/1" => ForceBackend.UniformGrid,
-                _ => throw new NotSupportedException("Unsupported session neighbour-search convention.")
-            };
-            return new(Parameters.ToParameters(), new InteractionMatrix(Matrix.SpeciesCount, Matrix.Values),
-                TimeStep, backend, WorkerCount);
-        }
+        internal static DeltaData From(ParticleStateDelta delta) =>
+            new(delta.RemovedIds.ToArray(), SnapshotData.From(delta.Updates), SnapshotData.From(delta.Additions));
+        internal ParticleStateDelta ToDelta() => new(RemovedIds, Updates.ToSnapshot(), Additions.ToSnapshot());
     }
-
-    private sealed record MatrixData(int SpeciesCount, double[] Values);
 
     private sealed record SnapshotData(long[] Ids, PointData[] Positions, PointData[] Velocities,
         int[] Species, double Time, long Step)
@@ -160,22 +160,4 @@ public static class SessionFile
         return vectors;
     }
 
-    private sealed record ParameterData(double WorldWidth, double WorldHeight, double Cutoff, double ForceScale,
-        double RepulsionFraction, double? DampingHalfLife, double WallWidth, double WallStrength)
-    {
-        internal static ParameterData From(ModelParameters p) => new(p.WorldWidth, p.WorldHeight, p.Cutoff,
-            p.ForceScale, p.RepulsionFraction, p.DampingHalfLife, p.WallWidth, p.WallStrength);
-
-        internal ModelParameters ToParameters() => new()
-        {
-            WorldWidth = WorldWidth,
-            WorldHeight = WorldHeight,
-            Cutoff = Cutoff,
-            ForceScale = ForceScale,
-            RepulsionFraction = RepulsionFraction,
-            DampingHalfLife = DampingHalfLife,
-            WallWidth = WallWidth,
-            WallStrength = WallStrength
-        };
-    }
 }

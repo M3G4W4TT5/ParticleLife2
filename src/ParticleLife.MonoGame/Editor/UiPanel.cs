@@ -5,10 +5,12 @@ namespace ParticleLife.MonoGame.Editor;
 
 /// <summary>Owns keyboard focus, clipping and scrolling independently of widget drawing or simulation data.</summary>
 /// <remarks>Retains widgets and reuses layout lists. Text input never falls through to game shortcuts.
-/// Focus loss cancels pointer capture and ends a slider gesture before the host pauses.</remarks>
+/// Focus loss cancels pointer capture and ends a slider gesture before the host pauses. Middle/right
+/// presses outside the panel validate outgoing drafts before releasing focus for canvas navigation.</remarks>
 internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape = false)
 {
     private readonly List<UiWidget> layout = [];
+    private readonly List<UiWidget> bodyLayout = [];
     private readonly List<UiWidget> focusOrder = [];
     private UiWidget? focused;
     private UiWidget? captured;
@@ -16,6 +18,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
     private int previousWheel;
     private bool synchronizeWheel;
     private ButtonState previousButton;
+    private ButtonState previousMiddleButton, previousRightButton;
     private Point previousPointer;
     private float scroll;
     private float contentHeight;
@@ -62,7 +65,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         synchronizeWheel = true;
     }
 
-    internal void Update(MouseState mouse, float scale, IReadOnlyList<UiInputEvent> input)
+    internal void Update(MouseState mouse, float scale, IReadOnlyList<UiInputEvent> input, bool pointerControl = false, bool pointerShift = false)
     {
         ConsumedKeyboard = false;
         DismissRequested = false;
@@ -72,10 +75,27 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         previousPointer = point;
         bool pressed = mouse.LeftButton == ButtonState.Pressed && previousButton == ButtonState.Released;
         bool released = mouse.LeftButton == ButtonState.Released && previousButton == ButtonState.Pressed;
+        bool navigationPressed = mouse.MiddleButton == ButtonState.Pressed && previousMiddleButton == ButtonState.Released
+            || mouse.RightButton == ButtonState.Pressed && previousRightButton == ButtonState.Released;
         int wheel = synchronizeWheel ? 0 : mouse.ScrollWheelValue - previousWheel;
         synchronizeWheel = false;
         previousWheel = mouse.ScrollWheelValue;
         previousButton = mouse.LeftButton;
+        previousMiddleButton = mouse.MiddleButton;
+        previousRightButton = mouse.RightButton;
+
+        if (navigationPressed && !Bounds.Contains(point))
+        {
+            // Match validating click-away, not explicit dismissal: invalid text keeps focus and
+            // blocks the host's pan gate. Successful blur ends any slider before camera movement.
+            Try(() =>
+            {
+                if (focused?.Focus(false) == false) { return; }
+                captured?.Release();
+                focused = captured = null;
+                draggingScroll = false;
+            });
+        }
 
         UiDropdown? popup = focused as UiDropdown;
         if (popup?.IsOpen != true)
@@ -144,7 +164,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
                 if (canChangeFocus)
                 {
                     captured = hovered;
-                    Try(() => captured?.Press(point));
+                    Try(() => captured?.Press(point, pointerControl, pointerShift));
                 }
             }
         }
@@ -187,6 +207,14 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
             if (key == Keys.Tab)
             {
                 MoveFocus(shift ? -1 : 1);
+            }
+            else if (key is Keys.PageUp or Keys.PageDown && focused?.EditingText != true && focused is not UiDropdown { IsOpen: true }
+                && (HasFocus || Bounds.Contains(point) || dismissOnEscape))
+            {
+                scroll = Math.Clamp(scroll + (key == Keys.PageDown ? 1 : -1) * Math.Max(28, Body.Height - 28),
+                    0, Math.Max(0, contentHeight - Body.Height));
+                ConsumedKeyboard = true;
+                Layout();
             }
             else if (key == Keys.Escape && focused is UiDropdown { IsOpen: true } dropdown)
             {
@@ -260,6 +288,7 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
     private void Layout()
     {
         layout.Clear();
+        bodyLayout.Clear();
         focusOrder.Clear();
         int y = Bounds.Y + 34;
         if (!Compact)
@@ -285,23 +314,12 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         {
             foreach (UiWidget widget in Toolbar)
             {
-                Place(widget, y);
-                y += widget.Height + 3;
+                y = PlaceBody(widget, y, 0);
             }
         }
         foreach (UiWidget widget in Content)
         {
-            Place(widget, y);
-            y += widget.Height + 3;
-            if (widget is UiSection { Expanded: true } section)
-            {
-                foreach (UiWidget child in section.Children)
-                {
-                    Place(child, y);
-                    y += child.Height + 3;
-                }
-                y += 4;
-            }
+            y = PlaceBody(widget, y, 0);
         }
         contentHeight = y + scroll - Body.Y;
         float clamped = Math.Clamp(scroll, 0, Math.Max(0, contentHeight - Body.Height));
@@ -325,10 +343,29 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
         }
     }
 
-    private void Place(UiWidget widget, int y)
+    /// <summary>Flattens expanded sections once for drawing, pointer routing and keyboard traversal.</summary>
+    /// <remarks>Rows draw their own children; sections draw only their header. Collapsed descendants
+    /// enter neither list, so they cannot retain focus or pointer capture. The host clips body drawing.</remarks>
+    private int PlaceBody(UiWidget widget, int y, int depth)
+    {
+        Place(widget, y, Math.Max(0, depth - 1) * 10);
+        bodyLayout.Add(widget);
+        y += widget.Height + 3;
+        if (widget is UiSection { Expanded: true } section)
+        {
+            foreach (UiWidget child in section.Children)
+            {
+                y = PlaceBody(child, y, depth + 1);
+            }
+            y += 4;
+        }
+        return y;
+    }
+
+    private void Place(UiWidget widget, int y, int indent = 0)
     {
         widget.ReportValidationError = reportError;
-        widget.Bounds = new Rectangle(Bounds.X + 10, y, Math.Max(1, Bounds.Width - 24), 0);
+        widget.Bounds = new Rectangle(Bounds.X + 10 + indent, y, Math.Max(1, Bounds.Width - 24 - indent), 0);
         widget.Bounds = new Rectangle(widget.Bounds.X, widget.Bounds.Y, widget.Bounds.Width, widget.Height);
         if (widget is UiRow row)
         {
@@ -384,31 +421,11 @@ internal sealed class UiPanel(Action<string> reportError, bool dismissOnEscape =
 
     internal void DrawBody(UiCanvas canvas)
     {
-        if (Compact)
-        {
-            foreach (UiWidget widget in Toolbar)
-            {
-                if (widget.Bounds.Intersects(Body))
-                {
-                    widget.Draw(canvas);
-                }
-            }
-        }
-        foreach (UiWidget widget in Content)
+        foreach (UiWidget widget in bodyLayout)
         {
             if (widget.Bounds.Intersects(Body))
             {
                 widget.Draw(canvas);
-            }
-            if (widget is UiSection { Expanded: true } section)
-            {
-                foreach (UiWidget child in section.Children)
-                {
-                    if (child.Bounds.Intersects(Body))
-                    {
-                        child.Draw(canvas);
-                    }
-                }
             }
         }
     }

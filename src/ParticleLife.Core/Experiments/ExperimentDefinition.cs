@@ -20,7 +20,7 @@ public sealed class ExperimentDefinition
     /// <param name="timeStep">Positive finite integration timestep in reduced time units.</param>
     /// <param name="generator">Generator identity, version, seed and runtime provenance.</param>
     /// <param name="backend">Intended neighbour search; omitted values retain the direct reference behaviour.</param>
-    /// <param name="workerCount">Explicit grid workers, including the caller (1..8); direct requires one.</param>
+    /// <param name="workerCount">Explicit grid workers, including the caller (1..64); direct requires one.</param>
     /// <param name="provenance">Optional source boundary for a completed-state capture rebased to time zero.</param>
     /// <exception cref="ArgumentException">Metadata, species, parameters or initial time are invalid.</exception>
     public ExperimentDefinition(string name, ModelParameters parameters, InteractionMatrix matrix,
@@ -36,6 +36,7 @@ public sealed class ExperimentDefinition
         ArgumentException.ThrowIfNullOrWhiteSpace(generator.Version);
         ArgumentException.ThrowIfNullOrWhiteSpace(generator.Runtime);
         parameters.Validate();
+        matrix.ValidateFor(parameters);
         if (!Enum.IsDefined(backend))
         {
             throw new ArgumentOutOfRangeException(nameof(backend));

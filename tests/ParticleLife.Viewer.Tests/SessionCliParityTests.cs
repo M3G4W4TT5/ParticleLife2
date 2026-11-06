@@ -183,7 +183,7 @@ public sealed class SessionCliParityTests(ITestOutputHelper output)
             await CliFailure("replay", malformed);
             File.WriteAllText(malformed, original.Replace("\"terminalStep\": 0", "\"terminalStep\": 0, \"terminalStep\": 0", StringComparison.Ordinal));
             await CliFailure("replay", malformed);
-            File.WriteAllText(malformed, original.Replace("\"schemaVersion\": 1", "\"schemaVersion\": 99", StringComparison.Ordinal));
+            File.WriteAllText(malformed, original.Replace("\"schemaVersion\": 3", "\"schemaVersion\": 99", StringComparison.Ordinal));
             await CliFailure("replay", malformed);
         }
         finally

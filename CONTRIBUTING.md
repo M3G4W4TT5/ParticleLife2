@@ -1,8 +1,16 @@
 # Contributing to Particle Life 2
 
-Particle Life 2 should be understandable enough to learn from and efficient enough to explore meaningful particle systems. Changes should make the model, numerical method and performance tradeoffs clear to the next contributor.
+Particle Life 2 should make it easy to create interesting emergent patterns and explore large particle systems. Keep the rules understandable, the controls responsive and discoveries easy to save and revisit. This is a creative sandbox rather than a scientific instrument; changes should make their behaviour and performance tradeoffs clear to the next contributor.
 
-The current scope and milestone order are in the [architecture and migration plan](docs/architecture-and-migration.md). M1–M4 provide the tested headless reference, exact uniform grid and interactive viewer. M5 release work remains separate.
+The current scope and phase order are in the [architecture and migration plan](docs/architecture-and-migration.md#phased-roadmap). M1–M4 provide the existing CPU foundation. The active roadmap adds a faster and more usable 2D application, selectable CPU/GPU simulation, periodic boundaries and per-pair ranges, with 3D reserved for a later phase. The old M5 release backlog is incorporated into P7.
+
+## Practical quality standard
+
+Prioritize useful exploration, clear controls, stable state and dependable save/load. Keep the existing reference solver and focused regression tests, but do not require physical validation, publication-grade studies, exhaustive extreme-number support on every new backend, or identical long trajectories across CPU and GPU. Single precision, SIMD, approximate arithmetic and artistic model variants are acceptable with a documented purpose, supported range and proportionate comparison. Never disguise a changed interaction rule or truncated neighbour set as an equivalent optimization.
+
+Reproducibility remains a product feature. Store actual initial or captured state, applied edits and relevant model/backend/precision versions. Retain fixed numerical steps independently of playback and rendering. Promise repeatable replay only within a tested configuration; GPU ordering and arithmetic can produce different trajectories. A captured state must still round-trip its stored values, and old files retain their original meaning.
+
+The build commands and contracts below describe the current implementation. A roadmap item does not implement a new backend or change an existing format. Update the relevant code, tests, documentation and format version together when that phase is implemented.
 
 ## Build and verification
 
@@ -21,17 +29,27 @@ pwsh -NoProfile -File scripts/check-xml-docs.ps1
 pwsh -NoProfile -File scripts/check-cli.ps1
 ```
 
+The integrated `b175957` source passes the full gate on [Ubuntu CI](https://github.com/M3G4W4TT5/ParticleLife2/actions/runs/42269240373/job/128069172156), including 638 tests with no failures and all 66 CLI checks. Locked restore, formatting, Release build, help, compatibility and XML documentation checks passed; native window acceptance remains separate.
+
 The test runner uses Microsoft Testing Platform selected in `global.json`; the explicit `--solution` option is required by that mode. Use `dotnet format ParticleLife.slnx --no-restore` to apply formatting. After intentionally changing dependencies, restore without `--locked-mode` and review the lock-file diff. PowerShell 7 is needed for the two portable verification scripts. CI runs these checks on Linux; local baseline measurements are on Windows.
 
 The solution build includes the MonoGame editor. Host tests exercise its actual graphics-free playback/editor controllers, safe saving and isotropic coordinate mapping. Twenty-one experiment parity cases run seven scenarios through direct, serial grid and four-worker grid: they save experiments, invoke the real CLI and compare its output with the viewer controller after 120 completed steps, matching stable identities with `1e-12` absolute plus `1e-12` relative tolerances in reduced units. Edited-session cases additionally invoke the real CLI after variable timesteps, backend switches, gestures spanning steps, undo/redo, population/species changes, resampling and terminal-boundary edits. Additional tests check legacy schema-1/schema-2 meaning, strict formats, explicit overrides, zero-step reports, atomic rejection and cumulative coordinate/accumulation fallback provenance. These short cases allow tiny floating-point variation without claiming cross-runtime bitwise identity.
 
 The `--help` command and MonoGame compatibility check do not create a graphics device or window. The latter also exercises the actual retained numeric and matrix widgets against the shared editor. They can run on Linux CI alongside the numerical and host tests. Native graphics/input is verified separately on Windows; the Linux native window has not been verified.
 
-The core and graphics-free viewer library generate XML documentation in their build output directories. The XML gate temporarily adds malformed/missing documentation probes to the core, checks that CS1591, CS1570 and CS1574 are errors, removes them in a `finally` block, and rebuilds the unmodified core. Generated API website publishing remains M5 work.
+The core and graphics-free viewer library generate XML documentation in their build output directories. The XML gate temporarily adds malformed/missing documentation probes to the core, checks that CS1591, CS1570 and CS1574 are errors, removes them in a `finally` block, and rebuilds the unmodified core. An API website remains optional release tooling in P7, separate from keeping code documentation useful.
 
-For timing commands and their measurement boundaries, use the [live editor comparison](docs/performance-live-editor.md) and [M4.1 CPU comparison](docs/performance-m4-1.md); [M4](docs/performance-m4.md) and the [historical baseline](docs/performance-baseline.md) retain earlier provenance. Performance tests check zero allocations for warmed steps with moving particles, changing cell occupancy, successful fallbacks and settled reconfiguration. Parallel measurements include background workers. Setup, edits and growth are separate; diagnostics, serialization and snapshots remain outside the stepping contract. Dispose parallel simulations/controllers between completed steps to release their persistent workers.
+For current timing commands and measurement boundaries, use the [P7 CPU/GPU capacity report](docs/performance-p7.md) and [GPU integration evidence](docs/gpu-integration.md). The [P2 CPU comparison](docs/performance-p2.md), [P1 saved workloads](docs/performance-p1.md), [live editor comparison](docs/performance-live-editor.md), [M4.1](docs/performance-m4-1.md), [M4](docs/performance-m4.md) and [historical baseline](docs/performance-baseline.md) retain earlier provenance. Performance tests check zero allocations for warmed steps with moving particles, changing cell occupancy, successful fallbacks and settled reconfiguration. Parallel measurements include background workers. Setup, edits and growth are separate; diagnostics, serialization and snapshots remain outside the stepping contract. Dispose parallel simulations/controllers between completed steps to release their persistent workers.
 
 ### Interactive verification
+
+The narrow trail regression uses the production rendering pipeline with tiny offscreen targets. It checks RGBA decay at 0.35- and 8-second half-lives at 144 Hz, disappearance after twelve half-lives, paused history, camera clearing and release of disabled history targets. Run it outside performance measurements, with a fresh output directory:
+
+```sh
+dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- --trail-render-checks artifacts/trail-render-checks
+```
+
+Success prints `TRAIL_RENDERING_PASS` and saves JSON plus checkpoint PNGs. The in-process watchdog is sixty seconds; use a seventy-five-second process deadline when supervising graphics-driver failures. This check does not replace the native visual review of Luminous trails and their responsiveness.
 
 After the Release build, launch the actual native window:
 
@@ -51,9 +69,13 @@ For startup artwork changes, also check the executable and native window icons, 
 3. Drag live controls while running; select both directions of an asymmetric matrix and inspect the force graph. Apply matrix templates, then change world/population/species and undo/redo. Surviving identities and the clock must follow the [editor guide](docs/live-experiment-editor.md). Reset after advancing: confirm the original state/configuration at time/step zero. Resampling, a live matrix template and New experiment must have their documented distinct effects.
 4. Save preset, from-here, initial and session files in-app, then load each using its labelled action. Check exclusive-name collisions, malformed input and reports used as inputs. Replay must finish paused at the terminal boundary before continued editing. Launch a saved experiment as a startup argument and reload it with `F5`; both must restore its viewer companion, with explicit backend/worker/cadence options taking precedence. Effective solver overrides must remain the reset baseline. Confirm a valid startup file also loads with `--species 50000`: its saved values take precedence without generating an unused fallback. Failed loads retain the valid experiment; a failed startup load, including an invalid companion, retains a paused generated fallback.
 5. Observe a scheduled measurement and its simulation time. Reset or replace the experiment and confirm the measurement clears. Toggle diagnostics with `D` and the checkbox; both must use the same undoable operation and restore the last enabled cadence. Undoing the toggle must leave an earlier force edit intact. Measurements must not change the simulation's equations or step results.
-6. Check responsiveness with the default 500 particles and a representative larger grid workload. Use `F9` to record the latest approximately one-second FPS, controller/editor/draw timings, the step and dropped playback time, with the editor visible/hidden and idle/dragging. Controller timing includes scheduled diagnostics and catch-up; drawing excludes present. These are not pure solver timings. Record workload, runtime, machine and limitations with any performance claim. Run solver benchmarks separately with the viewer closed and no competing builds/tests.
+6. Check responsiveness with the default 500 particles and a representative larger grid workload. Reset the bounded native timing window with `F10`, collect at least ten seconds of idle or dragging activity, then print with `F9`. The source also provides **Playback > CPU search and measurements > Reset timing window / Print viewer timings** buttons; verify them in a package containing that change (Preview 05 or later). The window retains up to 1,024 samples per distribution and reports frame intervals, drawing, Present CPU wait and observed-input update-to-present p50/p95/counts. Record idle and dragging windows separately for each backend and quality setting, along with graphics FPS, simulation rate, achieved playback and dropped time. Drawing and Present are separate measurements; controller work includes scheduled diagnostics and catch-up. The printed context describes the current publication/display settings rather than retrospective metadata for every retained sample, so reset after setup changes. The input proxy excludes OS delivery, display scanout and later numerical command application. These are native application measurements, distinct from pure solver timings. Record workload, runtime, machine and limitations with any performance claim. Run solver benchmarks separately with the viewer closed and no competing builds/tests.
 
-The catch-up limit bounds steps per frame, not the cost of one all-pairs step or diagnostic. A large population can still delay input. Test native startup and controls on the target platform; passing the display-free checks alone does not establish that result.
+The catch-up limit bounds requested steps, not the cost of one all-pairs step or diagnostic. Background CPU ownership keeps native input and drawing separate from that work; expensive steps or diagnostics can slow simulation progress and delay queued command application. Test native startup and controls on the target platform; passing the display-free checks alone does not establish that result.
+
+### Windows private preview packaging
+
+Use `pwsh -NoProfile -File scripts/package-windows-preview.ps1 -SmokeTest` to create a fresh, self-contained Windows x64 viewer and CPU CLI package under ignored `artifacts/packages/`. Publishing runs from a copied source snapshot, with locked framework restore and checked package pins; it does not rewrite source lock files or replace an existing package. The [package guide](docs/portable-preview.md) defines contents, hashes, runtime provenance and clean-checkout commands. Its headless smokes are separate from extracted-package native acceptance in the [visual checklist](docs/visual-review-checklist.md). Keep packaging outside benchmark windows; no signing or release publication is implied.
 
 ## Readable numerical code
 
@@ -118,9 +140,9 @@ Keep agent work logs, internal reasoning and detailed migration discussion out o
 
 ## Correctness and performance evidence
 
-Use deterministic small cases to test equations and state transitions. Compare optimized neighbour sets and force evaluations with the direct reference implementation. Express tolerances with their units or scales and the reason they are appropriate. Conservation tests must match the model's assumptions.
+Use small repeatable cases to test rules and state transitions. Compare exact neighbour searches with the direct reference; check reduced-precision or approximate modes within their documented ranges and tolerances. Existing mathematical tests remain useful regression coverage, but every artistic rule does not need a new conservation study or proof of physical realism.
 
-Use the benchmark protocol in the plan for numerical optimizations. Report the workload and environment, before/after timings, allocation behaviour and numerical error. Profile before introducing specialized complexity. A change that increases the simulation's density or alters a cutoff is a changed workload, not evidence of a regression in the same workload.
+Use the benchmark protocol in the plan for numerical optimizations. Report the workload and environment, before/after timings, allocation behaviour and meaningful differences from the reference. Profile before introducing specialized complexity. A change that increases the simulation's density or alters a cutoff is a changed workload, not evidence of a regression in the same workload. Keep checks proportionate: a focused comparison and representative evolving scenes are usually sufficient; broader numerical studies are optional.
 
 Run focused correctness tests and the normal build checks for each relevant change. Run affected benchmarks when changing performance-sensitive code. Shared CI timing is informational until a stable baseline exists. Documentation-only changes need link, formatting and content checks; they do not need invented simulation tests.
 
@@ -136,4 +158,4 @@ Keep SDK versions, dependency versions and local tool versions reproducible once
 
 The existing `review/` directory contains local historical analysis and is ignored. Do not use it as an implicit dependency of production projects or maintained tests. Bring required regression cases into the new test project with clear provenance.
 
-The GitHub remote is [M3G4W4TT5/ParticleLife2](https://github.com/M3G4W4TT5/ParticleLife2), currently private. Publishing is separate from generating local API documentation. Do not configure deployment or upload simulation results merely because a documentation generator or CI workflow supports it.
+The GitHub remote is [M3G4W4TT5/ParticleLife2](https://github.com/M3G4W4TT5/ParticleLife2), currently public. Publishing is separate from generating local API documentation. Do not configure deployment or upload simulation results merely because a documentation generator or CI workflow supports it.

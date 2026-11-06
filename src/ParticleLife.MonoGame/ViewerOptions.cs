@@ -112,7 +112,8 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
             [--preset NAME] [--particles N] [--species N] [--seed 1]
             [--paused] [--sample-every 144] [--save-dir artifacts/viewer] [--backend direct|grid] [--workers 1]
 
-        The inspector opens beside the simulation. Model, World and View group its controls.
+        The inspector groups Particles, Interactions, World, Playback, Appearance and Discoveries.
+        Guide / H / F1 opens a quickstart, file choices and keyboard help without changing the scene.
         Click a numeric value, type, then Enter to apply; Esc cancels a draft. Tab navigates.
         Drag labels/sliders for live edits; one drag is one Undo operation. The reset arrow resets
         that value. Invalid/partial text never changes the simulation. Hover for explanations.
@@ -123,29 +124,41 @@ internal sealed record ViewerOptions(PresetKind Preset, int Particles, int Speci
         S / O     Open save/load file library  E           Hide/show editor
         Ctrl+Z/Y  Undo/redo editor changes      F5          Reload startup file or open library
         D         Toggle sampled diagnostics   H / F1      Open/close Help
-        Esc       Cancel field/modal or quit   F9          Print separated viewer timings
+        Esc       Cancel field/modal or quit   F9 / F10    Print / reset viewer timing window
+        V         Fit world to canvas          Ctrl+0      Restore 1x UI scale (canvas focus)
+        Ctrl+plus/minus Adjust UI scale         PageUp/Down Scroll a focused panel or Help
 
         Shortcuts do not fire while a control has keyboard focus. Click the world to return
         focus to shortcuts. Focus loss pauses; resume explicitly. BUILT-IN RECIPES selects a
         named configuration. NEW FROM RECIPE creates a new population and reset baseline using
         its recommended settings. APPLY MATRIX LIVE requires compatible species counts and keeps
         particles, time and steps. Generation recipe also supports custom new experiments.
-        Ordinary rule/timestep/backend changes also retain completed state and accumulated time.
+        Ordinary rule/timestep/search changes retain completed state and accumulated time.
+        Playback offers explicit CPU / GPU execution. GPU uses supported OpenGL compute hardware
+        and float32 particle values; switching records an explicit transfer and any value conversion.
+        CPU uses binary64 and retains independent direct/grid search and manual worker selection.
         World drafts apply together; population drafts explain survivor/remapping/addition policy.
         Generation seed, placement and initial velocity edits alone do not move particles.
+        Appearance offers manual Economy, Balanced and Luminous display presets. Individual controls
+        remain editable; quality presets never change solver, precision, population, rules or timestep.
 
-        FILES opens the in-app local browser. Enter a folder/name; save preset, save from here,
-        save initial or save session. Existing names are protected by exclusive creation.
-        Select a JSON file, then Load experiment, Preset live, Preset new or Replay session.
+        FILES opens the local searchable discovery library. Enter a folder/name, then Save preset,
+        Save pattern, Save initial or Save session. Existing names are protected by exclusive creation.
+        Select an item, then Load state, Preset live, Preset new or Replay actions as appropriate.
         Preset live retains compatible populations; Preset new explicitly generates a baseline.
-        Save from here stores exact completed state at a new zero-time origin with source metadata.
-        Save initial exports the reset baseline. Sessions contain actual boundary changes and
-        replay through the shared engine to the recorded terminal step, paused. Esc cancels replay.
+        Save pattern stores exact completed state at a new zero-time origin with source metadata.
+        Save initial exports the reset baseline. CPU action sessions replay actual boundary changes
+        to the recorded terminal step, paused. Esc cancels replay. After GPU execution, Save session
+        includes actual terminal/checkpoint captures: Restore capture restores stored values on CPU;
+        Re-simulate CPU repeats actions and can produce a different trajectory. Exact restoration
+        does not imply identical future motion across hardware. Export .plshare creates a local file.
+        Appearance also contains trails, glow, velocity shading, sampled heatmaps and region tracking.
+        Discoveries offers canvas PNG and short GIF capture with explicit size/rate/cost controls.
 
         Loaded startup experiments take precedence over generation options. Invalid files retain
         a valid paused fallback. Reports are not inputs. Saved solver choices are honoured unless
         an explicit startup/reload --backend or --workers override is supplied. Direct needs one
-        worker; grid accepts 1..8 and falls back to direct when required by numerical range.
+        worker; grid accepts 1..64 and falls back to direct when required by numerical range.
         Matching .viewer.json companions restore appearance, generation and playback choices at
         startup and on F5 reload. Only an explicit --sample-every overrides their saved cadence.
         World display uses one isotropic scale. Appearance does not affect trajectories.

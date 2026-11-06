@@ -7,7 +7,11 @@ namespace ParticleLife.Core.Numerics;
 /// <remarks>
 /// <para>Each call validates and builds the index from the same complete input used for pair and wall
 /// forces. A cell has a full signed integer coordinate; each source is visited at most once per receiver.
-/// Width is the next power of two at least as large as the cutoff; nine cells cover every neighbour.
+/// Default nonperiodic width is the next power of two at least as large as the maximum directed cutoff;
+/// nine cells cover every neighbour. Explicit nonperiodic pair tables with differing receiver-row
+/// maxima use conservative row rectangles within the same coarse cells; equal-row and global paths retain
+/// their old traversal. Periodic worlds use an even per-axis tiling with a conservative
+/// deduplicated extra ring, and minimum-image displacement. Pair tables retain every directed range.
 /// Negative and finite off-world positions, overlaps and unbounded cell occupancy are retained.</para>
 /// <para>If any scaled coordinate is non-finite or has magnitude at least 2^50 cell widths, the entire
 /// evaluation uses the direct reference search. A non-finite grid-order force sum also retries the
@@ -18,7 +22,7 @@ namespace ParticleLife.Core.Numerics;
 /// separations; finite accumulation can differ by roundoff. This fallback does not retry later integration
 /// failures or replace finite grid sums with reference sums near an integration overflow boundary.</para>
 /// <para>Positions and species are copied into reusable contiguous cell ranges. Within each cell,
-/// source storage order and the nine-cell query order are unchanged from uniform-grid/1. Workers own
+/// source storage order is stable; nonperiodic nine-cell query order is unchanged from uniform-grid/1. Workers own
 /// disjoint receiver outputs and never split a receiver's sum. Thus worker scheduling does not reorder
 /// that sum or assume equal-and-opposite forces. Stable identities and the host state remain in their
 /// original order. One worker uses a direct serial loop; larger counts use persistent background
@@ -36,8 +40,8 @@ namespace ParticleLife.Core.Numerics;
 /// </remarks>
 public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
 {
-    /// <summary>Identifies packed layout and receiver scheduling independently of the saved grid/1 search semantics.</summary>
-    public const string AlgorithmVersion = "uniform-grid-packed/1";
+    /// <summary>Identifies packed layout, conservative row rectangles and scheduling independently of grid/1 search semantics.</summary>
+    public const string AlgorithmVersion = "uniform-grid-packed/3";
 
     private const int ReceiverChunkSize = 32;
     private ModelParameters parameters;
@@ -56,11 +60,12 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
     private int nextChunk;
     private int chunkCount;
     private bool disposed;
+    private double[] receiverRowCutoffs;
 
     /// <summary>Validates and retains immutable model configuration; storage grows with the first input.</summary>
     /// <param name="parameters">Model quantities in reduced units, including a cutoff with positive finite square.</param>
     /// <param name="matrix">Immutable directed coefficients indexed by receiver then source species.</param>
-    /// <param name="workerCount">Explicit total CPU workers in [1,8], including the calling thread; one is serial.</param>
+    /// <param name="workerCount">Explicit total CPU workers in [1,64], including the calling thread; one is serial.</param>
     /// <exception cref="ArgumentNullException">A configuration object is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A model parameter or worker count is invalid.</exception>
     public UniformGridForceEvaluator(ModelParameters parameters, InteractionMatrix matrix, int workerCount = 1)
@@ -70,7 +75,9 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
         this.parameters = parameters;
         this.matrix = matrix;
         kernel = new PairForceKernel(parameters, matrix);
-        index = new UniformGridIndex(parameters.Cutoff);
+        receiverRowCutoffs = CreateReceiverRowCutoffs(parameters, matrix);
+        index = new UniformGridIndex(matrix.MaximumCutoff(parameters));
+        index.ConfigureBoundary(parameters, matrix.MaximumCutoff(parameters));
         WorkerCount = workerCount;
         workerResults = new RangeResult[workerCount];
         workers = workerCount > 1 ? new ForceWorkerPool(workerCount, EvaluateWorker) : null;
@@ -89,11 +96,14 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         PairForceKernel nextKernel = new(nextParameters, nextMatrix);
         DirectForceEvaluator nextDirect = new(nextParameters, nextMatrix);
-        index.ReconfigureCutoff(nextParameters.Cutoff);
+        double[] nextRowCutoffs = CreateReceiverRowCutoffs(nextParameters, nextMatrix);
+        index.ReconfigureCutoff(nextMatrix.MaximumCutoff(nextParameters));
+        index.ConfigureBoundary(nextParameters, nextMatrix.MaximumCutoff(nextParameters));
         parameters = nextParameters;
         matrix = nextMatrix;
         kernel = nextKernel;
         direct = nextDirect;
+        receiverRowCutoffs = nextRowCutoffs;
         prepared = false;
         LastWorkerAllocatedBytes = 0;
         LastExecution = new(ForceBackend.UniformGrid, ForceBackend.UniformGrid, GridFallbackReason.None,
@@ -104,6 +114,9 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
     /// <remarks>Measure the caller separately. Construction, index growth and thread setup are outside this counter.
     /// Serial evaluation and coordinate-range direct fallback report zero; successful warmed workers report zero.</remarks>
     public long LastWorkerAllocatedBytes { get; private set; }
+
+    /// <summary>Gets whether the current nonperiodic pair configuration uses conservative receiver-row rectangles.</summary>
+    internal bool UsesReceiverRowStencil => receiverRowCutoffs.Length != 0;
 
     /// <summary>Gets search/fallback metadata from the last successful force evaluation.</summary>
     /// <remarks>Before evaluation it contains configuration only. Failed evaluations leave it unchanged.</remarks>
@@ -116,7 +129,7 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
     /// stacks, events, small result objects, array headers and allocator padding are excluded.</remarks>
     public GridIndexStatistics IndexStatistics => index.Statistics with
     {
-        EstimatedRetainedBytes = index.Statistics.EstimatedRetainedBytes + 20L * packedPositions.Length + 16L * parallelForces.Length
+        EstimatedRetainedBytes = index.Statistics.EstimatedRetainedBytes + 20L * packedPositions.Length + 16L * parallelForces.Length + 8L * receiverRowCutoffs.Length
     };
 
     /// <inheritdoc/>
@@ -220,8 +233,9 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
     }
 
     /// <summary>Evaluates whole receiver sums, preserving cell and ascending within-cell source order.</summary>
-    /// <remarks>Packing changes data access, not arithmetic. Every ordered pair still evaluates its own
-    /// directed coefficient. The output maps back to original storage; ranges never share receivers.</remarks>
+    /// <remarks>Every retained ordered pair evaluates its own directed coefficient. Coarse row stencils
+    /// retain accepted contribution order while skipping cells that contain only rejected pairs. The output maps back
+    /// to original storage; ranges never share receivers and worker scheduling cannot reorder one sum.</remarks>
     private RangeResult EvaluateRange(int start, int end, Span<Vector2d> forces)
     {
         ReadOnlySpan<int> sourceIndices = index.PackedSources;
@@ -234,7 +248,8 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
             Vector2d receiverPosition = packedPositions[packedReceiver];
             Vector2d totalForce = default;
             int row = packedSpecies[packedReceiver] * matrix.SpeciesCount;
-            UniformGridIndex.RangeEnumerator ranges = index.CandidateRanges(receiver);
+            UniformGridIndex.RangeEnumerator ranges = receiverRowCutoffs.Length == 0 ? index.CandidateRanges(receiver)
+                : index.CandidateRanges(receiver, receiverPosition, receiverRowCutoffs[packedSpecies[packedReceiver]]);
             while (ranges.MoveNext())
             {
                 UniformGridIndex.CellRange range = ranges.Current;
@@ -246,7 +261,7 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
                     }
 
                     candidatePairs++;
-                    PairKind kind = kernel.Evaluate(packedPositions[packedSource] - receiverPosition,
+                    PairKind kind = kernel.Evaluate(WorldBoundary.Displacement(receiverPosition, packedPositions[packedSource], parameters),
                         row + packedSpecies[packedSource], out Vector2d pairForce);
                     if (kind == PairKind.Accepted)
                     {
@@ -270,6 +285,23 @@ public sealed class UniformGridForceEvaluator : IForceEvaluator, IDisposable
         }
 
         return new(new(candidatePairs, acceptedPairs, overlapPairs), true);
+    }
+
+    /// <summary>Enables row rectangles only when nonperiodic pair tables have genuinely different receiver reaches.</summary>
+    /// <remarks>This exact configuration predicate is independent of population, timing and trajectories.
+    /// Equal-row, global and periodic configurations retain their existing traversal. Arrays are prepared
+    /// only during construction/reconfiguration; warmed numerical work reuses immutable row bounds.</remarks>
+    private static double[] CreateReceiverRowCutoffs(ModelParameters parameters, InteractionMatrix matrix)
+    {
+        if (parameters.Boundary == BoundaryKind.Periodic || matrix.Ranges is not PairInteractionRanges ranges) { return []; }
+        double[] rows = new double[matrix.SpeciesCount];
+        bool different = false;
+        for (int row = 0; row < rows.Length; row++)
+        {
+            for (int source = 0; source < rows.Length; source++) { rows[row] = Math.Max(rows[row], ranges.CutoffRadii[row * rows.Length + source]); }
+            different |= rows[row] != ranges.MaximumCutoff;
+        }
+        return different ? rows : [];
     }
 
     /// <summary>Claims small batches to balance mixed-density occupancy without cross-worker force reductions.</summary>

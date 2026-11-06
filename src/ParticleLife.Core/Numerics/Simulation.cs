@@ -37,7 +37,7 @@ public sealed class Simulation : IDisposable
     /// <param name="matrix">Immutable directed species coefficients.</param>
     /// <param name="timeStep">Positive finite fixed timestep in reduced time units.</param>
     /// <param name="backend">Neighbour search; the API default retains the direct reference implementation.</param>
-    /// <param name="workerCount">Explicit grid workers including the caller, 1..8; direct requires one.</param>
+    /// <param name="workerCount">Explicit grid workers including the caller, 1..64; direct requires one.</param>
     /// <exception cref="ArgumentNullException">An argument object is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A parameter or timestep is invalid.</exception>
     /// <exception cref="ArgumentException">An initial species is outside the matrix.</exception>
@@ -262,6 +262,13 @@ public sealed class Simulation : IDisposable
         ForceEvaluationStatistics statistics = evaluator.Evaluate(input, forces.AsSpan(0, count));
         SemiImplicitEuler.Integrate(input, forces.AsSpan(0, count), TimeStep, dampingFactor,
             outputPositions.AsSpan(0, count), outputVelocities.AsSpan(0, count));
+        if (Parameters.Boundary is BoundaryKind.Periodic or BoundaryKind.Reflecting)
+        {
+            for (int index = 0; index < count; index++)
+            {
+                WorldBoundary.Map(ref outputPositions[index], ref outputVelocities[index], Parameters);
+            }
+        }
         (positions, outputPositions) = (outputPositions, positions);
         (velocities, outputVelocities) = (outputVelocities, velocities);
         time = nextTime;

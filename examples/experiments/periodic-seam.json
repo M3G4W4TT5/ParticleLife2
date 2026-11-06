@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 3,
+  "modelVersion": "particle-life/2",
+  "integratorVersion": "damped-semi-implicit-euler/1",
+  "neighbourSearchVersion": "uniform-grid/1",
+  "units": "reduced-l0-t0-m0",
+  "boundary": "periodic",
+  "name": "Four particles across periodic seams",
+  "timeStep": 0.002,
+  "parameters": {
+    "worldWidth": 1,
+    "worldHeight": 1,
+    "cutoff": 0.15,
+    "forceScale": 0.5,
+    "repulsionFraction": 0.3,
+    "dampingHalfLife": 0.05,
+    "wallWidth": 0.05,
+    "wallStrength": 1.44
+  },
+  "matrix": {
+    "speciesCount": 2,
+    "values": [0.4, 0.8, -0.6, 0.4],
+    "pairRanges": null
+  },
+  "initialState": {
+    "ids": [101, 202, 303, 404],
+    "positions": [
+      { "x": 0.02, "y": 0.5 },
+      { "x": 0.98, "y": 0.5 },
+      { "x": 0.5, "y": 0.02 },
+      { "x": 0.5, "y": 0.98 }
+    ],
+    "velocities": [
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 }
+    ],
+    "species": [0, 1, 0, 1]
+  },
+  "generator": {
+    "name": "manual-periodic-seam",
+    "version": "1",
+    "seed": null,
+    "runtime": "hand-authored decimal initial values"
+  },
+  "workerCount": 1
+}

@@ -103,7 +103,7 @@ public sealed class EditorPersistenceTests : IDisposable
 
         string malformed = mutation switch
         {
-            "duplicate" => json.Replace("\"schemaVersion\": 1", "\"schemaVersion\": 1, \"schemaVersion\": 1", StringComparison.Ordinal),
+            "duplicate" => json.Replace("\"schemaVersion\": 2", "\"schemaVersion\": 2, \"schemaVersion\": 2", StringComparison.Ordinal),
             "nonfinite" => json.Replace("\"speed\": 0", "\"speed\": 1e999", StringComparison.Ordinal),
             _ => root.ToJsonString()
         };

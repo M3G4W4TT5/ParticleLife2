@@ -2,23 +2,26 @@ using System.Diagnostics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using ParticleLife.Core.Execution;
 using ParticleLife.Core.Experiments;
+using ParticleLife.Core.Models;
 using ParticleLife.Core.Numerics;
 using ParticleLife.Core.State;
 using ParticleLife.MonoGame.Editor;
+using ParticleLife.MonoGame.Gpu;
+using ParticleLife.MonoGame.Rendering;
 using ParticleLife.Viewer;
 
 namespace ParticleLife.MonoGame;
 
-/// <summary>Owns native input/rendering and reads completed simulation state sequentially.</summary>
-/// <remarks>The separate editor owns controls; the graphics-free controller owns playback. Window
-/// events only enqueue input. Update applies it between completed steps. Draw retains no observation
-/// beyond its call and never copies state. A single world scale preserves geometry on resize.</remarks>
-internal sealed class ParticleLifeGame : Game
+/// <summary>Owns native input/rendering with a background CPU owner or a graphics-thread resident GPU adapter.</summary>
+/// <remarks>Window events enqueue input. Update submits bounded commands without waiting for numerics.
+/// Draw leases completed CPU buffers or directly borrows completed device storage. A single world scale preserves geometry on resize.</remarks>
+internal sealed partial class ParticleLifeGame : Game
 {
     private readonly GraphicsDeviceManager graphics;
-    private readonly PlaybackController controller;
-    private readonly ExperimentEditor editor;
+    private readonly SessionPlayback controller;
+    private readonly EditorSession editor;
     private readonly LiveExperimentEditor surface;
     private readonly HelpLegend legend;
     private readonly ViewerOptions options;
@@ -29,6 +32,9 @@ internal sealed class ParticleLifeGame : Game
     private SpriteBatch batch = null!;
     private Texture2D pixel = null!;
     private Texture2D particle = null!;
+    private ParticleRenderer? particleRenderer;
+    private WorldVisuals? worldVisuals;
+    private double drawingSeconds;
     private Texture2D? splash;
     private double splashElapsed;
     private bool splashPresented;
@@ -55,31 +61,52 @@ internal sealed class ParticleLifeGame : Game
     private float statsProgress = 1;
     private bool resizingInspector;
     private double messageUntil;
+    private CameraSettings displayedCamera;
+    private MouseState previousCanvasMouse;
+    private bool panning;
+    private bool brushing;
+    private Vector2d lastBrushPoint;
+    private double brushSampleElapsed;
 
     internal ParticleLifeGame(ExperimentEditor editor, ViewerOptions options, string message)
     {
         this.options = options;
         this.message = message;
         messageUntil = TimestampSeconds + 5;
-        this.editor = editor;
-        inspectorProgress = editor.Appearance.ShowEditor ? 1 : 0;
-        controller = editor.Playback;
-        surface = new LiveExperimentEditor(editor, options.SaveDirectory, SetMessage, PrintTimings);
-        legend = new HelpLegend(CloseLegend, SetMessage);
-        graphics = new GraphicsDeviceManager(this)
+        this.editor = new EditorSession(editor, runInBackground: true);
+        displayedCamera = this.editor.Appearance.Camera;
+        try
         {
-            PreferredBackBufferWidth = 1360,
-            PreferredBackBufferHeight = 900,
-            SynchronizeWithVerticalRetrace = true,
-            GraphicsProfile = GraphicsProfile.Reach
-        };
-        IsFixedTimeStep = false;
-        IsMouseVisible = true;
-        Window.AllowUserResizing = true;
-        Window.Title = "Particle Life 2 - Live Experiment Editor";
-        Window.KeyDown += OnKeyDown;
-        Window.KeyUp += OnKeyUp;
-        Window.TextInput += OnTextInput;
+            inspectorProgress = this.editor.Appearance.ShowEditor ? 1 : 0;
+            controller = this.editor.Playback;
+            this.editor.Failed += failure =>
+            {
+                EndCanvasGesture();
+                SetMessage($"Operation failed: {failure}. Last completed state retained.");
+            };
+            surface = new LiveExperimentEditor(this.editor, options.SaveDirectory, SetMessage, PrintTimings,
+                resetTimings: ResetTimingWindow);
+            legend = new HelpLegend(CloseLegend, SetMessage, () => this.message);
+            graphics = new GraphicsDeviceManager(this)
+            {
+                PreferredBackBufferWidth = 1360,
+                PreferredBackBufferHeight = 900,
+                SynchronizeWithVerticalRetrace = true,
+                GraphicsProfile = GraphicsProfile.Reach
+            };
+            IsFixedTimeStep = false;
+            IsMouseVisible = true;
+            Window.AllowUserResizing = true;
+            Window.Title = "Particle Life 2 - Live Experiment Editor";
+            Window.KeyDown += OnKeyDown;
+            Window.KeyUp += OnKeyUp;
+            Window.TextInput += OnTextInput;
+        }
+        catch
+        {
+            this.editor.Dispose();
+            throw;
+        }
     }
 
     protected override void LoadContent()
@@ -88,6 +115,13 @@ internal sealed class ParticleLifeGame : Game
         pixel = new Texture2D(GraphicsDevice, 1, 1);
         pixel.SetData(new[] { Color.White });
         particle = CreateParticleTexture();
+        particleRenderer = new ParticleRenderer(GraphicsDevice, particle);
+        worldVisuals = new WorldVisuals(GraphicsDevice, batch, SetMessage);
+        surface.ConfigureResidentFactory((configuration, state) =>
+        {
+            particleRenderer.PrepareResident();
+            return new GlGpuSimulation(configuration, state);
+        });
         using (Stream stream = typeof(ParticleLifeGame).Assembly.GetManifestResourceStream(
             "ParticleLife.MonoGame.Assets.Branding.splash.png")
             ?? throw new InvalidOperationException("The startup artwork is missing."))
@@ -98,12 +132,14 @@ internal sealed class ParticleLifeGame : Game
         canvas = new UiCanvas(batch, pixel, font);
         clipped = new RasterizerState { CullMode = CullMode.None, ScissorTestEnable = true };
         Console.WriteLine($"Viewer: {GraphicsDevice.Adapter.Description}; {Environment.Version}; {Environment.OSVersion}");
-        Console.WriteLine($"Experiment: {controller.Experiment.Name}; {controller.Observe().Count} particles; dt={editor.Configuration.TimeStep:G17}; " +
+        Console.WriteLine($"Particle renderer: {particleRenderer.Description}; CPU drawing is independent of compute availability.");
+        Console.WriteLine($"Experiment: {controller.Observe().ExperimentName}; {controller.Observe().Count} particles; dt={editor.Configuration.TimeStep:G17}; " +
             $"seed={editor.Generation.Seed}; diagnostics every {controller.DiagnosticEverySteps} steps.");
         Console.WriteLine($"Search requested: {editor.Configuration.Backend}; workers: {editor.Configuration.WorkerCount}; " +
             $"startup override: {options.BackendOverride?.ToString() ?? "none"}; integrator: {ExperimentFile.IntegratorVersion}; model: {ExperimentFile.ModelVersion}.");
         Console.WriteLine($"FILES / S opens named save/load workflows under {options.SaveDirectory}. E toggles editor; F9 prints timings.");
         previousTimestamp = Stopwatch.GetTimestamp();
+        previousCanvasMouse = Mouse.GetState();
         wasActive = IsActive;
         base.LoadContent();
     }
@@ -127,17 +163,22 @@ internal sealed class ParticleLifeGame : Game
 
     protected override void Update(GameTime gameTime)
     {
+        long inputUpdateStarted = Stopwatch.GetTimestamp();
+        editor.Pump();
+        UpdateVisualRequests();
         long now = Stopwatch.GetTimestamp();
         double elapsed = Stopwatch.GetElapsedTime(previousTimestamp, now).TotalSeconds;
         previousTimestamp = now;
         MouseState mouse = Mouse.GetState();
         if (!IsActive)
         {
+            nativeTimings.ForgetPendingInput();
             if (wasActive)
             {
                 surface.LoseFocus();
                 legend.LoseFocus();
                 resizingInspector = false;
+                EndCanvasGesture();
                 controller.SetPaused(true);
                 heldKeys.Clear();
                 SetMessage("Focus lost - paused. Resume explicitly when ready.");
@@ -145,6 +186,7 @@ internal sealed class ParticleLifeGame : Game
             input.Clear();
             wasActive = false;
             previousMouseButton = mouse.LeftButton;
+            previousCanvasMouse = mouse;
             base.Update(gameTime);
             return;
         }
@@ -152,12 +194,24 @@ internal sealed class ParticleLifeGame : Game
         wasActive = true;
         if (UpdateSplash(skipPlayback ? 0 : elapsed, mouse))
         {
+            previousCanvasMouse = mouse;
             base.Update(gameTime);
             return;
         }
         inspectorProgress = AdvanceReveal(inspectorProgress, editor.Appearance.ShowEditor, elapsed);
         statsProgress = AdvanceReveal(statsProgress, statsExpanded, elapsed);
+        UpdateDisplayedCamera(elapsed);
         PollKeyboard();
+        if (input.Count != 0 || mouse.LeftButton != previousCanvasMouse.LeftButton
+            || mouse.MiddleButton != previousCanvasMouse.MiddleButton || mouse.RightButton != previousCanvasMouse.RightButton
+            || mouse.ScrollWheelValue != previousCanvasMouse.ScrollWheelValue
+            || mouse.Position != previousCanvasMouse.Position && (mouse.LeftButton == ButtonState.Pressed
+                || mouse.MiddleButton == ButtonState.Pressed || mouse.RightButton == ButtonState.Pressed))
+        { nativeTimings.ObserveInput(inputUpdateStarted); }
+        if (input.Any(entry => !entry.IsText && entry.Key == Keys.F10))
+        {
+            ResetTimingWindow();
+        }
         if (input.Any(entry => !entry.IsText && entry.Key == Keys.F9))
         {
             // Measurement logging changes no simulation/UI value and stays available during a drag.
@@ -179,7 +233,9 @@ internal sealed class ParticleLifeGame : Game
             else
             {
                 // Let the editor validate an outgoing draft before header actions may mutate state.
-                surface.Update(editorBounds, modalBounds, uiScale, mouse, input);
+                surface.Update(editorBounds, modalBounds, uiScale, mouse, input,
+                    heldKeys.Contains(Keys.LeftControl) || heldKeys.Contains(Keys.RightControl),
+                    heldKeys.Contains(Keys.LeftShift) || heldKeys.Contains(Keys.RightShift));
                 skipPlayback |= surface.SuppressPlayback;
                 if (editor.Appearance.ShowHelp)
                 {
@@ -230,6 +286,16 @@ internal sealed class ParticleLifeGame : Game
             SetMessage($"Editor error: {exception.Message}. Current completed state retained; paused.");
             skipPlayback = true;
         }
+        try
+        {
+            UpdateCanvasControls(mouse, elapsed, !headerClick && !surface.IsModal && !editor.Appearance.ShowHelp
+                && !surface.CapturesKeyboard && !resizingInspector);
+        }
+        catch (Exception exception) when (ViewerErrors.IsExpected(exception))
+        {
+            EndCanvasGesture();
+            SetMessage("Canvas edit rejected: " + exception.Message);
+        }
         editorTotal += Stopwatch.GetElapsedTime(editorStarted).TotalMilliseconds;
         int currentEvents = editor.SessionEventCount;
         summaryEdits += Math.Max(0, currentEvents - observedEvents);
@@ -263,8 +329,8 @@ internal sealed class ParticleLifeGame : Game
             lastSummaryEdits = summaryEdits;
             if (summaryEdits > 0)
             {
-                ParticleStateView state = controller.Observe();
-                SimulationConfiguration configuration = editor.Configuration;
+                EditorPublication state = controller.Observe();
+                SimulationConfiguration configuration = state.Configuration;
                 lastEditedSample = new EditedTimingSample(DateTimeOffset.UtcNow, framesPerSecond, meanController,
                     peakController, meanEditor, meanRender, summaryEdits, state.Step, state.Time, state.Count,
                     configuration.Matrix.SpeciesCount, configuration.TimeStep, configuration.Parameters.Cutoff,
@@ -314,6 +380,18 @@ internal sealed class ParticleLifeGame : Game
 
     private bool HandleShortcut(Keys key, bool control)
     {
+        if ((brushing || panning) && key == Keys.Escape)
+        {
+            EndCanvasGesture();
+            SetMessage("Canvas gesture stopped. Applied edits remain available to Undo.");
+            return true;
+        }
+        if ((brushing || panning) && (control && key is Keys.Z or Keys.Y
+            || key is Keys.R or Keys.I or Keys.M or Keys.D1 or Keys.D2 or Keys.D3 or Keys.S or Keys.O or Keys.F5
+                or Keys.E or Keys.D or Keys.V or Keys.H or Keys.F1))
+        {
+            EndCanvasGesture();
+        }
         if (control && key == Keys.Z)
         {
             editor.Undo();
@@ -324,17 +402,29 @@ internal sealed class ParticleLifeGame : Game
             editor.Redo();
             return false;
         }
+        if (control && UiAccessibility.TryAdjustScale(key, editor.Appearance.UiScale, out double requestedScale))
+        {
+            editor.SetAppearance(editor.Appearance with { UiScale = requestedScale });
+            return false;
+        }
         switch (key)
         {
-            case Keys.Escape: Exit(); return true;
+            case Keys.Escape:
+                if (brushing || panning)
+                {
+                    EndCanvasGesture();
+                    SetMessage("Canvas gesture stopped. Applied edits remain available to Undo.");
+                }
+                else { Exit(); }
+                return true;
             case Keys.Space:
                 controller.SetPaused(!controller.IsPaused);
-                SetMessage(controller.IsPaused ? "Paused. Edit any rule or use Step to advance once." : "Playing. Live rule edits preserve the current particles and clock.");
+                SetMessage(controller.IsPaused ? "Pause queued. The current step will finish before playback pauses." : "Resume queued. Playback restarts without a wall-time backlog.");
                 return true;
             case Keys.N:
             case Keys.Right: controller.SingleStep(); return true;
             case Keys.R: surface.Reset(); return true;
-            case Keys.I: editor.ResampleParticles(); SetMessage("Resampled live particles using the generation recipe; rules and clock retained."); return true;
+            case Keys.I: surface.Resample(); return true;
             case Keys.M: surface.RandomizeMatrix(); return false;
             case Keys.D1: surface.Template(PresetKind.Random); return false;
             case Keys.D2: surface.Template(PresetKind.Chains); return false;
@@ -353,6 +443,7 @@ internal sealed class ParticleLifeGame : Game
                 }
                 return true;
             case Keys.D: surface.ToggleDiagnostics(); return false;
+            case Keys.V when !control: surface.FitCamera(); return false;
             case Keys.H:
             case Keys.F1: ToggleLegend(); return false;
             case Keys.F9: return false;
@@ -470,8 +561,7 @@ internal sealed class ParticleLifeGame : Game
         legendBounds = Logical(new Rectangle((width - legendWidth) / 2, 60, legendWidth, Math.Max(120, legendHeight)));
         legend.Arrange(legendBounds);
         WorldTransform transform = CreateWorldTransform();
-        gridBounds = new Rectangle((int)transform.OffsetX, (int)transform.OffsetY,
-            Math.Max(1, (int)transform.Width), Math.Max(1, (int)transform.Height));
+        gridBounds = MappedWorldBounds(transform);
     }
 
     private Rectangle Logical(Rectangle screen) => new((int)(screen.X / uiScale), (int)(screen.Y / uiScale),
@@ -491,13 +581,14 @@ internal sealed class ParticleLifeGame : Game
         }
         scene?.Dispose();
         softenedScene?.Dispose();
-        scene = new RenderTarget2D(GraphicsDevice, width, height, false, SurfaceFormat.Color, DepthFormat.None);
+        scene = new RenderTarget2D(GraphicsDevice, width, height, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.PreserveContents);
         softenedScene = new RenderTarget2D(GraphicsDevice, Math.Max(1, width / 8), Math.Max(1, height / 8),
             false, SurfaceFormat.Color, DepthFormat.None);
     }
 
     protected override void Draw(GameTime gameTime)
     {
+        drawingSeconds = gameTime.ElapsedGameTime.TotalSeconds;
         long started = Stopwatch.GetTimestamp();
         int width = GraphicsDevice.Viewport.Width;
         int height = GraphicsDevice.Viewport.Height;
@@ -528,6 +619,7 @@ internal sealed class ParticleLifeGame : Game
         GraphicsDevice.SetRenderTarget(scene);
         GraphicsDevice.Clear(UiCanvas.Background);
         DrawWorld();
+        ProcessMediaCapture();
         GraphicsDevice.SetRenderTarget(softenedScene);
         batch.Begin(blendState: BlendState.Opaque, samplerState: SamplerState.LinearClamp);
         batch.Draw(scene!, new Rectangle(0, 0, softenedScene!.Width, softenedScene.Height), Color.White);
@@ -584,7 +676,9 @@ internal sealed class ParticleLifeGame : Game
             }
         }
         summaryFrames++;
-        renderTotal += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        double drawMilliseconds = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        renderTotal += drawMilliseconds;
+        nativeTimings.RecordDraw(drawMilliseconds);
         base.Draw(gameTime);
     }
 
@@ -620,14 +714,19 @@ internal sealed class ParticleLifeGame : Game
         }
     }
 
-    private WorldTransform CreateWorldTransform() => new(editor.Configuration.Parameters.WorldWidth,
-        editor.Configuration.Parameters.WorldHeight, worldBounds.X, worldBounds.Y,
-        Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height));
+    private WorldTransform CreateWorldTransform(CameraSettings? camera = null) => new(editor.Publication.Configuration.Parameters.WorldWidth,
+        editor.Publication.Configuration.Parameters.WorldHeight, worldBounds.X, worldBounds.Y,
+        Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height), camera ?? displayedCamera);
 
     private void DrawWorld()
     {
-        WorldTransform transform = CreateWorldTransform();
-        Rectangle world = gridBounds;
+        using RenderFrameLease? state = editor.AcquireRenderFrame();
+        GlGpuSimulation? resident = editor.Resident as GlGpuSimulation;
+        if (state is null && resident is null) { return; }
+        SimulationConfiguration configuration = resident?.Configuration ?? state!.Configuration;
+        WorldTransform transform = new(configuration.Parameters.WorldWidth, configuration.Parameters.WorldHeight,
+            worldBounds.X, worldBounds.Y, Math.Max(1, worldBounds.Width), Math.Max(1, worldBounds.Height), displayedCamera);
+        Rectangle world = MappedWorldBounds(transform);
         batch.Begin(samplerState: SamplerState.LinearClamp);
         // A quiet full-window field sits beneath the floating control layer.
         for (int x = worldBounds.X; x < GraphicsDevice.Viewport.Width; x += 48)
@@ -647,21 +746,179 @@ internal sealed class ParticleLifeGame : Game
         }
         batch.End();
         GraphicsDevice.ScissorRectangle = Rectangle.Intersect(worldBounds, GraphicsDevice.Viewport.Bounds);
-        batch.Begin(samplerState: SamplerState.LinearClamp, rasterizerState: clipped);
-        ParticleStateView state = controller.Observe();
-        float radius = (float)Math.Min(editor.Appearance.ParticleRadius, Math.Max(worldBounds.Width, worldBounds.Height));
-        for (int index = 0; index < state.Count; index++)
+        if (resident is null) { ObserveWorld(state!); }
+        else { ObserveResidentWorld(resident as IResidentSpatialObservation); }
+        DrawObservation(transform);
+        AppearanceSettings appearance = editor.Appearance;
+        bool effects = worldVisuals!.Begin(scene!, appearance);
+        if (resident is not null)
         {
-            Vector2d mapped = transform.ToScreen(state.Positions[index]);
-            if (!mapped.IsFinite || mapped.X < worldBounds.Left - radius || mapped.X > worldBounds.Right + radius
-                || mapped.Y < worldBounds.Top - radius || mapped.Y > worldBounds.Bottom + radius)
+            if (editor.CanRenderResident)
             {
-                continue;
+                try { particleRenderer!.DrawResident(resident, transform, worldBounds, appearance); }
+                catch (Exception failure) when (ViewerErrors.IsExpected(failure)) { editor.ReportResidentFailure(failure.Message); }
             }
-            uint rgb = editor.Appearance.ColorForSpecies(state.Species[index]);
-            Color colour = new((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
-            batch.Draw(particle, new Vector2((float)mapped.X, (float)mapped.Y), null, colour, 0,
-                new Vector2(16, 16), radius / 16, SpriteEffects.None, 0);
+        }
+        else { particleRenderer!.Draw(state!, transform, worldBounds, appearance); }
+        if (effects)
+        {
+            worldVisuals.Complete(scene!, worldBounds, resident?.CompletedSequence ?? state!.Sequence,
+                ParticleDisplayTransform.Create(configuration.Parameters.WorldWidth, configuration.Parameters.WorldHeight, transform), appearance,
+                controller.IsPaused ? 0 : drawingSeconds);
+        }
+        DrawTracking(transform);
+        DrawBrushPreview(transform);
+    }
+
+    private static Rectangle MappedWorldBounds(WorldTransform transform)
+    {
+        if (!double.IsFinite(transform.OffsetX) || !double.IsFinite(transform.OffsetY)
+            || Math.Abs(transform.OffsetX) > 1e8 || Math.Abs(transform.OffsetY) > 1e8
+            || transform.Width > 1e8 || transform.Height > 1e8) { return Rectangle.Empty; }
+        return new Rectangle((int)transform.OffsetX, (int)transform.OffsetY,
+            Math.Max(1, (int)transform.Width), Math.Max(1, (int)transform.Height));
+    }
+
+    /// <summary>Interpolates presentation targets independently of numerical and playback clocks.</summary>
+    private void UpdateDisplayedCamera(double elapsed)
+    {
+        CameraSettings target = TrackingCameraTarget();
+        if (!target.Smooth) { displayedCamera = target; return; }
+        double fraction = 1 - Math.Exp(-Math.Min(elapsed, 0.1) * 12);
+        displayedCamera = target with
+        {
+            CenterX = displayedCamera.CenterX + (target.CenterX - displayedCamera.CenterX) * fraction,
+            CenterY = displayedCamera.CenterY + (target.CenterY - displayedCamera.CenterY) * fraction,
+            Zoom = Math.Exp(Math.Log(displayedCamera.Zoom) + (Math.Log(target.Zoom) - Math.Log(displayedCamera.Zoom)) * fraction)
+        };
+    }
+
+    /// <summary>Maps canvas gestures through the displayed camera; every particle mutation remains an owner command.</summary>
+    private void UpdateCanvasControls(MouseState mouse, double elapsed, bool available)
+    {
+        bool inside = worldBounds.Contains(mouse.Position);
+        bool panHeld = mouse.MiddleButton == ButtonState.Pressed || mouse.RightButton == ButtonState.Pressed;
+        bool panPressed = mouse.MiddleButton == ButtonState.Pressed && previousCanvasMouse.MiddleButton == ButtonState.Released
+            || mouse.RightButton == ButtonState.Pressed && previousCanvasMouse.RightButton == ButtonState.Released;
+        if (available && inside && panPressed)
+        {
+            SuspendTrackingFollow();
+            if (brushing) { editor.EndBrushStroke(); brushing = false; }
+            panning = true;
+            editor.BeginGesture("Pan camera");
+        }
+        if (panning)
+        {
+            if (!panHeld || !available) { editor.EndGesture(); panning = false; }
+            else
+            {
+                WorldTransform transform = CreateWorldTransform(editor.Appearance.Camera);
+                CameraSettings camera = editor.Appearance.Camera with
+                {
+                    CenterX = editor.Appearance.Camera.CenterX - (mouse.X - previousCanvasMouse.X) / transform.Width,
+                    CenterY = editor.Appearance.Camera.CenterY - (mouse.Y - previousCanvasMouse.Y) / transform.Height
+                };
+                editor.SetAppearance(editor.Appearance with { Camera = camera });
+            }
+        }
+        int wheel = mouse.ScrollWheelValue - previousCanvasMouse.ScrollWheelValue;
+        if (available && inside && wheel != 0 && !brushing)
+        {
+            SuspendTrackingFollow();
+            CameraSettings target = editor.Appearance.Camera;
+            CameraSettings camera = target.ZoomAt(CreateWorldTransform(target), new Vector2d(mouse.X, mouse.Y),
+                Math.Pow(1.12, wheel / 120.0), editor.Publication.Configuration.Parameters.WorldWidth,
+                editor.Publication.Configuration.Parameters.WorldHeight);
+            editor.BeginGesture("Zoom camera");
+            editor.SetAppearance(editor.Appearance with { Camera = camera });
+            editor.EndGesture();
+        }
+        bool pressed = mouse.LeftButton == ButtonState.Pressed && previousCanvasMouse.LeftButton == ButtonState.Released;
+        if (available && inside && pressed && !panning && surface.VisualTools.PickTrackingRegion)
+        {
+            tracker.Start(CreateWorldTransform().ToWorld(new Vector2d(mouse.X, mouse.Y)), surface.VisualTools.TrackingRadius);
+            surface.VisualTools.PickTrackingRegion = false;
+            nextObservation = 0;
+        }
+        else if (available && inside && pressed && !panning && surface.BrushEnabled)
+        {
+            BrushSettings settings = surface.Brush;
+            settings.Validate(editor.Publication.Configuration.Matrix.SpeciesCount);
+            Vector2d point = CreateWorldTransform().ToWorld(new Vector2d(mouse.X, mouse.Y));
+            editor.BeginBrushStroke(settings, point);
+            editor.ApplyBrushSample(point);
+            lastBrushPoint = point;
+            brushSampleElapsed = 0;
+            brushing = true;
+        }
+        else if (brushing)
+        {
+            if (mouse.LeftButton != ButtonState.Pressed || !available || !inside)
+            {
+                if (mouse.LeftButton == ButtonState.Released && available && inside && surface.Brush.Kind == BrushKind.Move)
+                {
+                    editor.ApplyBrushSample(CreateWorldTransform().ToWorld(new Vector2d(mouse.X, mouse.Y)));
+                }
+                editor.EndBrushStroke(); brushing = false;
+            }
+            else
+            {
+                brushSampleElapsed += elapsed;
+                Vector2d point = CreateWorldTransform().ToWorld(new Vector2d(mouse.X, mouse.Y));
+                double dx = (point.X - lastBrushPoint.X) / surface.Brush.Radius;
+                double dy = (point.Y - lastBrushPoint.Y) / surface.Brush.Radius;
+                bool moved = dx * dx + dy * dy >= 0.01;
+                if (moved || (surface.Brush.Kind != BrushKind.Move && brushSampleElapsed >= 0.1))
+                {
+                    editor.ApplyBrushSample(point);
+                    lastBrushPoint = point; brushSampleElapsed = 0;
+                }
+            }
+        }
+        if (!editor.Appearance.Camera.Smooth) { displayedCamera = TrackingCameraTarget(); }
+        previousCanvasMouse = mouse;
+    }
+
+    private void EndCanvasGesture()
+    {
+        if (brushing) { editor.EndBrushStroke(); brushing = false; }
+        if (panning) { editor.EndGesture(); panning = false; }
+    }
+
+    private void DrawBrushPreview(WorldTransform transform)
+    {
+        MouseState mouse = Mouse.GetState();
+        if (!surface.BrushEnabled || surface.IsModal || editor.Appearance.ShowHelp || !worldBounds.Contains(mouse.Position)) { return; }
+        double extent = transform.WorldLengthToPixels(surface.Brush.Radius);
+        if (!double.IsFinite(extent) || extent <= 0 || extent > 1e5) { return; }
+        ModelParameters parameters = editor.Publication.Configuration.Parameters;
+        bool periodic = parameters.Boundary == BoundaryKind.Periodic;
+        Vector2d pointer = transform.ToWorld(new Vector2d(mouse.X, mouse.Y));
+        if (periodic) { pointer = new(WorldBoundary.Wrap(pointer.X, parameters.WorldWidth), WorldBoundary.Wrap(pointer.Y, parameters.WorldHeight)); }
+        Color tint = brushing ? UiCanvas.Accent : UiCanvas.Ink * 0.6f;
+        batch.Begin(samplerState: SamplerState.LinearClamp, rasterizerState: clipped);
+        for (int y = periodic ? -1 : 0; y <= (periodic ? 1 : 0); y++)
+        {
+            for (int x = periodic ? -1 : 0; x <= (periodic ? 1 : 0); x++)
+            {
+                Vector2d mapped = transform.ToScreen(new Vector2d(pointer.X + x * parameters.WorldWidth, pointer.Y + y * parameters.WorldHeight));
+                if (!mapped.IsFinite || Math.Abs(mapped.X) > 1e7 || Math.Abs(mapped.Y) > 1e7) { continue; }
+                Vector2 centre = new((float)mapped.X, (float)mapped.Y);
+                if (surface.Brush.Shape == BrushShape.Square)
+                {
+                    canvas.RoundedBorder(new Rectangle((int)(mapped.X - extent), (int)(mapped.Y - extent), Math.Max(1, (int)(extent * 2)), Math.Max(1, (int)(extent * 2))), tint, 0);
+                }
+                else
+                {
+                    Vector2 previous = centre + new Vector2((float)extent, 0);
+                    for (int i = 1; i <= 48; i++)
+                    {
+                        float angle = i * MathF.Tau / 48;
+                        Vector2 next = centre + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (float)extent;
+                        canvas.Line(previous, next, tint); previous = next;
+                    }
+                }
+            }
         }
         batch.End();
     }
@@ -766,7 +1023,7 @@ internal sealed class ParticleLifeGame : Game
         {
             return;
         }
-        ParticleStateView state = controller.Observe();
+        EditorPublication state = controller.Observe();
         float opacity = SmoothReveal(statsProgress);
         int offset = (int)(StatsRailWidth * (1 - opacity));
         int x = 22 - offset;
@@ -775,13 +1032,15 @@ internal sealed class ParticleLifeGame : Game
         if (editor.Appearance.ShowOverlay && railWidth > 60)
         {
             canvas.Rounded(new Rectangle(x, y + 5, 5, 5), (controller.IsPaused ? UiCanvas.Muted : UiCanvas.Accent) * opacity, 2);
-            canvas.Text(controller.IsPaused ? "Paused" : "Running", x + 12, y, UiCanvas.Ink * opacity, size: 1.4f);
+            canvas.Text(editor.HasPendingCommands ? "Queued" : state.IsPaused ? "Paused" : "Running", x + 12, y, UiCanvas.Ink * opacity, size: 1.4f);
             y += worldBounds.Height < 200 ? 24 : 42;
             Metric("Particles", state.Count.ToString("N0"));
             Metric("Simulation time", state.Time.ToString("F3"));
             Metric("Completed steps", state.Step.ToString("N0"));
             Metric("Species", editor.Configuration.Matrix.SpeciesCount.ToString());
             Metric("Frame rate", $"{framesPerSecond:F0} fps");
+            Metric($"{state.Execution.Hardware} steps", $"{state.StepsPerSecond:F0} /s");
+            Metric("Achieved speed", $"{state.SimulationSpeed:F2}x");
             Metric("Timestep", $"{editor.Configuration.TimeStep:G4}");
             Metric("Playback", $"{controller.PlaybackSpeed:G3}x");
         }
@@ -933,16 +1192,53 @@ internal sealed class ParticleLifeGame : Game
         previousKeyboard = current;
     }
 
+    /// <summary>Starts the same native measurement window from the visible control and F10.</summary>
+    private void ResetTimingWindow()
+    {
+        nativeTimings.Reset();
+        SetMessage("Timing window reset. Pan or use controls, then Print viewer timings.");
+    }
+
+    /// <summary>Prints measurements and scalar context, and shows a brief result without capturing particle state.</summary>
+    /// <remarks>Context describes this invocation, not every frame in a window that spans setting changes.
+    /// Applied publication values and requested pause/display values are labelled separately.</remarks>
     private void PrintTimings()
     {
+        Console.WriteLine(nativeTimings.Describe());
+        EditorPublication state = editor.Publication;
+        AppearanceSettings appearance = editor.Appearance;
+        VisualSettings visuals = appearance.Visuals;
+        PresentationParameters backbuffer = GraphicsDevice.PresentationParameters;
+        Viewport viewport = GraphicsDevice.Viewport;
+        bool observations = visuals.Heatmap != HeatmapKind.Off || visuals.ShowStatistics || tracker.Active;
+        string tracking = !tracker.Active ? "off" : surface.VisualTools.FollowTracking ? "following" : "suspended";
+        string readbacks = state.Execution.Hardware == ExecutionHardware.Gpu ? state.FullStateReadbacks.ToString() : "n/a";
+        Console.WriteLine($"Viewer context (current publication/display): UTC {DateTimeOffset.UtcNow:O}; "
+            + $"backbuffer {backbuffer.BackBufferWidth}x{backbuffer.BackBufferHeight}; viewport {viewport.Width}x{viewport.Height}; canvas {worldBounds.Width}x{worldBounds.Height}; "
+            + $"particles {state.Count}; species {state.Configuration.Matrix.SpeciesCount}; execution {state.Execution.Hardware}/{state.Execution.Precision}; "
+            + $"CPU workers configured/last executed {state.Configuration.WorkerCount}/{state.LastExecution?.ActualWorkerCount.ToString() ?? "n/a"}; "
+            + $"dt {state.Configuration.TimeStep:G17}; applied playback speed {state.Playback.Speed:G17}; paused requested/applied {controller.IsPaused}/{state.IsPaused}; "
+            + $"completed step {state.Step}, time {state.Time:G17}; display quality {VisualQuality.Match(visuals)?.ToString() ?? "Custom"}; "
+            + $"radius pixels/world {appearance.ParticleRadius:G17}/{appearance.WorldParticleRadius:G17}, mode {appearance.ParticleSizeMode}; UI scale requested/effective {appearance.UiScale:G9}/{uiScale:G9}; "
+            + $"observations {observations}, heatmap {visuals.Heatmap}, statistics {visuals.ShowStatistics}, interval {visuals.ObservationSeconds:G9}s; "
+            + $"tracking {tracking}; diagnostic cadence {state.Playback.DiagnosticEverySteps} steps; GPU full-state reads {readbacks}.");
         Console.WriteLine($"Viewer sample (~1 wall second): {framesPerSecond:F1} FPS; " +
-        $"controller update mean {meanController:F3} ms, max {peakController:F3} ms (includes scheduled diagnostics); " +
+        $"playback submission mean {meanController:F3} ms, max {peakController:F3} ms; " +
+        $"{editor.Publication.Execution.Hardware} {editor.Publication.StepsPerSecond:F1} steps/s, achieved {editor.Publication.SimulationSpeed:F3} simulation seconds/wall second; " +
         $"editor update mean {meanEditor:F3} ms; render submission mean {meanRender:F3} ms (excludes present); " +
         $"editor visible {editor.Appearance.ShowEditor}; applied scientific edits {lastSummaryEdits}; step {controller.Observe().Step}; dropped playback {controller.DroppedPlaybackSeconds:F6} s; " +
         $"search requested {editor.Configuration.Backend}; actual {controller.LastExecution?.ActualBackend.ToString() ?? "unstepped"}; " +
         $"workers {editor.Configuration.WorkerCount}/{controller.LastExecution?.ActualWorkerCount.ToString() ?? "unstepped"}; " +
         $"fallback {controller.LastExecution?.FallbackReason.ToString() ?? "none"}; direct fallback steps {controller.DirectFallbackSteps}; " +
         $"accumulation fallback steps {controller.AccumulationFallbackSteps}; candidates {controller.LastStatistics.CandidatePairs}; accepted {controller.LastStatistics.AcceptedPairs}.");
+        if (particleRenderer is not null)
+        {
+            ParticleRenderMetrics metrics = particleRenderer.LastMetrics;
+            Console.WriteLine($"Last particle draw ({metrics.Backend}): preparation {metrics.PreparationMilliseconds:F3} ms; " +
+                $"upload call {metrics.UploadMilliseconds:F3} ms / {metrics.UploadedBytes:N0} bytes; " +
+                $"submission/state {metrics.SubmissionMilliseconds:F3} ms; submitted {metrics.SubmittedParticles:N0}/{metrics.InputCount:N0}; " +
+                $"fallback {metrics.FallbackReason ?? "none"}. Excludes GPU completion and present.");
+        }
         if (lastEditedSample is EditedTimingSample sample)
         {
             Console.WriteLine($"Last edited sample (~1 wall second, ended {sample.EndedUtc:O}): {sample.FramesPerSecond:F1} FPS; " +
@@ -953,6 +1249,8 @@ internal sealed class ParticleLifeGame : Game
                 $"workers {sample.RequestedWorkers}/{sample.ActualWorkers?.ToString() ?? "unstepped"}; editor visible {sample.EditorVisible}; " +
                 $"dropped playback {sample.DroppedPlayback:G17} s. Captured metadata belongs to this completed sample, not the current display.");
         }
+        SetMessage($"{nativeTimings.DescribeSummary()} Playback requested/applied: "
+            + $"{(controller.IsPaused ? "Paused" : "Running")}/{(state.IsPaused ? "Paused" : "Running")}. Full report in console.");
     }
 
     /// <summary>One retained completed timing window with actual edits, outside the numerical hot loop.</summary>
@@ -966,8 +1264,10 @@ internal sealed class ParticleLifeGame : Game
     {
         if (disposing)
         {
+            FinishMediaCapture();
+            surface.Dispose();
             editor.CancelSessionReplay();
-            controller.Dispose();
+            editor.Dispose();
             Window.KeyDown -= OnKeyDown;
             Window.KeyUp -= OnKeyUp;
             Window.TextInput -= OnTextInput;
@@ -975,6 +1275,8 @@ internal sealed class ParticleLifeGame : Game
             softenedScene?.Dispose();
             font?.Dispose();
             splash?.Dispose();
+            particleRenderer?.Dispose();
+            worldVisuals?.Dispose();
             particle?.Dispose();
             pixel?.Dispose();
             clipped?.Dispose();

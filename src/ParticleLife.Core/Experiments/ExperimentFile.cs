@@ -8,21 +8,24 @@ namespace ParticleLife.Core.Experiments;
 
 /// <summary>Reads and writes the strict versioned JSON experiment format outside numerical hot loops.</summary>
 /// <remarks>
-/// Schema 2 stores reduced units, soft-wall boundaries, separate model, integrator and neighbour-search identifiers, every matrix
+/// Schema 3 stores reduced units, explicit boundaries, directed optional core/cutoff tables, model, integrator and neighbour-search identifiers, every matrix
 /// entry, and complete initial state. Unknown fields, unsupported versions, omitted required fields,
 /// non-finite numbers and invalid model inputs are rejected. JSON doubles round-trip without rounding
 /// to display precision. Schema 1 remains readable with its original direct-solver meaning.
-/// Saving always writes schema 2 with an explicit workerCount. Older schema-2 files without this
+/// Saving always writes schema 3 with an explicit workerCount. Older schema-2 files without this
 /// optional field retain serial execution. Search conventions remain unchanged by packed storage.
 /// This is an initial-condition format; run reports are separate documents.
 /// </remarks>
 public static class ExperimentFile
 {
-    /// <summary>Gets the written experiment schema version; loading also accepts legacy schema 1.</summary>
-    public const int SchemaVersion = 2;
+    /// <summary>Gets the written experiment schema version; loading also accepts legacy schemas 1 and 2.</summary>
+    public const int SchemaVersion = 3;
 
     /// <summary>Gets the versioned phenomenological radial and wall model identifier.</summary>
-    public const string ModelVersion = "particle-life/1";
+    public const string ModelVersion = "particle-life/2";
+
+    /// <summary>Gets the original global-range, soft-wall model identifier retained for old files.</summary>
+    public const string LegacyModelVersion = "particle-life/1";
 
     /// <summary>Gets the legacy schema-1 combined direct-search/integrator identifier.</summary>
     /// <remarks>Retained for legacy input compatibility only. Current execution reports separate
@@ -46,8 +49,10 @@ public static class ExperimentFile
     /// <summary>Identifies the current implementation layout without changing the saved search convention.</summary>
     /// <param name="backend">The actual or requested backend.</param>
     /// <returns>A versioned implementation identifier for runtime provenance.</returns>
-    /// <remarks>The grid retains its nine-cell and ascending in-cell enumeration contract; packing changes
-    /// storage, not the meaning of schema-2 uniform-grid/1. Worker scheduling owns disjoint receivers.</remarks>
+    /// <remarks>Nonperiodic global and equal-row configurations retain nine-cell enumeration; periodic tiling is unchanged. Pair tables
+    /// with differing receiver reaches can use conservative row rectangles, retaining accepted
+    /// contribution order and neighbours while skipping rejected work. The version records that implementation;
+    /// uniform-grid/1 still denotes exact grid search, and worker scheduling owns disjoint receivers.</remarks>
     public static string GetForceAlgorithmVersion(ForceBackend backend) => backend switch
     {
         ForceBackend.Direct => "direct/1",
@@ -83,15 +88,16 @@ public static class ExperimentFile
 
     /// <summary>Serializes complete initial conditions without regenerating any value from the seed.</summary>
     /// <param name="experiment">Validated experiment.</param>
-    /// <returns>Schema 2 JSON, including actual matrix, particle values and intended neighbour search.</returns>
+    /// <returns>Schema 3 JSON, including actual pair rules, particle values and intended neighbour search.</returns>
     public static string Serialize(ExperimentDefinition experiment)
     {
         ArgumentNullException.ThrowIfNull(experiment);
         ParticleSnapshot initial = experiment.InitialState;
-        return JsonSerializer.Serialize(new FileDataV2(
-            SchemaVersion, ModelVersion, IntegratorVersion, GetNeighbourSearchVersion(experiment.Backend), "reduced-l0-t0-m0", "soft-wall",
+        return JsonSerializer.Serialize(new FileDataV3(
+            SchemaVersion, ModelVersion, IntegratorVersion, GetNeighbourSearchVersion(experiment.Backend), "reduced-l0-t0-m0", BoundaryIdentifier(experiment.Parameters.Boundary),
             experiment.Name, experiment.TimeStep, ParameterData.From(experiment.Parameters),
-            new MatrixData(experiment.Matrix.SpeciesCount, experiment.Matrix.Values.ToArray()),
+            new MatrixDataV3(experiment.Matrix.SpeciesCount, experiment.Matrix.Values.ToArray(),
+                experiment.Matrix.Ranges is PairInteractionRanges ranges ? new(ranges.CoreRadii.ToArray(), ranges.CutoffRadii.ToArray()) : null),
             new StateData(initial.Ids.ToArray(), ToPoints(initial.Positions), ToPoints(initial.Velocities), initial.Species.ToArray()),
             experiment.Generator, experiment.WorkerCount, experiment.Provenance), Options);
     }
@@ -127,7 +133,7 @@ public static class ExperimentFile
                 data.Generator, ForceBackend.Direct);
         }
 
-        if (schema == SchemaVersion)
+        if (schema == 2)
         {
             FileDataV2 data = JsonSerializer.Deserialize<FileDataV2>(json, Options)!;
             ValidateConventions(data.ModelVersion, data.Units, data.Boundary);
@@ -146,16 +152,65 @@ public static class ExperimentFile
                 data.Generator, backend, data.WorkerCount, data.Provenance);
         }
 
+        if (schema == SchemaVersion)
+        {
+            FileDataV3 data = JsonSerializer.Deserialize<FileDataV3>(json, Options)!;
+            if (data.ModelVersion != ModelVersion || data.Units != "reduced-l0-t0-m0" || data.IntegratorVersion != IntegratorVersion)
+            {
+                throw new NotSupportedException("Unsupported experiment model, units or integrator convention.");
+            }
+            ForceBackend backend = ParseNeighbourSearch(data.NeighbourSearchVersion);
+            ModelParameters parameters = data.Parameters.ToParameters() with { Boundary = ParseBoundary(data.Boundary) };
+            PairInteractionRanges? ranges = data.Matrix.PairRanges is RangeData pair
+                ? new(data.Matrix.SpeciesCount, pair.CoreRadii, pair.CutoffRadii) : null;
+            return new(data.Name, parameters, new InteractionMatrix(data.Matrix.SpeciesCount, data.Matrix.Values, ranges),
+                new ParticleSnapshot(data.InitialState.Ids, ToVectors(data.InitialState.Positions),
+                    ToVectors(data.InitialState.Velocities), data.InitialState.Species),
+                data.TimeStep, data.Generator, backend, data.WorkerCount, data.Provenance);
+        }
+
         throw new NotSupportedException("Unsupported experiment schema.");
     }
 
     private static void ValidateConventions(string model, string units, string boundary)
     {
-        if (model != ModelVersion || units != "reduced-l0-t0-m0" || boundary != "soft-wall")
+        if (model != LegacyModelVersion || units != "reduced-l0-t0-m0" || boundary != "soft-wall")
         {
             throw new NotSupportedException("Unsupported experiment model, units or boundary convention.");
         }
     }
+
+    /// <summary>Returns the stable file identifier for an explicit two-dimensional boundary rule.</summary>
+    /// <param name="boundary">A supported world rule.</param>
+    /// <returns>A lowercase format identifier independent of display labels.</returns>
+    public static string BoundaryIdentifier(BoundaryKind boundary) => boundary switch
+    {
+        BoundaryKind.SoftWall => "soft-wall",
+        BoundaryKind.Open => "open",
+        BoundaryKind.Reflecting => "reflecting",
+        BoundaryKind.Periodic => "periodic",
+        _ => throw new ArgumentOutOfRangeException(nameof(boundary))
+    };
+
+    /// <summary>Parses a supported file boundary identifier without defaulting unknown rules.</summary>
+    /// <param name="identifier">The exact saved boundary identifier.</param>
+    /// <returns>The corresponding world rule.</returns>
+    /// <exception cref="NotSupportedException">The identifier is unknown.</exception>
+    public static BoundaryKind ParseBoundary(string identifier) => identifier switch
+    {
+        "soft-wall" => BoundaryKind.SoftWall,
+        "open" => BoundaryKind.Open,
+        "reflecting" => BoundaryKind.Reflecting,
+        "periodic" => BoundaryKind.Periodic,
+        _ => throw new NotSupportedException("Unsupported world boundary convention.")
+    };
+
+    private static ForceBackend ParseNeighbourSearch(string identifier) => identifier switch
+    {
+        "direct/1" => ForceBackend.Direct,
+        "uniform-grid/1" => ForceBackend.UniformGrid,
+        _ => throw new NotSupportedException("Unsupported experiment neighbour-search convention.")
+    };
 
     private static ExperimentDefinition CreateDefinition(string name, ParameterData parameters, MatrixData matrix,
         StateData state, double timeStep, GeneratorMetadata generator, ForceBackend backend, int workerCount = 1,
@@ -178,6 +233,15 @@ public static class ExperimentFile
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ExperimentProvenance? Provenance = null);
 
     private sealed record MatrixData(int SpeciesCount, double[] Values);
+
+    private sealed record FileDataV3(int SchemaVersion, string ModelVersion, string IntegratorVersion, string NeighbourSearchVersion, string Units,
+        string Boundary, string Name, double TimeStep, ParameterData Parameters, MatrixDataV3 Matrix,
+        StateData InitialState, GeneratorMetadata Generator, int WorkerCount,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ExperimentProvenance? Provenance = null);
+
+    private sealed record MatrixDataV3(int SpeciesCount, double[] Values, RangeData? PairRanges);
+
+    private sealed record RangeData(double[] CoreRadii, double[] CutoffRadii);
 
     private sealed record StateData(long[] Ids, PointData[] Positions, PointData[] Velocities, int[] Species);
 

@@ -24,6 +24,10 @@ internal sealed class PairForceKernel(ModelParameters parameters, InteractionMat
     /// </remarks>
     internal PairKind Evaluate(Vector2d displacement, int coefficientIndex, out Vector2d force)
     {
+        if (matrix.Ranges is PairInteractionRanges ranges)
+        {
+            return EvaluateDirectedRange(displacement, coefficientIndex, ranges, out force);
+        }
         force = default;
         if (displacement.X == 0 && displacement.Y == 0)
         {
@@ -67,6 +71,67 @@ internal sealed class PairForceKernel(ModelParameters parameters, InteractionMat
         double coefficient = distance < SmallestNormal || distanceRatio < SmallestNormal
             ? EvaluateTinyDistanceCoefficient(displacement, attraction)
             : ParticleLifeForce.EvaluateValidated(distanceRatio, attraction, parameters.RepulsionFraction);
+        force = direction * (parameters.ForceScale * coefficient);
+        return PairKind.Accepted;
+    }
+
+    /// <summary>Evaluates one explicitly stored core/cutoff pair while retaining all directed neighbours.</summary>
+    /// <remarks>The global legacy path above retains its original beta arithmetic. Explicit pair tables
+    /// use r/core - 1 below a positive core and a triangular outer coefficient above it. Zero core
+    /// removes repulsion; coincidence still contributes zero. Scaled normalization preserves tiny
+    /// directions and avoids mistaking a squared-distance underflow for a true overlap.</remarks>
+    private PairKind EvaluateDirectedRange(Vector2d displacement, int coefficientIndex, PairInteractionRanges ranges,
+        out Vector2d force)
+    {
+        force = default;
+        if (displacement.X == 0 && displacement.Y == 0)
+        {
+            return PairKind.Overlap;
+        }
+        double cutoff = ranges.CutoffRadii[coefficientIndex];
+        if (Math.Abs(displacement.X) >= cutoff || Math.Abs(displacement.Y) >= cutoff)
+        {
+            return PairKind.Rejected;
+        }
+        double squared = displacement.X * displacement.X + displacement.Y * displacement.Y;
+        double limitSquared = cutoff * cutoff;
+        if (limitSquared >= SmallestNormal && squared >= limitSquared)
+        {
+            return PairKind.Rejected;
+        }
+        double distance;
+        Vector2d direction;
+        if (squared < SmallestNormal)
+        {
+            double largest = Math.Max(Math.Abs(displacement.X), Math.Abs(displacement.Y));
+            Vector2d scaled = displacement / largest;
+            double length = Math.Sqrt(scaled.X * scaled.X + scaled.Y * scaled.Y);
+            distance = largest * length;
+            direction = scaled / length;
+        }
+        else
+        {
+            distance = Math.Sqrt(squared);
+            direction = displacement / distance;
+        }
+        if (distance >= cutoff)
+        {
+            return PairKind.Rejected;
+        }
+
+        double core = ranges.CoreRadii[coefficientIndex];
+        double coefficient;
+        if (core > 0 && distance < core)
+        {
+            // Normalizing components before taking the norm avoids rounding a tiny radius ratio to zero.
+            double ratio = distance < SmallestNormal
+                ? double.Hypot(displacement.X / core, displacement.Y / core) : distance / core;
+            coefficient = ratio - 1;
+        }
+        else
+        {
+            coefficient = ParticleLifeForce.EvaluatePairRangeValidated(distance, matrix.Values[coefficientIndex], core, cutoff);
+        }
         force = direction * (parameters.ForceScale * coefficient);
         return PairKind.Accepted;
     }

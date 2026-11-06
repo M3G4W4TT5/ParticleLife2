@@ -1,5 +1,7 @@
 using System.Globalization;
 using ParticleLife.MonoGame;
+using ParticleLife.MonoGame.Gpu;
+using ParticleLife.MonoGame.Rendering;
 
 try
 {
@@ -7,6 +9,34 @@ try
     {
         ViewerOptions.PrintHelp();
         return 0;
+    }
+
+    if (args.Length == 2 && args[0] == "--trail-render-checks")
+    {
+        using TrailRenderingChecksGame checks = new(args[1]);
+        checks.Run();
+        return checks.ExitCode;
+    }
+
+    if (args.Length == 2 && args[0] == "--cpu-render-checks")
+    {
+        using CpuRenderingChecksGame checks = new(args[1]);
+        checks.Run();
+        return checks.ExitCode;
+    }
+
+    if (args.Length == 2 && args[0] is "--gpu-checks" or "--gpu-presentation-checks")
+    {
+        using GpuCorrectnessGame checks = new(args[1], presentationOnly: args[0] == "--gpu-presentation-checks");
+        checks.Run();
+        return checks.ExitCode;
+    }
+
+    if (args.Length == 4 && args[0] is "--gpu-capacity" or "--gpu-profile-first-step")
+    {
+        using GpuCapacityGame capacity = new(args[1], args[2], args[3], profileFirstStep: args[0] == "--gpu-profile-first-step");
+        capacity.Run();
+        return capacity.ExitCode;
     }
 
     ViewerOptions options = ViewerOptions.Parse(args);

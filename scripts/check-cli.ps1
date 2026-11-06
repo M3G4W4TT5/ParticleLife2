@@ -176,8 +176,8 @@ foreach ($preset in @('random', 'chains', 'snakes')) {
     Invoke-Cli -Arguments @('create', '--preset', $preset, '--particles', "$population", '--species', "$species",
         '--seed', "$seed", '--output', $experimentPath)
     $experiment = Read-Json $experimentPath
-    Assert-That ($experiment.schemaVersion -eq 2 -and $experiment.neighbourSearchVersion -ceq 'uniform-grid/1') "$preset did not save grid as the intended search."
-    Assert-That ($experiment.modelVersion -ceq 'particle-life/1' -and $experiment.integratorVersion -ceq 'damped-semi-implicit-euler/1') "$preset search optimization changed its physical model or integrator identity."
+    Assert-That ($experiment.schemaVersion -eq 3 -and $experiment.neighbourSearchVersion -ceq 'uniform-grid/1') "$preset did not save grid as the intended search."
+    Assert-That ($experiment.modelVersion -ceq 'particle-life/2' -and $experiment.integratorVersion -ceq 'damped-semi-implicit-euler/1') "$preset did not save the current model and integrator identity."
     Invoke-Cli -Arguments @('validate', $experimentPath)
     Invoke-Cli -Arguments @('run', $experimentPath, '--steps', '20', '--sample-every', '0', '--output', $gridReportPath)
     Invoke-Cli -Arguments @('run', $experimentPath, '--steps', '20', '--sample-every', '0', '--backend', 'direct', '--output', $overrideReportPath)
@@ -309,7 +309,7 @@ Assert-That ($serialOverride.execution.savedWorkerCount -eq 4 -and $serialOverri
 Assert-That ((ConvertTo-CanonicalJson $parallel.finalState) -ceq (ConvertTo-CanonicalJson $serialOverride.finalState)) 'Worker scheduling changed receiver sums.'
 Assert-That ($parallel.diagnostics.algorithmVersion -eq 'spatial-components/1') 'CLI did not use reusable diagnostics.'
 Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--workers', '0') -ExpectedExit 1
-Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--workers', '9') -ExpectedExit 1
+Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--workers', '65') -ExpectedExit 1
 Invoke-Cli -Arguments @('run', $parallelInput, '--steps', '1', '--backend', 'direct', '--workers', '4') -ExpectedExit 1
 
 # Finite velocity components can have an overflowing diagnostic Hypot while a small dt still integrates.

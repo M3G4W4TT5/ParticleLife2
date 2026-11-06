@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 3,
+  "modelVersion": "particle-life/2",
+  "integratorVersion": "damped-semi-implicit-euler/1",
+  "neighbourSearchVersion": "uniform-grid/1",
+  "units": "reduced-l0-t0-m0",
+  "boundary": "reflecting",
+  "name": "Directed ranges in a reflecting world",
+  "timeStep": 0.002,
+  "parameters": {
+    "worldWidth": 1,
+    "worldHeight": 1,
+    "cutoff": 0.1,
+    "forceScale": 0.5,
+    "repulsionFraction": 0.3,
+    "dampingHalfLife": 0.1,
+    "wallWidth": 0.05,
+    "wallStrength": 1.44
+  },
+  "matrix": {
+    "speciesCount": 2,
+    "values": [0.6, 0.8, -0.4, 0.2],
+    "pairRanges": {
+      "coreRadii": [0.02, 0.04, 0, 0.03],
+      "cutoffRadii": [0.12, 0.25, 0.08, 0.18]
+    }
+  },
+  "initialState": {
+    "ids": [11, 22, 33, 44, 55, 66],
+    "positions": [
+      { "x": 0.2, "y": 0.25 },
+      { "x": 0.35, "y": 0.25 },
+      { "x": 0.7, "y": 0.75 },
+      { "x": 0.9, "y": 0.75 },
+      { "x": 0.97, "y": 0.1 },
+      { "x": 0.55, "y": 0.5 }
+    ],
+    "velocities": [
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 },
+      { "x": 0, "y": 0 },
+      { "x": 0.25, "y": 0 },
+      { "x": 0, "y": 0.05 }
+    ],
+    "species": [0, 1, 0, 1, 0, 1]
+  },
+  "generator": {
+    "name": "manual-directed-ranges",
+    "version": "1",
+    "seed": null,
+    "runtime": "hand-authored decimal initial values"
+  },
+  "workerCount": 1
+}

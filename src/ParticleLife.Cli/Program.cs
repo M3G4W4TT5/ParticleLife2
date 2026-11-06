@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using ParticleLife.Core.Execution;
 using ParticleLife.Core.Experiments;
 using ParticleLife.Core.Models;
 using ParticleLife.Core.Numerics;
@@ -54,8 +55,17 @@ internal static partial class CommandLine
                         throw new ArgumentException("Usage: validate-session <session.json>");
                     }
 
-                    SessionDefinition session = SessionFile.Load(args[1]);
-                    Console.WriteLine($"Valid session structure: {session.Events.Count} ordered events, terminal boundary {session.TerminalStep}. Replay additionally verifies structural clocks and numerical completion.");
+                    string sessionText = File.ReadAllText(args[1]);
+                    if (IsCapturedSessionText(sessionText))
+                    {
+                        CapturedSessionDefinition captured = ExecutionCaptureFile.Deserialize(sessionText);
+                        Console.WriteLine($"Valid captured session structure: {captured.Captures.Count} actual captures, {captured.Actions.Events.Count} ordered events, terminal boundary {captured.Actions.TerminalStep}. Choose --restore-capture or --resimulate-on-cpu for replay.");
+                    }
+                    else
+                    {
+                        SessionDefinition session = SessionFile.Deserialize(sessionText);
+                        Console.WriteLine($"Valid session structure: {session.Events.Count} ordered events, terminal boundary {session.TerminalStep}. Replay additionally verifies structural clocks and numerical completion.");
+                    }
                     break;
                 case "replay":
                     if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
@@ -63,7 +73,8 @@ internal static partial class CommandLine
                         throw new ArgumentException("Usage: replay <session.json> [--continue-steps N] [--output result.json]");
                     }
 
-                    ReplaySession(args[1], ParseOptions(args, 2, ["continue-steps", "sample-every", "cluster-distance", "backend", "workers", "output"]));
+                    ReplaySession(args[1], ParseOptions(args, 2, ["continue-steps", "sample-every", "cluster-distance", "backend", "workers", "output"],
+                        ["restore-capture", "resimulate-on-cpu"]));
                     break;
                 default:
                     throw new ArgumentException($"Unknown command '{args[0]}'. Use --help.");
@@ -294,20 +305,28 @@ internal static partial class CommandLine
         }
     }
 
-    private static Dictionary<string, string> ParseOptions(string[] args, int start, string[] allowed)
+    private static Dictionary<string, string> ParseOptions(string[] args, int start, string[] allowed, string[]? flags = null)
     {
         Dictionary<string, string> options = new(StringComparer.Ordinal);
-        for (int i = start; i < args.Length; i += 2)
+        for (int i = start; i < args.Length; i++)
         {
-            if (!args[i].StartsWith("--", StringComparison.Ordinal) || i + 1 >= args.Length
-                || !allowed.Contains(args[i][2..], StringComparer.Ordinal))
+            string option = args[i];
+            if (!option.StartsWith("--", StringComparison.Ordinal))
             {
-                throw new ArgumentException($"Unknown or incomplete option '{args[i]}'. Use --help.");
+                throw new ArgumentException($"Unknown or incomplete option '{option}'. Use --help.");
             }
 
-            if (!options.TryAdd(args[i][2..], args[i + 1]))
+            string key = option[2..];
+            bool isFlag = flags?.Contains(key, StringComparer.Ordinal) == true;
+            if (!isFlag && (!allowed.Contains(key, StringComparer.Ordinal) || i + 1 >= args.Length))
             {
-                throw new ArgumentException($"Duplicate option '{args[i]}'.");
+                throw new ArgumentException($"Unknown or incomplete option '{option}'. Use --help.");
+            }
+
+            string value = isFlag ? "true" : args[++i];
+            if (!options.TryAdd(key, value))
+            {
+                throw new ArgumentException($"Duplicate option '{option}'.");
             }
         }
 
@@ -377,10 +396,13 @@ internal static partial class CommandLine
         validate-session session.json
         replay session.json [--continue-steps 0] [--sample-every 100] [--cluster-distance R]
                             [--backend direct|grid] [--workers N] [--output result.json]
+        replay captured-session.json --restore-capture|--resimulate-on-cpu
+                            [--continue-steps 0] [--sample-every 100] [--cluster-distance R]
+                            [--backend direct|grid] [--workers N] [--output result.json]
 
         JSON experiments contain actual initial state, directed matrix values, parameters and provenance.
         New CLI experiments default to grid search. Runs honour the saved backend unless overridden.
-        Grid workers are explicit (1..8 including the caller); direct requires one. Default is serial.
+        Grid workers are explicit (1..64 including the caller); direct requires one. Default is serial.
         Legacy schema-1 experiments retain direct search. Reports retain source and effective settings,
         last actual search and direct fallback counts for coordinate or accumulation range limits.
         The native editor changes rules live and saves presets, current-state experiments and sessions.
@@ -389,6 +411,12 @@ internal static partial class CommandLine
         structural payload clocks against actual accumulated time and verifies numerical completion.
         Replay honours every saved backend/worker change. Explicit overrides apply to the entire replay
         and are recorded separately in its report. --continue-steps advances after the terminal boundary.
+        Captured sessions require exactly one value-free mode flag. --restore-capture restores actual
+        terminal values, IDs, species, clock and settings on the CPU; float32 values widen exactly.
+        --resimulate-on-cpu replays embedded actions through the CPU engine, including terminal edits;
+        the resulting trajectory may differ from GPU recording. Neither mode loads a GPU runtime.
+        Capture flags apply only to captured sessions. --continue-steps is additional CPU work after
+        restore or replay; --steps remains exclusive to run with an initial-condition experiment.
         Output files must not already exist. Reports include the original experiment and final state;
         reports are not checkpoint inputs. Set --sample-every 0 to disable exact spatial diagnostics.
         Seeds alone do not guarantee identical generation or trajectories across runtimes.

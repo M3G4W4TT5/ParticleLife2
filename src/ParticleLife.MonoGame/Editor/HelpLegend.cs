@@ -12,10 +12,11 @@ internal sealed class HelpLegend
     internal void Arrange(Rectangle bounds) => panel.Arrange(bounds);
     internal void PrepareForOpen(bool pointerHeld) => panel.PrepareForOpen(pointerHeld);
 
-    internal HelpLegend(Action close, Action<string> report)
+    internal HelpLegend(Action close, Action<string> report, Func<string>? latestFeedback = null)
     {
         panel = new UiPanel(report, dismissOnEscape: true);
         panel.Toolbar.Add(new UiButton(() => "Close help", close));
+        QuickstartHelp.AddTo(panel, latestFeedback);
         Add("Playback", [
             ("Space", "Pause or resume"), ("N / Right", "Pause and advance one step"),
             ("R", "Reset exact initial state and rules"), ("I", "Resample positions and velocities"),
@@ -24,15 +25,26 @@ internal sealed class HelpLegend
             ("E", "Show or hide the inspector"), ("S / O", "Open the file library"),
             ("F5", "Reload startup file or open library"), ("D", "Toggle diagnostic sampling"),
             ("H / F1", "Open or close Help"), ("F9", "Print viewer timing measurements"),
+            ("F10", "Reset the native timing window"),
             ("Ctrl+Z / Y", "Undo / redo at the current step"), ("Escape", "Close dialog; exit with world focus")]);
         Add("Inspector", [
             ("Drag label", "Scrub a value; one gesture, one undo"),
             ("Click value", "Type an exact number"), ("Tab / Shift+Tab", "Move between controls"),
             ("Enter", "Apply a draft or dropdown choice"), ("Escape", "Cancel a draft or dropdown"),
+            ("Page Up / Down", "Scroll a panel or this guide"), ("Ctrl+plus/minus/0", "Adjust / restore UI scale with canvas focus"),
             ("Ctrl+A / C / X / V", "Select / copy / cut / paste"),
             ("Arrow keys", "Navigate matrix cells or menu options"),
             ("Scroll", "Scroll the inspector or open dropdown"),
             ("Drag panel edge", "Resize inspector width in wide windows")]);
+        Add("Camera and canvas", [
+            ("Wheel on canvas", "Zoom around the pointer"), ("Middle / right drag", "Pan the view"),
+            ("V", "Fit the nominal world"), ("World > Camera", "Exact zoom/centre, smoothing and size units"),
+            ("Particles > Brushes", "Choose move/add/paint/erase/force tools"),
+            ("Left drag canvas", "Apply the selected live brush"), ("Escape in gesture", "Stop; Ctrl+Z undoes applied edits")]);
+        Add("Directed matrix", [
+            ("Drag cells", "Select a rectangle"), ("Ctrl+click", "Toggle cells or add a header selection"),
+            ("Shift+click/arrows", "Extend selection from its anchor"), ("Click row/column", "Select a whole directed row/column"),
+            ("Shift+header", "Open that species colour picker"), ("Ctrl+A / C / V", "Select all / copy full matrix / validate paste")]);
         panel.Content.Add(new UiLabel(() => "Focused controls capture simulation shortcuts. Hover a control for its units, range and meaning.", 40));
     }
 
