@@ -141,6 +141,12 @@ Exit, when this phase is undertaken: an optional, usable 3D exploration mode wit
 
 ## Target execution and reproducibility boundary
 
+### Native brush and discovery presentation
+
+The brush wheel owns session-only preferences, hover selection, cancellable numeric drafts and pointer capture in `RadialBrushState`, with fixed geometry in `RadialBrushLayout` and native input/drawing in `RadialBrushMenu`. The game transfers input ownership before inspector and canvas dispatch, finishes a stroke on opening, and consumes dismissal and closing-animation frames. Tool configuration does not observe particles, create history or change playback. Actual strokes still use the existing completed-boundary editor commands and replay payloads. Radius/shape are shared; other settings are remembered per tool. Lucide source geometry, pinned provenance, offline atlas regeneration and notices live in `Assets/Lucide`.
+
+Discoveries embeds the file browser's retained sections in the inspector's single focus/scroll owner. Its scans, file completions and replay progress continue pumping when a different tab, hidden inspector, Help or brush overlay owns input. Save/load/apply/replay remain explicit validated commands. The [editor guide](live-experiment-editor.md#camera-generators-and-direct-tools) describes the wheel and the [discovery guide](discovery-and-recording.md) describes the integrated library. Focused managed checks are included in the contributor compatibility command; native visual/input acceptance remains separate.
+
 The shared C# model/data contracts, CPU simulation, persistence and CPU CLI remain independent of graphics APIs. A GPU adapter owns kernels, device storage and synchronization; a compatible renderer may consume its completed buffers directly. Do not force a resident GPU implementation through the current CPU-span `IForceEvaluator` contract. Introduce only the execution/capture interfaces demonstrated necessary by P1/P2/P5.
 
 One owner advances a simulation and applies commands at completed boundaries. Rendering receives a completed buffer lease or reusable snapshot, never a view into a buffer being overwritten. File captures are explicit owned states. Device changes, precision conversion, structural editing, async diagnostics and cancellation have defined publication points. Small edits should not require a full state download; operations that do require one may be visibly asynchronous.

@@ -2,15 +2,15 @@
 
 Start with the default 500 particles or choose a recipe in **Discoveries > Starting recipe**. **New from recipe** creates its recommended population and a fresh baseline. **Apply matrix live** keeps the current particles and clock, and needs compatible species counts.
 
-Press **H / F1**, or choose **Guide** beside Undo, Redo and Files, for the in-app quickstart. The guide stays available after the splash; dismissing the splash does not activate a control or advance a paused experiment.
+Press **H / F1**, or click the lower-left **?**, for the in-app quickstart. The guide stays available after the splash; dismissing the splash does not activate a control or advance a paused experiment.
 
 ## Make one change at a time
 
 1. Press **Space** to pause. **N** or **Right** completes one step and stays paused.
 2. Open **Interactions**, select a receiver row and source column, and change the directed coefficient. Positive outer values attract; negative values repel. The reverse direction can differ. Inspect the force curve for the selected pair.
 3. Resume, observe the change, then use **Ctrl+Z** to undo the edit at the current clock. Undo does not rewind numerical time.
-4. Wheel over the canvas to zoom around the pointer; middle/right drag pans. **V** fits the nominal world. **E** hides or restores the inspector.
-5. In **Particles > Brushes**, choose a tool, radius and species filter, then drag on the canvas. **Escape** ends a gesture; **Ctrl+Z** undoes the applied edits as a group.
+4. Wheel over the canvas to zoom around the pointer; right drag pans. **V** fits the nominal world. **E** hides or restores the inspector.
+5. Use **B**, middle click or **Brush tools** to choose a tool, radius and species filter; close the menu, then drag on the canvas. **Escape** ends a gesture; **Ctrl+Z** undoes the applied edits as a group.
 
 Numeric fields accept exact values. Click a value, type and press **Enter**; **Escape** cancels the draft. **Tab / Shift+Tab** moves between controls and scrolls them into view. An invalid draft must be corrected or cancelled before a following action can proceed. Focused controls capture simulation shortcuts.
 
@@ -28,7 +28,7 @@ Changing the future seed, placement or velocity recipe alone does not move curre
 
 ## Keep a discovery
 
-Open **Files / S / O** or **Discoveries > Browse saved discoveries**. New output names protect existing files.
+Open **Discoveries / S / O**. New output names protect existing files.
 
 | Save | Use it for |
 | --- | --- |

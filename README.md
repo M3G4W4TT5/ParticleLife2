@@ -26,7 +26,7 @@ The viewer starts with 500 particles, seven species, seed 1 and grid search. Loa
 dotnet run --project src/ParticleLife.MonoGame -c Release --no-build -- examples/experiments/two-species.json --paused
 ```
 
-Press **H / F1** or choose **Guide** for the quickstart. **Space** pauses, **N** single-steps, **V** fits the world and **E** hides the inspector. The [exploration guide](docs/quickstart.md) explains Reset, Resample, New, brushes, files and keyboard controls.
+Press **H / F1** or the lower-left **?** for the quickstart. **Space** pauses, **N** single-steps, **V** fits the world and **E** hides the inspector. **B**, middle click or **Brush tools** opens the brush wheel; **S / O** reveals Discoveries. The [exploration guide](docs/quickstart.md) explains the controls and saving.
 
 Use `--help` for startup options. CPU grid search defaults to one worker; `--workers 4` explicitly selects parallel evaluation (1–64 workers). Saved experiments retain their choices; old schema-1 files keep direct search. The CPU uses double precision and a fixed timestep independently of rendering, with an exact uniform grid and direct reference available. GPU arithmetic and ordering can produce different trajectories. DesktopGL needs a working OpenGL display even when CPU simulation is selected.
 

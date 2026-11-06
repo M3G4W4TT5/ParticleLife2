@@ -1,5 +1,11 @@
 # Discoveries and recordings
 
+The inspector's **Discoveries** tab contains the local library directly. **S** or **O** reveals the inspector and selects that tab. **F5** reloads the startup experiment when one exists; otherwise it opens Discoveries. Folder navigation, search, favourites/recent ordering, thumbnails and selected-item details are grouped into collapsible sections alongside starting recipes, recording and capture controls. There is no separate Files window.
+
+Expand **Save / share a discovery** to name and save presets, patterns, initial states or sessions, or copy/paste a preset for review. Select a library item to expand its explicit load/replay actions and metadata fields. Presets expose selective coefficients, radii, palette and future-generation application with explicit species alignment. Export/import creates or validates a protected local `.plshare` artifact; it never publishes online. Existing destinations and companions remain protected against collisions.
+
+Switching tabs or hiding the inspector retains committed form drafts and does not interrupt scanning, saving, loading or replay completion. Invalid focused text blocks a following action until corrected or cancelled with Escape. Returning to Discoveries preserves its folder, search, selection and collapsed groups. File operations retain their existing pause policies: selecting or browsing does not pause; loading publishes paused; saving suppresses playback for its capture frame without advancing simulation time. Failed preparation retains the completed experiment and reports the failure.
+
 An edited session stores its actual initial state, ordered applied actions and final completed step. A local brush edit stores changed particle values and stable identities when that is smaller than a complete state. Replay applies those stored values at their recorded boundaries; pointer timing is not replayed. A change that reorders particles retains a complete state instead.
 
 Undo checkpoints use lossless chunks of up to 4,096 particles. Each chunk stores exact double bits, stable identities and species, using Brotli compression only when it reduces size. Compression and restoration happen during editing, outside simulation steps. This reduces retained history, but an edit or explicit capture can still require temporary storage proportional to the population.
