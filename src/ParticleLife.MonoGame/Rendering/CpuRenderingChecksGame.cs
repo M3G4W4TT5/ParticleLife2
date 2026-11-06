@@ -10,7 +10,9 @@ namespace ParticleLife.MonoGame.Rendering;
 /// <summary>Checks CPU particle pixels and native state restoration in the actual DesktopGL render-target pipeline.</summary>
 /// <remarks>This explicit diagnostic needs drawing capability only, never GPU compute. It borrows one
 /// completed CPU publication, draws the default seven colours at the default radius between SpriteBatch
-/// operations, and reads only its small test framebuffer. Non-core contexts are exercised with
+/// operations, and reads only its small test framebuffer. Replacing its paused CPU publisher with
+/// another same-count, same-clock source must refresh both point and quad geometry exactly once.
+/// Non-core contexts are exercised with
 /// POINT_SPRITE initially disabled and enabled; explicit core contexts never touch that removed capability.
 /// This framebuffer regression does not replace interactive editor acceptance.</remarks>
 internal sealed class CpuRenderingChecksGame : Game
@@ -72,7 +74,9 @@ internal sealed class CpuRenderingChecksGame : Game
         ParticleSnapshot state = new([1, 2, 3, 4, 5, 6, 7], positions, new Vector2d[7], [0, 1, 2, 3, 4, 5, 6]);
         ExperimentDefinition experiment = new("CPU render regression", new(), new(7, new double[49]), state,
             1.0 / 144, new("manual", "1", null, "CPU framebuffer regression"));
-        using BackgroundExperiment owner = new(new ExperimentEditor(new PlaybackController(experiment)));
+        PlaybackController playback = new(experiment);
+        playback.SetPaused(true);
+        using BackgroundExperiment owner = new(new ExperimentEditor(playback));
         using RenderFrameLease frame = owner.AcquireRenderFrame()
             ?? throw new InvalidOperationException("The initial completed CPU publication is missing.");
         using Texture2D white = new(GraphicsDevice, 1, 1);
@@ -172,6 +176,66 @@ internal sealed class CpuRenderingChecksGame : Game
             if (pixelFailures.Count != 0)
             {
                 throw new InvalidOperationException(string.Join(Environment.NewLine, pixelFailures));
+            }
+
+            Vector2d[] replacementPositions = positions.Select(position => new Vector2d(position.X, 0.5)).ToArray();
+            ParticleSnapshot replacementState = new(state.Ids, replacementPositions, state.Velocities, state.Species);
+            ExperimentDefinition replacement = new("CPU publisher replacement", experiment.Parameters, experiment.Matrix,
+                replacementState, experiment.TimeStep, experiment.Generator);
+            PlaybackController replacementPlayback = new(replacement);
+            replacementPlayback.SetPaused(true);
+            using BackgroundExperiment replacementOwner = new(new ExperimentEditor(replacementPlayback));
+            using RenderFrameLease replacementFrame = replacementOwner.AcquireRenderFrame()
+                ?? throw new InvalidOperationException("The replacement CPU publication is missing.");
+            using QuadParticleRenderer quads = new(GraphicsDevice, white);
+            for (int backend = 0; backend < 2; backend++)
+            {
+                for (int pass = 0; pass < 3; pass++)
+                {
+                    RenderFrameLease current = pass == 0 ? frame : replacementFrame;
+                    Vector2d[] expectedPositions = pass == 0 ? positions : replacementPositions;
+                    GraphicsDevice.SetRenderTarget(target);
+                    GraphicsDevice.Clear(background);
+                    ParticleRenderMetrics metrics;
+                    if (backend == 0)
+                    {
+                        renderer.Draw(current, transform, clip, appearance);
+                        metrics = renderer.LastMetrics;
+                    }
+                    else { metrics = quads.Draw(current, transform, clip, appearance, 2.5f, "Explicit fallback regression"); }
+                    GraphicsDevice.SetRenderTarget(null);
+                    target.GetData(pixels);
+                    using (FileStream file = File.Create(Path.Combine(outputDirectory, $"cpu-publisher-{backend}-{pass}.png")))
+                    {
+                        target.SaveAsPng(file, target.Width, target.Height);
+                    }
+                    bool uploadExpected = pass == 1 || backend == 1 && pass == 0;
+                    Require((metrics.UploadedBytes > 0) == uploadExpected,
+                        "A replacement CPU publisher retained stale geometry, or an unchanged publication was uploaded again.");
+                    for (int i = 0; i < expectedPositions.Length; i++)
+                    {
+                        Vector2d centre = transform.ToScreen(expectedPositions[i]);
+                        uint rgb = appearance.ColorForSpecies(i);
+                        Match(pixels[(int)centre.Y * target.Width + (int)centre.X],
+                            new Color((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb), "replacement particle " + i);
+                        if (pass != 0)
+                        {
+                            Vector2d oldCentre = transform.ToScreen(positions[i]);
+                            Match(pixels[(int)oldCentre.Y * target.Width + (int)oldCentre.X], background, "old publisher particle " + i);
+                        }
+                    }
+                    evidence.Add(new
+                    {
+                        Case = "paused-cpu-publisher-replacement",
+                        Pass = pass,
+                        current.Sequence,
+                        current.Count,
+                        current.Step,
+                        current.Time,
+                        CheckedCentres = expectedPositions.Length,
+                        Metrics = metrics
+                    });
+                }
             }
         }
         finally { GraphicsDevice.SetRenderTarget(null); }
