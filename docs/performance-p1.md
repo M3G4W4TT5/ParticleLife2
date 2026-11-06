@@ -1,6 +1,6 @@
 # P1 workload and measurement protocol
 
-P1 adds saved inputs at 10,000, 50,000, 100,000 and 250,000 particles, with 1,000,000 available as an explicit stretch selection. These are measurement points, not interactive capacity claims. The initial 10k CPU screen below has completed; broader CPU and native rendering/input results remain pending. GPU interoperability has its [own report](gpu-integration.md). No performance improvement is claimed by adding this tooling.
+P1 adds saved inputs at 10,000, 50,000, 100,000 and 250,000 particles, with 1,000,000 available as an explicit stretch selection. These are measurement points, not interactive capacity claims. The initial 10k CPU screen below has completed; subsequent CPU/GPU capacity and native rendering/input observations are recorded in [P7](performance-p7.md) and the [visual review](visual-review-checklist.md). GPU interoperability has its [own report](gpu-integration.md). No performance improvement is claimed by adding this tooling.
 
 The tracked recipe is `benchmarks/ParticleLife.Benchmarks/P1Inputs.cs` (`p1/1`). It writes complete experiment files and a hash manifest under ignored `artifacts/`. Generated states are not source dependencies or source-controlled bulk fixtures. A prepared input directory is immutable: repeat preparation verifies every saved file and the requested coverage; adding cases requires a new directory. An interrupted preparation without a completed manifest must also use a new empty directory.
 
@@ -83,7 +83,7 @@ For P2/P7, record measured FPS and frame distribution, controller/input latency 
 | 50k/100k/250k density and worker comparison | Completed bounded one/four-worker screen below |
 | Dense geometries | All ladder inputs saved; 10k fixed-area/band/cluster probes completed |
 | 1M stretch | Saved fixed-density input and four-worker run completed; no interactive-capacity claim |
-| Native rendering, 60 FPS and input latency | Pending consolidated P1–P7 visual review |
+| Native rendering, frame rate and input proxy | Scoped CPU/GPU observations in [P7](performance-p7.md); remaining native cases in the [visual review](visual-review-checklist.md) |
 | GPU buffer interoperability, memory and transfers | Completed prototype and production follow-up; see [GPU evidence](gpu-integration.md). This report retains the original P1 CPU screen. |
 
 Publish measured values here only with the generated report paths/hashes, commit and assembly hashes, dirty-tree status, SDK/runtime/OS/CPU/logical processors, workers, power/runtime overrides, model/timestep and exact mode/budgets. Reuse retained inputs rather than rerunning historical long preparation commands. Extend measurements only when the next implementation decision requires them.
