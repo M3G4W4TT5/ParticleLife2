@@ -14,7 +14,7 @@ internal enum RadialBrushParameter { Radius, Strength, ParticlesPerSample, Direc
 internal sealed class RadialBrushState
 {
     internal static readonly string[] ToolNames = ["Navigate only", "Move", "Add particles", "Paint species", "Erase", "Attract", "Repel", "Directional force"];
-    internal static readonly string[] ToolDescriptions = ["Explore without editing particles", "Move grabbed particles", "Add particles at each sample", "Change particles to a species", "Remove particles in the footprint", "Pull particles towards the centre", "Push particles away from the centre", "Push particles along an angle"];
+    internal static readonly string[] ToolDescriptions = ["Pan and zoom the world", "Drag particles", "Add particles per sample", "Change particle species", "Remove particles", "Pull particles inward", "Push particles outward", "Push along an angle"];
     private readonly BrushSettings[] preferences = Enumerable.Range(0, 7).Select(index => new BrushSettings { Kind = (BrushKind)index }).ToArray();
     private double radius = 0.06;
     private BrushShape shape;
@@ -149,7 +149,11 @@ internal sealed class RadialBrushState
         _ => string.Empty
     };
 
-    internal string Readout(RadialBrushParameter parameter) => Value(parameter).ToString("G17", CultureInfo.InvariantCulture);
+    /// <summary>Uses the shortest round-trip representation, preserving exact edits without binary padding.</summary>
+    internal string Readout(RadialBrushParameter parameter) => Value(parameter).ToString("R", CultureInfo.InvariantCulture);
+
+    /// <summary>Formats a concise live readout; entering the field still exposes the full stored precision.</summary>
+    internal string DisplayValue(RadialBrushParameter parameter) => Value(parameter).ToString("G6", CultureInfo.InvariantCulture);
 
     /// <summary>Validates before changing preferences. Exact values are independent of convenient slider ranges.</summary>
     internal bool SetParameter(RadialBrushParameter parameter, double value)
@@ -161,10 +165,10 @@ internal sealed class RadialBrushState
         {
             ValidationError = parameter switch
             {
-                RadialBrushParameter.Radius => "Use a finite positive radius.",
-                RadialBrushParameter.Strength => "Use a finite nonnegative strength.",
-                RadialBrushParameter.ParticlesPerSample => "Use a whole number from 1 to 4096.",
-                _ => "Use a finite angle in degrees."
+                RadialBrushParameter.Radius => "Enter a number above 0.",
+                RadialBrushParameter.Strength => "Enter 0 or a positive number.",
+                RadialBrushParameter.ParticlesPerSample => "Enter a whole number, 1–4096.",
+                _ => "Enter a finite angle in degrees."
             };
             return false;
         }
@@ -197,21 +201,7 @@ internal sealed class RadialBrushState
         ActiveTool = FocusedTool;
     }
 
-    /// <summary>Updates a captured drag from its start, preserving exact out-of-range values until the user moves.</summary>
-    /// <param name="amount">Signed radial displacement in logical pixels; outward is positive.</param>
-    internal void Drag(double amount)
-    {
-        if (!dragging.HasValue || amount == 0) { return; }
-        double value = dragging.Value switch
-        {
-            RadialBrushParameter.ParticlesPerSample => Math.Clamp(Math.Round(dragStart * Math.Pow(2, amount / 32)), 1, 4096),
-            RadialBrushParameter.Strength => Math.Max(0, (dragStart + 0.1) * Math.Pow(2, amount / 36) - 0.1),
-            RadialBrushParameter.Radius => dragStart * Math.Pow(2, amount / 60),
-            _ => dragStart + amount * 2
-        };
-        if (double.IsFinite(value) && (dragging != RadialBrushParameter.Radius || value > 0)) { SetParameter(dragging.Value, value); }
-    }
-
+    /// <summary>Applies a captured presentation value while retaining the original value for cancellation.</summary>
     internal void DragValue(double value) { if (dragging.HasValue) { SetParameter(dragging.Value, value); } }
     internal void EndDrag() { dragging = null; }
 

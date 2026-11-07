@@ -671,13 +671,8 @@ internal sealed partial class ParticleLifeGame : Game
             batch.Begin(samplerState: SamplerState.LinearClamp, transformMatrix: Matrix.CreateScale(BrushMenuScale));
             brushMenu.Draw(canvas, batch, icons);
             batch.End();
-            if (brushMenu.IsOpen && surface.BrushState.EditingParameter.HasValue)
-            {
-                // Keep the real world-space footprint visible even when its anchor is under the hub.
-                // The menu's edge-adjusted centre never substitutes for this independent canvas anchor.
-                GraphicsDevice.ScissorRectangle = Rectangle.Intersect(worldBounds, GraphicsDevice.Viewport.Bounds);
-                DrawBrushPreview(CreateWorldTransform());
-            }
+            // DrawWorld already draws the independently anchored footprint beneath the overlay.
+            // Redrawing it here would cross the hub's text, exact field and validation feedback.
         }
         if (editor.Appearance.ShowHelp)
         {

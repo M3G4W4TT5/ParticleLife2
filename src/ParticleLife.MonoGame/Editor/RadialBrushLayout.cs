@@ -22,20 +22,22 @@ internal sealed class RadialBrushLayout
     internal Rectangle CircleBounds => At(Center.X - 35, Center.Y + RadiusArc - 15, 30, 27);
     internal Rectangle SquareBounds => At(Center.X + 5, Center.Y + RadiusArc - 15, 30, 27);
     internal Rectangle NumericBounds => At(Center.X - HubRadius + 7, Center.Y + 7, (HubRadius - 7) * 2, 25);
+    internal Rectangle ApplyBounds => At(Center.X - (Compact ? 51 : 63), Center.Y + 36, Compact ? 48 : 60, 26);
+    internal Rectangle CancelBounds => At(Center.X + 3, Center.Y + 36, Compact ? 48 : 60, 26);
 
     private RadialBrushLayout(Rectangle viewport, Vector2 anchor)
     {
         Anchor = anchor;
         Compact = viewport.Width < 516 || viewport.Height < 516;
-        // At the minimum window the compact wheel needs 280 logical pixels, including a small rim.
-        float factor = Compact ? Math.Min(1, Math.Min(viewport.Width, viewport.Height) / 284f) : 1;
-        HubRadius = (Compact ? 59 : 82) * factor;
-        RadiusArc = (Compact ? 74 : 94) * factor;
-        ToolInner = (Compact ? 90 : 110) * factor;
-        ToolOuter = (Compact ? 132 : 166) * factor;
+        // Reserve a larger compact hub for readable contextual feedback and explicit draft actions.
+        float factor = Compact ? Math.Min(1, Math.Min(viewport.Width, viewport.Height) / 300f) : 1;
+        HubRadius = (Compact ? 69 : 82) * factor;
+        RadiusArc = (Compact ? 86 : 94) * factor;
+        ToolInner = (Compact ? 101 : 110) * factor;
+        ToolOuter = (Compact ? 143 : 166) * factor;
         OuterInner = Compact ? ToolInner : 175;
         OuterOuter = Compact ? ToolOuter : 225;
-        float extent = Compact ? OuterOuter + 7 : 250;
+        float extent = Compact ? 150 * factor : 250;
         Center = new Vector2(ClampCentre(anchor.X, viewport.Left, viewport.Right, extent), ClampCentre(anchor.Y, viewport.Top, viewport.Bottom, extent));
         Bounds = At(Center.X - extent, Center.Y - extent, extent * 2, extent * 2);
     }
@@ -79,6 +81,23 @@ internal sealed class RadialBrushLayout
 
     internal static double RadiusFraction(double radius) => Math.Clamp(Math.Log(radius / 0.001) / Math.Log(500), 0, 1);
     internal static double RadiusValue(double fraction) => 0.001 * Math.Pow(500, Math.Clamp(fraction, 0, 1));
+
+    /// <summary>Maps the bounded contextual tracks to their displayed clockwise fill, independently of exact entry.</summary>
+    internal static double ParameterFraction(RadialBrushParameter parameter, double value) => Math.Clamp(parameter switch
+    {
+        RadialBrushParameter.Radius => RadiusFraction(value),
+        RadialBrushParameter.ParticlesPerSample => Math.Log2(value) / 12,
+        RadialBrushParameter.Strength => Math.Log10(1 + value) / Math.Log10(101),
+        _ => throw new ArgumentOutOfRangeException(nameof(parameter))
+    }, 0, 1);
+
+    internal static double ParameterValue(RadialBrushParameter parameter, double fraction) => parameter switch
+    {
+        RadialBrushParameter.Radius => RadiusValue(fraction),
+        RadialBrushParameter.ParticlesPerSample => Math.Round(Math.Pow(4096, Math.Clamp(fraction, 0, 1))),
+        RadialBrushParameter.Strength => Math.Pow(101, Math.Clamp(fraction, 0, 1)) - 1,
+        _ => throw new ArgumentOutOfRangeException(nameof(parameter))
+    };
 
     internal bool SectorContains(Point point, float inner, float outer, double start, double sweep)
     {

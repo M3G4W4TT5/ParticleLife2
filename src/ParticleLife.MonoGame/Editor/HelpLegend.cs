@@ -44,13 +44,13 @@ internal sealed class HelpLegend
             ("Left drag canvas", "Apply the selected live brush"), ("Escape in gesture", "Stop; Ctrl+Z undoes applied edits")]);
         Add("Brush tools", [
             ("Hover / click tool", "Preview / activate; menu stays open"),
-            ("Wheel / inner arc", "Adjust world radius; square half-width"),
+            ("Wheel in hub / inner arc", "Adjust world radius; square half-width"),
             ("Wheel on a slider", "Adjust that highlighted value"),
-            ("Drag outer segment", "Outward increases strength or count"),
-            ("Click value", "Type an exact number; Enter confirms"),
+            ("Drag along outer arc", "Clockwise increases strength or count"),
+            ("Click value", "Type a number; Apply / Enter confirms"),
             ("Tab / arrows", "Focus tools, settings and history"),
             ("Enter on tool", "Select the tool and close"),
-            ("Escape", "Cancel unfinished edit, then close"),
+            ("Cancel / Escape", "Discard unfinished edit; Escape then closes"),
             ("F8 in menu", "Toggle reduced-motion fades")]);
         Add("Directed matrix", [
             ("Drag cells", "Select a rectangle"), ("Ctrl+click", "Toggle cells or add a header selection"),

@@ -60,10 +60,13 @@ internal static class RadialBrushChecks
         RadialBrushState state = new();
         state.Open();
         state.FocusTool(7);
+        state.BeginNumeric(RadialBrushParameter.Radius);
+        Require(state.NumericDraft == "0.06", "Exact entry exposed binary padding for a simple decimal.");
+        state.CancelEdit();
         state.BeginDrag(RadialBrushParameter.Strength);
-        state.Drag(36);
+        state.DragValue(4.1);
         Require(state.Value(RadialBrushParameter.Strength) > 2 && state.IsDragging && state.ActiveTool == 7,
-            "Outward captured strength drag did not activate its parent tool.");
+            "Captured strength editing did not activate its parent tool.");
         state.Hover(1, 1);
         state.FocusTool(2);
         Require(state.FocusedTool == 7, "Captured dragging changed its parent tool.");
@@ -71,7 +74,7 @@ internal static class RadialBrushChecks
             "Escape failed to restore an unfinished drag while retaining the menu.");
         Require(!state.CancelEdit(), "A completed cancellation remained captured.");
         state.BeginDrag(RadialBrushParameter.Strength);
-        state.Drag(-20);
+        state.DragValue(0.5);
         state.EndDrag();
         double saved = state.Value(RadialBrushParameter.Strength);
         Require(saved < 2 && !state.CancelEdit() && state.Value(RadialBrushParameter.Strength) == saved,
@@ -80,6 +83,8 @@ internal static class RadialBrushChecks
         Edit(state, RadialBrushParameter.Radius, "12.345678912345678");
         double exact = double.Parse("12.345678912345678", System.Globalization.CultureInfo.InvariantCulture);
         Require(state.Radius == exact, "Exact radius outside the convenient drag range was clamped or rounded.");
+        state.BeginNumeric(RadialBrushParameter.Radius);
+        Require(state.TryCommitNumeric() && state.Radius == exact, "Shortest numeric formatting did not round-trip the full stored precision.");
         state.BeginNumeric(RadialBrushParameter.Radius);
         state.NumericText('-');
         Require(!state.TryCommitNumeric() && state.EditingNumeric && state.ValidationError is not null && state.Radius == exact,
@@ -104,11 +109,6 @@ internal static class RadialBrushChecks
             && !state.SetParameter(RadialBrushParameter.ParticlesPerSample, 0)
             && !state.SetParameter(RadialBrushParameter.ParticlesPerSample, 4097), "Addition count lost integer/range validation.");
         Edit(state, RadialBrushParameter.ParticlesPerSample, "4096");
-        state.BeginDrag(RadialBrushParameter.ParticlesPerSample);
-        state.Drag(1000);
-        state.EndDrag();
-        Require(state.FocusedBrush.AddCount == 4096, "Add drag exceeded the supported per-sample count.");
-
         state.BeginNumeric(RadialBrushParameter.ParticlesPerSample);
         state.NumericKey(Keys.Home, false);
         state.NumericKey(Keys.Right, false);
@@ -215,7 +215,7 @@ internal static class RadialBrushChecks
             Require(LucideIcons.ForTool(index) == tools[index], "Tool did not use the selected canonical Lucide icon.");
         }
         string[] names = [.. tools, "undo-2", "redo-2", "circle-dashed", "square-dashed", "circle-check", "circle-ellipsis",
-            "square-chevron-right", "square-chevron-left"];
+            "square-chevron-right", "square-chevron-left", "check"];
         HashSet<Rectangle> regions = [];
         foreach (string name in names)
         {

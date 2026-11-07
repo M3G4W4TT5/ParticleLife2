@@ -14,7 +14,7 @@ if ($LASTEXITCODE -ne 0 -or $version[0] -notmatch 'ImageMagick 7\.1\.2-3 ') {
 New-Item -ItemType Directory -Force -Path $temporaryDirectory | Out-Null
 $names = @('mouse-pointer-2', 'hand', 'circle-plus', 'paintbrush', 'circle-minus', 'magnet', 'expand', 'wind',
     'undo-2', 'redo-2', 'circle-dashed', 'square-dashed', 'circle-check', 'circle-ellipsis',
-    'square-chevron-right', 'square-chevron-left')
+    'square-chevron-right', 'square-chevron-left', 'check')
 $images = @()
 foreach ($name in $names) {
     $source = Get-Content -Raw -LiteralPath (Join-Path $sourceDirectory "$name.svg")

@@ -17,6 +17,9 @@ internal static class RadialBrushMenuChecks
         StandardSpeciesArcs();
         ShortDirectionDial();
         ContextualWheelRouting();
+        ArcTravelAndHubFeedback();
+        PointerDraftRecovery();
+        AllSpeciesRemainsReachable();
         Console.WriteLine("Radial menu adapter checks: held opening, pointer capture/cancellation, numeric/history validation, keyboard settings and compact Back passed.");
     }
 
@@ -39,8 +42,8 @@ internal static class RadialBrushMenuChecks
         Tick(strength);
         Tick(strength, pressed: true);
         Require(state.IsDragging && state.ActiveTool == 5, "A contextual strength press failed to capture or activate its previewed parent.");
-        Tick(menu.Layout.PolarPoint(menu.Layout.OuterOuter + 45, 137).ToPoint(), pressed: true);
-        Require(state.FocusedBrush.Intensity > 2, "Outward native dragging did not increase strength.");
+        Tick(menu.Layout.PolarPoint(menu.Layout.OuterOuter + 45, 172).ToPoint(), pressed: true);
+        Require(state.FocusedBrush.Intensity > 2, "Clockwise travel along the displayed track did not increase strength.");
         Tick(menu.Layout.ToolPoint(1).ToPoint(), pressed: true, elapsed: 0.3);
         Require(state.FocusedTool == 5 && state.IsDragging, "A dragged control lost pointer capture across another wedge.");
         Tick(anchor, pressed: true, input: [UiInputEvent.KeyPress(Keys.Escape, false, false)]);
@@ -298,7 +301,7 @@ internal static class RadialBrushMenuChecks
             Require(menu.IsOpen && !state.IsDragging && !state.EditingNumeric,
                 "Direction's former long sector remained interactive outside the short curved dial.");
             Tick(outside);
-            Point top = new((int)arrowOrigin.X, (int)arrowOrigin.Y - 8);
+            Point top = new((int)MathF.Round(arrowOrigin.X), (int)MathF.Round(arrowOrigin.Y) - 8);
             Tick(top, pressed: true);
             Require(state.IsDragging && state.EditingParameter == RadialBrushParameter.Direction
                 && Math.Abs(state.Value(RadialBrushParameter.Direction) - 270) < 5,
@@ -403,7 +406,7 @@ internal static class RadialBrushMenuChecks
 
         Point ParameterReadout()
         {
-            Vector2 center = menu.Layout.PolarPoint((menu.Layout.OuterInner + menu.Layout.OuterOuter) / 2, 167.5);
+            Vector2 center = menu.Layout.PolarPoint((menu.Layout.OuterInner + menu.Layout.OuterOuter) / 2, 145);
             return new Point((int)center.X, (int)center.Y + 11);
         }
         void Wheel(Point point, int delta)
@@ -412,6 +415,133 @@ internal static class RadialBrushMenuChecks
             menu.Update(MouseAt(point, wheel: wheel), [], 0.02, available);
         }
         void Tick(Point point, bool pressed = false) => menu.Update(MouseAt(point, pressed, wheel), [], 0.02, available);
+    }
+
+    private static void ArcTravelAndHubFeedback()
+    {
+        using PlaybackController playback = new(PresetGenerator.Create(PresetKind.Random, 12, 3, 79), diagnosticEverySteps: 0);
+        ExperimentEditor owner = new(playback);
+        using EditorSession session = new(owner);
+        RadialBrushState state = new();
+        RadialBrushMenu menu = new(state, session);
+        Rectangle available = new(0, 0, 1000, 800);
+        menu.Open(available, available.Center, new Vector2d(0.5, 0.5), MouseAt(available.Center));
+        Point tool = menu.Layout.ToolPoint(5).ToPoint();
+        Tick(tool, elapsed: 0.2);
+        Require(menu.HubStatus == "Preview" && state.ActiveTool == 0, "Hub preview feedback implied an active brush.");
+        Tick(tool, pressed: true);
+        Require(menu.HubStatus == "Selected" && state.ActiveTool == 5, "Hub selection feedback did not reflect activation.");
+        Tick(tool);
+        Point start = Arc(160);
+        Tick(start, pressed: true);
+        double first = state.FocusedBrush.Intensity;
+        Tick(Arc(180), pressed: true);
+        double middle = state.FocusedBrush.Intensity;
+        Require(middle > first && menu.HubTitle == "Strength", "Clockwise movement or live hub feedback did not follow the curved track.");
+        Tick(menu.Layout.PolarPoint(menu.Layout.OuterOuter + 70, 180).ToPoint(), pressed: true);
+        Require(state.FocusedBrush.Intensity == middle, "Radial displacement still changed a control whose fill runs around the arc.");
+        Tick(Arc(215), pressed: true);
+        Require(state.FocusedBrush.Intensity == 100, "Captured angular dragging failed to stop at the track endpoint.");
+        Tick(Arc(245), pressed: true);
+        Require(state.FocusedBrush.Intensity == 100, "Travel beyond the endpoint wrapped the bounded force slider.");
+        menu.Update(MouseAt(Arc(245), pressed: true), [UiInputEvent.KeyPress(Keys.Escape, false, false)], 0.02, available);
+        Require(state.FocusedBrush.Intensity == 2 && !state.IsDragging && menu.IsOpen, "Angular drag cancellation failed to restore the original value.");
+        Tick(tool);
+
+        Point radius = menu.Layout.PolarPoint(menu.Layout.RadiusArc, 350).ToPoint();
+        Tick(radius, pressed: true);
+        double beforeSeam = state.Radius;
+        Tick(menu.Layout.PolarPoint(menu.Layout.RadiusArc, 5).ToPoint(), pressed: true);
+        Require(state.Radius > beforeSeam && state.Radius < 0.5, "Radius jumped backwards when crossing the polar seam.");
+        Tick(menu.Layout.PolarPoint(menu.Layout.RadiusArc, 55).ToPoint(), pressed: true);
+        Require(Math.Abs(state.Radius - 0.5) < 1e-12, "Radius did not stop at its displayed maximum when dragging into the gap.");
+        Tick(tool);
+        double retained = state.Radius;
+        menu.Update(MouseAt(new Point(2, 2), wheel: 120), [], 0.02, available);
+        Require(state.Radius == retained, "Scrolling outside the menu changed a brush setting.");
+        Point species = menu.Layout.PolarPoint((menu.Layout.OuterInner + menu.Layout.OuterOuter) / 2, -146.25).ToPoint();
+        menu.Update(MouseAt(species, wheel: 240), [], 0.02, available);
+        Require(state.Radius == retained && menu.HubTitle == "Affect" && menu.HubDescription.Contains("All species", StringComparison.Ordinal),
+            "Species hover lacked a readable name or scrolling over a colour changed radius.");
+        Require(owner.SessionEventCount == 0 && !owner.CanUndo, "Menu interaction changed simulation history.");
+
+        state.FocusTool(2);
+        Tick(start);
+        Tick(start, pressed: true);
+        Tick(Arc(195), pressed: true);
+        Require(state.FocusedBrush.AddCount == 4096, "Count arc travel did not stop at its integer maximum.");
+        Tick(Arc(90), pressed: true);
+        Require(state.FocusedBrush.AddCount == 1, "Count arc travel did not stop at its integer minimum.");
+        Tick(tool);
+
+        Point Arc(double angle) => menu.Layout.PolarPoint(menu.Layout.OuterInner + 4, angle).ToPoint();
+        void Tick(Point point, bool pressed = false, double elapsed = 0.02) => menu.Update(MouseAt(point, pressed), [], elapsed, available);
+    }
+
+    private static void PointerDraftRecovery()
+    {
+        using PlaybackController playback = new(PresetGenerator.Create(PresetKind.Random, 12, 3, 80), diagnosticEverySteps: 0);
+        ExperimentEditor owner = new(playback);
+        using EditorSession session = new(owner);
+        foreach (Rectangle available in new[] { new Rectangle(0, 0, 1000, 800), new Rectangle(0, 0, 420, 290) })
+        {
+            RadialBrushState state = new();
+            state.FocusTool(5); state.ActivateFocused();
+            RadialBrushMenu menu = new(state, session);
+            menu.Open(available, available.Center, new Vector2d(0.5, 0.5), MouseAt(available.Center));
+            Click(menu.Layout.NumericBounds.Center);
+            state.NumericText('-');
+            Click(menu.Layout.NumericBounds.Center);
+            Require(state.NumericDraft == "-", "Clicking inside a numeric field discarded its unfinished draft.");
+            Click(menu.Layout.ApplyBounds.Center);
+            Require(state.EditingNumeric && state.ValidationError is not null && menu.HubDescription == state.ValidationError && state.Radius == 0.06,
+                "Apply accepted an invalid draft or failed to expose its error beside the field.");
+            Click(menu.Layout.CancelBounds.Center);
+            Require(!state.EditingNumeric && state.ValidationError is null && state.Radius == 0.06 && menu.IsOpen,
+                "Mouse Cancel failed to recover without changing the stored value or closing the menu.");
+            Click(menu.Layout.NumericBounds.Center);
+            state.NumericText('2');
+            Click(menu.Layout.ApplyBounds.Center);
+            Require(!state.EditingNumeric && state.Radius == 2 && menu.IsOpen, "Mouse Apply did not commit an exact value beyond the convenience range.");
+            Require(owner.SessionEventCount == 0 && !owner.CanUndo, "Draft recovery changed simulation history.");
+
+            void Click(Point point)
+            {
+                menu.Update(MouseAt(point), [], 0.02, available);
+                menu.Update(MouseAt(point, pressed: true), [], 0.02, available);
+                menu.Update(MouseAt(point), [], 0.02, available);
+            }
+        }
+    }
+
+    private static void AllSpeciesRemainsReachable()
+    {
+        foreach (int speciesCount in new[] { 7, 20 })
+        {
+            using PlaybackController playback = new(PresetGenerator.Create(PresetKind.Random, 40, speciesCount, 81), diagnosticEverySteps: 0);
+            using EditorSession session = new(new ExperimentEditor(playback));
+            foreach (Rectangle available in new[] { new Rectangle(0, 0, 1000, 800), new Rectangle(0, 0, 420, 290) })
+            {
+                foreach (int tool in new[] { 5, 6, 7 })
+                {
+                    RadialBrushState state = new();
+                    state.ReconcileSpecies(speciesCount);
+                    state.FocusTool(tool); state.SelectSpecies(2, destination: false);
+                    RadialBrushMenu menu = new(state, session);
+                    menu.Open(available, available.Center, new Vector2d(0.5, 0.5), MouseAt(available.Center));
+                    if (menu.Layout.Compact) { state.ActivateFocused(compact: true); }
+                    // With paging, Previous comes before All; both layouts retain the fixed upper arc.
+                    double angle = speciesCount == 7 ? -155.625 : -142.5;
+                    Point all = menu.Layout.PolarPoint((menu.Layout.OuterInner + menu.Layout.OuterOuter) / 2, angle).ToPoint();
+                    menu.Update(MouseAt(all), [], 0.02, available);
+                    Require(menu.HubDescription.Contains("All species", StringComparison.Ordinal),
+                        "The force sector intercepted the fixed All-species target.");
+                    menu.Update(MouseAt(all, pressed: true), [], 0.02, available);
+                    Require(state.FocusedBrush.SpeciesFilter == -1 && !state.IsDragging,
+                        "Clicking All began a force drag or failed to clear the species filter.");
+                }
+            }
+        }
     }
 
     private static MouseState MouseAt(Point point, bool pressed = false, int wheel = 0) => new(point.X, point.Y, wheel,

@@ -3,7 +3,7 @@ using Microsoft.Xna.Framework.Graphics;
 
 namespace ParticleLife.MonoGame.Editor;
 
-/// <summary>Owns the native, offline atlas of the sixteen pinned Lucide brush, history and canvas control icons.</summary>
+/// <summary>Owns the native, offline atlas of the pinned Lucide brush, history and canvas control icons.</summary>
 /// <remarks>
 /// Source SVGs retain Lucide's canonical 24-unit geometry and two-unit round strokes. The checked-in
 /// atlas rasterizes those sources at four times that resolution. Loading premultiplies coverage and
@@ -15,7 +15,7 @@ internal sealed class LucideIcons : IDisposable
     private const int CellSize = 96;
     private static readonly string[] Names = ["mouse-pointer-2", "hand", "circle-plus", "paintbrush", "circle-minus",
         "magnet", "expand", "wind", "undo-2", "redo-2", "circle-dashed", "square-dashed", "circle-check", "circle-ellipsis",
-        "square-chevron-right", "square-chevron-left"];
+        "square-chevron-right", "square-chevron-left", "check"];
     private static readonly Dictionary<string, int> Indices = Names.Select((name, index) => (name, index))
         .ToDictionary(pair => pair.name, pair => pair.index, StringComparer.Ordinal);
     private readonly Texture2D atlas;
